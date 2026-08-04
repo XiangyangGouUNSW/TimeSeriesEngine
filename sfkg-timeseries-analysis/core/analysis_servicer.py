@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 # 让生成的 stub 可以直接 import
-sys.path.insert(0, str(Path(__file__).resolve().parent / "generated"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "generated"))
 import timeseries_analysis_pb2 as pb
 import timeseries_analysis_pb2_grpc as pb_grpc
 

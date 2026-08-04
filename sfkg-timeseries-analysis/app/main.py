@@ -1,30 +1,34 @@
-"""P 端空壳入口：跑通「数据规模 → 训练 → 推理」的最小闭环。
+"""P 端入口：跑通「数据规模 → 训练 → 推理」的最小闭环。
 
-运行方法（在 p_shell 目录下）：
-    python main.py
+运行方法（模块根目录下）：
+    python app/main.py
 
 现在 provider=mock，用本地 ETT 数据假装 C 端；
-C 端 proto 就绪后，把 config.yaml 里 core.provider 改成 "grpc"，
-并在 build_core_client() 里换成 GrpcCoreDataClient。
+C 端服务就绪后：python app/main.py --provider grpc
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import yaml
+
+# 模块根目录 = app 的上一级
+ROOT = Path(__file__).resolve().parent.parent
+# 把 core/ 和 generated/ 加进模块搜索路径
+for _p in (str(ROOT / "core"), str(ROOT / "generated")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from core_client import MockCoreDataClient
 from training_loop import TrainingLoop
 from inference_service import InferenceService, fmt
 
-# 本文件所在目录（模块根目录）
-SHELL_DIR = Path(__file__).resolve().parent
-
 
 def load_config() -> dict:
-    with open(SHELL_DIR / "config.yaml", encoding="utf-8") as f:
+    with open(ROOT / "config.yaml", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -32,7 +36,7 @@ def build_core_client(cfg: dict, provider_override: str | None = None):
     """根据配置创建 CoreDataClient。provider_override 可覆盖配置文件。"""
     provider = provider_override or cfg["core"]["provider"]
     if provider == "mock":
-        csv_path = SHELL_DIR / cfg["data"]["csv_path"]
+        csv_path = ROOT / cfg["data"]["csv_path"]
         return MockCoreDataClient(csv_path=str(csv_path),
                                   seq_prefix=cfg["data"]["seq_prefix"])
     elif provider == "grpc":

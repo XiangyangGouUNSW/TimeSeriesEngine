@@ -36,22 +36,22 @@ python -m grpc_tools.protoc -I proto \
 
 ```bash
 # 1. mock 演示（本地 ETT 假装 C 端，不需要网络）
-python main.py
+python app/main.py
 
 # 2. 起 P 端对外服务（供 S 端调用，默认 0.0.0.0:50053）
-python analysis_server.py
+python app/analysis_server.py
 # 另开终端，模拟 S 端调用 7 个 RPC：
-python test_analysis_client.py
+python tests/test_analysis_client.py
 
 # 3. 连真实 C 端（config.yaml 配好 C 端地址端口后）
-python main.py --provider grpc
+python app/main.py --provider grpc
 ```
 
 联调预演时也可以起一个"假 C 端"走真实 gRPC 传输：
 
 ```bash
-python fake_core_server.py     # 假 C 端，监听 50051
-python main.py --provider grpc
+python tools/fake_core_server.py     # 假 C 端，监听 50051
+python app/main.py --provider grpc
 ```
 
 ## 配置
@@ -60,14 +60,13 @@ python main.py --provider grpc
 
 ## 目录结构
 
-- `proto/`          接口合同（`timeseries_core.proto` 与 C 共享、`timeseries_analysis.proto` 与 S）
-- `generated/`      生成的 gRPC stub（gitignore，各端自己生成）
-- `core_client.py`  CoreDataClient 接口 + Mock 实现 + 散点转对齐表
-- `grpc_client.py`  连 C 端 gRPC 客户端（调 `queryHistoryOverview`/`queryHistoryData`）
-- `analysis_servicer.py` / `analysis_server.py`  对外服务（S 端调用）
-- `training_loop.py` / `inference_service.py` / `ar_model.py`  训练与推理
-- `main.py`         训练推理演示入口
-- `test_analysis_client.py`  模拟 S 端测试客户端
+- `app/`        入口程序：`main.py`（训练推理演示）、`analysis_server.py`（对外服务）
+- `core/`       核心逻辑：CoreDataClient/Mock、grpc_client、servicer、训练、推理、模型、数据结构
+- `tools/`      工具：`fake_core_server.py`（假 C 端，联调预演）
+- `tests/`      测试：`test_analysis_client.py`（模拟 S 端调用）
+- `proto/`      接口合同（`timeseries_core.proto` 与 C 共享、`timeseries_analysis.proto` 与 S）
+- `generated/`  生成的 gRPC stub（gitignore，各端自己生成）
+- `data/`       ETT 测试数据（模块自包含）
 
 ## 说明
 

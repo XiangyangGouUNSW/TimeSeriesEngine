@@ -19,7 +19,7 @@ from core_client import CoreDataClient, raw_points_to_aligned
 from data_types import SequenceDataScale, HistoricalDataChunk, AlignedWindow
 
 # 让生成的 stub 可以直接 import（flat 方式，避免生成代码的绝对 import 出问题）
-sys.path.insert(0, str(Path(__file__).resolve().parent / "generated"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "generated"))
 import timeseries_core_pb2 as pb
 import timeseries_core_pb2_grpc as pb_grpc
 

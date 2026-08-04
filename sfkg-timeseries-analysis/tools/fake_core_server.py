@@ -18,14 +18,17 @@ from pathlib import Path
 
 import grpc
 
+# 模块根目录 = tools 的上一级
+ROOT = Path(__file__).resolve().parent.parent
+# 把 core/ 和 generated/ 加进模块搜索路径
+for _p in (str(ROOT / "core"), str(ROOT / "generated")):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
 from core_client import parse_utc_ms
 
-# 让生成的 stub 可以直接 import
-sys.path.insert(0, str(Path(__file__).resolve().parent / "generated"))
 import timeseries_core_pb2 as pb
 import timeseries_core_pb2_grpc as pb_grpc
-
-MODULE_DIR = Path(__file__).resolve().parent
 
 
 class FakeCoreService(pb_grpc.TimeseriesCoreServiceServicer):
@@ -117,4 +120,4 @@ def serve(csv_path: str, port: int = 50051) -> None:
 
 
 if __name__ == "__main__":
-    serve(str(MODULE_DIR / "data" / "ETT-small" / "ETTh1.csv"))
+    serve(str(ROOT / "data" / "ETT-small" / "ETTh1.csv"))
