@@ -1,0 +1,420 @@
+syntax = "proto3";
+
+package sfkg.timeseries.core.v1;
+
+option cc_enable_arenas = true;
+
+service TimeseriesCoreService {
+  rpc syncInstanceConfigs(SyncInstanceConfigsRequest)
+      returns (SyncConfigResponse);
+  rpc syncConstraints(SyncConstraintsRequest)
+      returns (SyncConfigResponse);
+  rpc syncRelations(SyncRelationsRequest)
+      returns (SyncConfigResponse);
+  rpc syncTaskConfigs(SyncTaskConfigsRequest)
+      returns (SyncConfigResponse);
+  rpc syncTaskStatuses(SyncTaskStatusesRequest)
+      returns (SyncConfigResponse);
+
+  // Production ingest entry: resolve once, then persist and update the hot
+  // window in parallel inside Core.
+  rpc ingestData(IngestDataRequest)
+      returns (IngestDataResponse);
+  // Fine-grained ingest RPCs are retained for testing, replay and compensation.
+  rpc ingestAndResolveData(IngestRequest)
+      returns (IngestResponse);
+  rpc writeRawData(WriteRawDataRequest)
+      returns (WriteRawDataResponse);
+  rpc buildTimeWindow(BuildTimeWindowRequest)
+      returns (BuildTimeWindowResponse);
+  rpc queryWindowData(QueryWindowDataRequest)
+      returns (QueryWindowDataResponse);
+  rpc alignWindowData(AlignWindowDataRequest)
+      returns (AlignWindowDataResponse);
+  rpc computeBasicStatistics(ComputeStatisticsRequest)
+      returns (ComputeStatisticsResponse);
+  rpc checkConstraints(CheckConstraintsRequest)
+      returns (CheckConstraintsResponse);
+  rpc queryHistoryData(QueryHistoryDataRequest)
+      returns (QueryHistoryDataResponse);
+  rpc queryHistoryOverview(QueryHistoryOverviewRequest)
+      returns (QueryHistoryOverviewResponse);
+}
+
+enum OperationCode {
+  OPERATION_CODE_OK = 0;
+  OPERATION_CODE_PARTIAL_SUCCESS = 1;
+  OPERATION_CODE_INVALID_ARGUMENT = 2;
+  OPERATION_CODE_NOT_FOUND = 3;
+  OPERATION_CODE_FAILED_PRECONDITION = 4;
+  OPERATION_CODE_UNAVAILABLE = 5;
+  OPERATION_CODE_INTERNAL_ERROR = 6;
+  OPERATION_CODE_NOT_IMPLEMENTED = 7;
+}
+
+message OperationResult {
+  OperationCode code = 1;
+  uint64 success_count = 2;
+  uint64 failed_count = 3;
+  string message = 4;
+}
+
+message TimeseriesValue {
+  oneof kind {
+    double double_value = 1;
+    int64 int64_value = 2;
+    bool bool_value = 3;
+    string string_value = 4;
+  }
+}
+
+message TimeseriesIngestData {
+  optional string sequence_id = 1;
+  string data_source_id = 2;
+  string external_sequence_id = 3;
+  int64 time = 4;
+  TimeseriesValue value = 5;
+}
+
+message RawTimeseriesPoint {
+  int64 time = 1;
+  string sequence_id = 2;
+  TimeseriesValue value = 3;
+}
+
+message TimeseriesBatch {
+  repeated RawTimeseriesPoint points = 1;
+}
+
+message TimeValuePoint {
+  int64 time = 1;
+  TimeseriesValue value = 2;
+}
+
+message SequenceWindow {
+  string sequence_id = 1;
+  repeated TimeValuePoint points = 2;
+}
+
+message WindowData {
+  int64 window_start_time = 1;
+  int64 window_end_time = 2;
+  repeated SequenceWindow sequences = 3;
+}
+
+message AlignedValue {
+  string sequence_id = 1;
+  TimeseriesValue value = 2;
+}
+
+message AlignedSample {
+  int64 time = 1;
+  repeated AlignedValue values = 2;
+}
+
+message AlignedWindowData {
+  int64 window_start_time = 1;
+  int64 window_end_time = 2;
+  repeated AlignedSample samples = 3;
+}
+
+enum VariableRole {
+  VARIABLE_ROLE_UNSPECIFIED = 0;
+  VARIABLE_ROLE_INDEPENDENT = 1;
+  VARIABLE_ROLE_DEPENDENT = 2;
+}
+
+enum BucketAggregation {
+  BUCKET_AGGREGATION_UNSPECIFIED = 0;
+  BUCKET_AGGREGATION_FIRST = 1;
+  BUCKET_AGGREGATION_LAST = 2;
+  BUCKET_AGGREGATION_AVERAGE = 3;
+  BUCKET_AGGREGATION_MAXIMUM = 4;
+  BUCKET_AGGREGATION_MINIMUM = 5;
+}
+
+enum GapFillMethod {
+  GAP_FILL_METHOD_UNSPECIFIED = 0;
+  GAP_FILL_METHOD_NEAR = 1;
+  GAP_FILL_METHOD_PREVIOUS = 2;
+  GAP_FILL_METHOD_NEXT = 3;
+  GAP_FILL_METHOD_LINEAR = 4;
+}
+
+message SequenceAlignmentConfig {
+  string sequence_id = 1;
+  VariableRole role = 2;
+  BucketAggregation aggregation = 3;
+  GapFillMethod fill_method = 4;
+}
+
+message AlignmentConfig {
+  repeated SequenceAlignmentConfig sequences = 1;
+  int64 bucket_interval = 2;
+}
+
+message ConstraintTerm {
+  string variable = 1;
+  double coefficient = 2;
+  uint64 sample_offset = 3;
+}
+
+message ConstraintRule {
+  string constraint_id = 1;
+  map<string, string> variable_mapping = 2;
+  double lower_bound = 3;
+  double upper_bound = 4;
+  repeated ConstraintTerm terms = 5;
+}
+
+message ConstraintTermValue {
+  string variable = 1;
+  string sequence_id = 2;
+  double coefficient = 3;
+  uint64 sample_offset = 4;
+  int64 sample_time = 5;
+  double value = 6;
+}
+
+message ConstraintViolation {
+  string constraint_id = 1;
+  int64 anchor_time = 2;
+  double lower_bound = 3;
+  double upper_bound = 4;
+  double evaluated_value = 5;
+  repeated ConstraintTermValue term_values = 6;
+}
+
+message RuntimeInstanceConfig {
+  string sequence_id = 1;
+  string data_source_id = 2;
+  string external_sequence_id = 3;
+  string category_id = 4;
+  string data_type = 5;
+}
+
+// Runtime copy of a confirmed constraint. enabled only controls whether the
+// confirmed rule is currently active in Core.
+message RuntimeConstraintConfig {
+  ConstraintRule rule = 1;
+  bool enabled = 2;
+}
+
+message RuntimeRelationConfig {
+  string relation_id = 1;
+  map<string, double> source_category_weights = 2;
+  string target_category_id = 3;
+  string relation_type = 4;
+  int64 lag_min = 5;
+  int64 lag_max = 6;
+  double confidence = 7;
+  bool enabled = 8;
+}
+
+message RuntimeTaskConfig {
+  string task_id = 1;
+  string task_type = 2;
+  repeated string sequence_ids = 3;
+  repeated string constraint_ids = 4;
+}
+
+enum RuntimeTaskStatus {
+  RUNTIME_TASK_STATUS_DISABLED = 0;
+  RUNTIME_TASK_STATUS_ENABLED = 1;
+  RUNTIME_TASK_STATUS_ABNORMAL = 2;
+}
+
+message RuntimeTaskStatusItem {
+  string task_id = 1;
+  RuntimeTaskStatus status = 2;
+}
+
+message SyncInstanceConfigsRequest {
+  repeated RuntimeInstanceConfig items = 1;
+}
+
+message SyncConstraintsRequest {
+  repeated RuntimeConstraintConfig items = 1;
+}
+
+message SyncRelationsRequest {
+  repeated RuntimeRelationConfig items = 1;
+}
+
+message SyncTaskConfigsRequest {
+  repeated RuntimeTaskConfig items = 1;
+}
+
+message SyncTaskStatusesRequest {
+  repeated RuntimeTaskStatusItem items = 1;
+}
+
+message SyncConfigResponse {
+  OperationResult operation = 1;
+}
+
+message IngestDataRequest {
+  repeated TimeseriesIngestData points = 1;
+  int64 window_size = 2;
+  // The normalized batch is omitted by default to avoid an unnecessary copy.
+  bool return_resolved_data = 3;
+}
+
+message IngestDataResponse {
+  // Overall result plus the result of each internal stage.
+  OperationResult operation = 1;
+  OperationResult resolve_result = 2;
+  OperationResult storage_result = 3;
+  OperationResult window_result = 4;
+  // Set only when return_resolved_data is true.
+  TimeseriesBatch resolved_data = 5;
+}
+
+message IngestRequest {
+  repeated TimeseriesIngestData points = 1;
+}
+
+message IngestResponse {
+  OperationResult operation = 1;
+  TimeseriesBatch resolved_data = 2;
+}
+
+message WriteRawDataRequest {
+  TimeseriesBatch data = 1;
+}
+
+message WriteRawDataResponse {
+  OperationResult operation = 1;
+}
+
+message BuildTimeWindowRequest {
+  TimeseriesBatch data = 1;
+  int64 window_size = 2;
+}
+
+message BuildTimeWindowResponse {
+  OperationResult operation = 1;
+}
+
+message QueryWindowDataRequest {
+  repeated string sequence_ids = 1;
+  optional int64 start_time = 2;
+  optional int64 end_time = 3;
+}
+
+message QueryWindowDataResponse {
+  OperationResult operation = 1;
+  WindowData data = 2;
+}
+
+message AlignWindowDataRequest {
+  // Send data already held by the caller, or let Core read its current window.
+  oneof source {
+    WindowData data = 1;
+    QueryWindowDataRequest window_query = 3;
+  }
+  AlignmentConfig config = 2;
+}
+
+message AlignWindowDataResponse {
+  OperationResult operation = 1;
+  AlignedWindowData aligned_data = 2;
+}
+
+message NamedMetric {
+  string name = 1;
+  TimeseriesValue value = 2;
+}
+
+message SequenceMetric {
+  string sequence_id = 1;
+  repeated NamedMetric metrics = 2;
+}
+
+message SequenceCorrelation {
+  string independent_sequence_id = 1;
+  double coefficient = 2;
+}
+
+message CorrelationVector {
+  string dependent_sequence_id = 1;
+  repeated SequenceCorrelation correlations = 2;
+}
+
+message ComputeStatisticsRequest {
+  // window_query avoids returning a window and sending it back to Core.
+  oneof source {
+    WindowData window_data = 1;
+    AlignedWindowData aligned_data = 2;
+    QueryWindowDataRequest window_query = 4;
+  }
+  AlignmentConfig alignment_config = 3;
+}
+
+message ComputeStatisticsResponse {
+  OperationResult operation = 1;
+  repeated SequenceMetric sequence_metrics = 2;
+  CorrelationVector correlation_vector = 3;
+}
+
+message CheckConstraintsRequest {
+  string task_id = 1;
+  // window_query avoids returning a window and sending it back to Core.
+  oneof source {
+    WindowData window_data = 2;
+    AlignedWindowData aligned_data = 3;
+    QueryWindowDataRequest window_query = 4;
+  }
+  AlignmentConfig alignment_config = 5;
+}
+
+message CheckConstraintsResponse {
+  OperationResult operation = 1;
+  bool satisfied = 2;
+  repeated ConstraintViolation violations = 3;
+  uint64 evaluated_count = 4;
+}
+
+message QueryHistoryDataRequest {
+  repeated string sequence_ids = 1;
+  int64 start_time = 2;
+  int64 end_time = 3;
+  optional int64 granularity = 4;
+}
+
+message QueryHistoryDataResponse {
+  OperationResult operation = 1;
+  // Points are ordered by time ascending. Sequence order at equal timestamps
+  // is not guaranteed.
+  TimeseriesBatch data = 2;
+}
+
+// Omitted sequence_ids and time bounds mean all currently stored history.
+message QueryHistoryOverviewRequest {
+  repeated string sequence_ids = 1;
+  optional int64 start_time = 2;
+  optional int64 end_time = 3;
+}
+
+message HistorySeriesSummary {
+  string sequence_id = 1;
+  uint64 point_count = 2;
+  optional int64 first_time = 3;
+  optional int64 last_time = 4;
+}
+
+message HistoryOverview {
+  uint64 total_point_count = 1;
+  uint64 sequence_count = 2;
+  // Current sequence_ids with data; usable as logical table header names.
+  // The current implementation returns these in stable sequence_id order.
+  repeated string column_names = 3;
+  optional int64 first_time = 4;
+  optional int64 last_time = 5;
+  repeated HistorySeriesSummary series = 6;
+}
+
+message QueryHistoryOverviewResponse {
+  OperationResult operation = 1;
+  HistoryOverview overview = 2;
+}

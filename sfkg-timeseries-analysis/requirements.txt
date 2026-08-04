@@ -1,0 +1,6 @@
+# P 端时序分析模块依赖
+grpcio>=1.62
+grpcio-tools>=1.62
+protobuf>=4.25
+numpy>=1.24
+pyyaml>=6.0

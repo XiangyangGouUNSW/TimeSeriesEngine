@@ -1,0 +1,238 @@
+syntax = "proto3";
+
+package sfkg.timeseries.analysis.v1;
+
+// ============================================================
+// P 端（时序分析模块）对外服务 —— 供 S 端（统一业务服务）调用
+// ============================================================
+// 本文件声明 P 端作为服务端提供的 7 个 RPC。
+// S 端用本 proto 生成客户端 stub 调用 P 端；P 端用本 proto 生成服务端 stub。
+//
+// 版本：v0.1 草稿（待 S 端确认字段）
+// 说明：
+//   - 训练接口本期不做（P 端只"查规模 → 训练一次 → 可推理"）。
+//   - 事件写入由 S 端提供 CreateEvent 服务（S 端自己定义 proto），
+//     P 端作为客户端调用，不放在本文件。
+// ============================================================
+
+service TimeseriesAnalysisService {
+  // ---- 任务配置同步 ----
+  rpc SyncAnomalyTask(SyncAnomalyTaskRequest) returns (TaskAck);
+  rpc SyncForecastTask(SyncForecastTaskRequest) returns (TaskAck);
+
+  // ---- 任务状态 ----
+  rpc UpdateTaskStatus(UpdateTaskStatusRequest) returns (TaskAck);
+
+  // ---- 结果查询 ----
+  rpc QueryAnomalyResults(QueryAnomalyResultsRequest)
+      returns (QueryAnomalyResultsResponse);
+  rpc QueryForecastResults(QueryForecastResultsRequest)
+      returns (QueryForecastResultsResponse);
+
+  // ---- 归因建议（空壳）----
+  rpc GenerateDiagnosis(DecisionRequest) returns (DecisionResult);
+  rpc GenerateSuggestion(DecisionRequest) returns (DecisionResult);
+}
+
+// ============ 枚举 ============
+
+enum AnalysisStatus {
+  ANALYSIS_STATUS_UNSPECIFIED = 0;
+  ANALYSIS_STATUS_SUCCESS = 1;
+  ANALYSIS_STATUS_INVALID_REQUEST = 2;
+  ANALYSIS_STATUS_DATA_NOT_READY = 3;
+  ANALYSIS_STATUS_MODEL_NOT_READY = 4;
+  ANALYSIS_STATUS_UPSTREAM_UNAVAILABLE = 5;
+  ANALYSIS_STATUS_NOT_IMPLEMENTED = 6;
+  ANALYSIS_STATUS_FAILED = 7;
+}
+
+enum TaskStatus {
+  TASK_STATUS_UNSPECIFIED = 0;
+  TASK_STATUS_ENABLED = 1;
+  TASK_STATUS_DISABLED = 2;
+  TASK_STATUS_DELETED = 3;
+}
+
+// ============ 公共消息 ============
+
+message RequestMeta {
+  string request_id = 1;   // 一次调用唯一
+  string trace_id = 2;     // 跨 S/P/C 链路标识
+  int64 sent_at_ms = 3;    // UTC 毫秒
+}
+
+message TimeRange {
+  int64 start_time_ms = 1;
+  int64 end_time_ms = 2;
+}
+
+message SequenceMetadata {
+  string sequence_id = 1;
+  string sequence_name = 2;
+  string unit = 3;
+  string data_type = 4;    // CONTINUOUS / DISCRETE_NUMERIC / DISCRETE_STATE
+  string role = 5;         // TARGET / FEATURE / SETPOINT / STATE
+}
+
+message SequenceRelation {
+  string relation_id = 1;
+  string source_sequence_id = 2;
+  string target_sequence_id = 3;
+  string relation_type = 4;
+  int32 lag_steps = 5;
+  double confidence = 6;
+}
+
+message SemanticContext {
+  repeated SequenceMetadata sequences = 1;
+  repeated SequenceRelation relations = 2;
+  repeated string constraint_ids = 3;
+  string knowledge_version = 4;
+  repeated string confirmed_historical_event_ids = 5;
+}
+
+// ============ 任务配置同步 ============
+
+message AnomalyTaskConfig {
+  string task_id = 1;
+  string task_name = 2;
+  repeated string sequence_ids = 3;
+  repeated string methods = 4;   // DISCRETE_OUTLIER / CAUSAL_PATTERN / HISTORICAL_MATCH
+  string warning_rule = 5;       // 异常等级规则
+  int32 context_length = 6;
+  int64 slide_step_ms = 7;
+  int32 minimum_points = 8;
+  SemanticContext semantic_context = 9;
+}
+
+message ForecastTaskConfig {
+  string task_id = 1;
+  string task_name = 2;
+  repeated string target_sequence_ids = 3;
+  repeated string feature_sequence_ids = 4;
+  int64 observation_window_ms = 5;
+  int32 forecast_horizon_steps = 6;
+  int32 minimum_points = 7;
+  string model_key = 8;
+  SemanticContext semantic_context = 9;
+}
+
+message SyncAnomalyTaskRequest {
+  RequestMeta meta = 1;
+  int64 config_version = 2;      // 防止旧配置覆盖新配置
+  AnomalyTaskConfig task = 3;
+}
+
+message SyncForecastTaskRequest {
+  RequestMeta meta = 1;
+  int64 config_version = 2;
+  ForecastTaskConfig task = 3;
+}
+
+message TaskAck {
+  string task_id = 1;
+  bool accepted = 2;
+  AnalysisStatus status = 3;
+  string message = 4;
+  int64 updated_at_ms = 5;
+}
+
+// ============ 任务状态 ============
+
+message UpdateTaskStatusRequest {
+  RequestMeta meta = 1;
+  string task_id = 2;
+  TaskStatus status = 3;   // ENABLED / DISABLED / DELETED
+}
+
+// ============ 结果查询 ============
+
+message ResultQuery {
+  RequestMeta meta = 1;
+  string task_id = 2;
+  optional TimeRange time_range = 3;
+  bool latest_only = 4;
+  int32 limit = 5;
+  string page_token = 6;
+}
+
+message AnomalyFinding {
+  string anomaly_type = 1;
+  string severity = 2;
+  string description = 3;
+  optional double score = 4;
+  optional int64 detected_time_ms = 5;
+  repeated string related_sequence_ids = 6;
+}
+
+message AnomalyResult {
+  string task_id = 1;
+  string run_id = 2;             // 每次运行唯一，结果去重
+  int64 generated_at_ms = 3;
+  AnalysisStatus status = 4;
+  string message = 5;
+  repeated AnomalyFinding findings = 6;
+  string model_version = 7;
+}
+
+message RiskFinding {
+  string rule_id = 1;
+  string severity = 2;
+  string description = 3;
+  optional int64 predicted_time_ms = 4;
+  repeated string related_sequence_ids = 5;
+}
+
+message ForecastResult {
+  string task_id = 1;
+  string run_id = 2;
+  int64 generated_at_ms = 3;
+  AnalysisStatus status = 4;
+  string message = 5;
+  repeated int64 timestamps_ms = 6;        // 未来 H 个预测时刻
+  repeated string sequence_ids = 7;        // 预测目标序列（列顺序）
+  repeated double values = 8;              // 行优先展平：H × target_count
+  repeated RiskFinding risk_findings = 9;
+  string model_version = 10;
+}
+
+message QueryAnomalyResultsRequest {
+  ResultQuery query = 1;
+}
+
+message QueryAnomalyResultsResponse {
+  string task_id = 1;
+  repeated AnomalyResult results = 2;
+  string next_page_token = 3;
+}
+
+message QueryForecastResultsRequest {
+  ResultQuery query = 1;
+}
+
+message QueryForecastResultsResponse {
+  string task_id = 1;
+  repeated ForecastResult results = 2;
+  string next_page_token = 3;
+}
+
+// ============ 归因建议（空壳） ============
+
+message DecisionRequest {
+  RequestMeta meta = 1;
+  string event_id = 2;
+  string event_type = 3;
+  string event_summary = 4;
+  SemanticContext semantic_context = 5;
+  repeated string related_historical_event_ids = 6;
+  map<string, string> statistics = 7;
+}
+
+message DecisionResult {
+  string event_id = 1;
+  AnalysisStatus status = 2;
+  string message = 3;
+  string content = 4;
+  repeated string basis_ids = 5;
+}
