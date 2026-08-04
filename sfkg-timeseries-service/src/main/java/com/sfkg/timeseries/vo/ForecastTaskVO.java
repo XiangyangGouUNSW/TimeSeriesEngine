@@ -5,7 +5,7 @@ import lombok.Data;
 @Data
 public class ForecastTaskVO {
 
-    private Integer taskId;
+    private String taskId;
     private String taskName;
     private String forecastHorizon;
     private String status;

@@ -57,10 +57,10 @@ public class TimeseriesCoreGrpcClient {
             return SyncResult.fail("config is null");
         }
         SyncInstanceConfigRequest req = SyncInstanceConfigRequest.newBuilder()
-                .setSequenceId(nullToZero(config.getSequenceId()))
+                .setSequenceId(nullToEmpty(config.getSequenceId()))
                 .setInstanceName(nullToEmpty(config.getInstanceName()))
-                .setCategoryId(nullToZero(config.getCategoryId()))
-                .setDeviceInstanceId(nullToZero(config.getDeviceInstanceId()))
+                .setCategoryId(nullToEmpty(config.getCategoryId()))
+                .setDeviceInstanceId(nullToEmpty(config.getDeviceInstanceId()))
                 .build();
         LOG.info("[{}] -> syncInstanceConfig sequenceId={} at {}", SERVICE_NAME, config.getSequenceId(), address);
         return callCore(address, stub -> stub.syncInstanceConfig(req), "syncInstanceConfig");
@@ -77,7 +77,7 @@ public class TimeseriesCoreGrpcClient {
             return SyncResult.fail("constraint is null");
         }
         SyncConstraintConfigRequest.Builder b = SyncConstraintConfigRequest.newBuilder()
-                .setConstraintId(nullToZero(constraint.getConstraintId()))
+                .setConstraintId(nullToEmpty(constraint.getConstraintId()))
                 .setConstraintExpression(nullToEmpty(constraint.getConstraintExpression()));
         if (constraint.getVariableMapping() != null) {
             b.putAllVariableMapping(constraint.getVariableMapping());
@@ -97,8 +97,8 @@ public class TimeseriesCoreGrpcClient {
             return SyncResult.fail("relation is null");
         }
         SyncRelationConfigRequest.Builder b = SyncRelationConfigRequest.newBuilder()
-                .setRelationId(nullToZero(relation.getRelationId()))
-                .setTargetCategoryId(nullToZero(relation.getTargetCategoryId()));
+                .setRelationId(nullToEmpty(relation.getRelationId()))
+                .setTargetCategoryId(nullToEmpty(relation.getTargetCategoryId()));
         if (relation.getSourceCategories() != null) {
             b.addAllSourceCategories(relation.getSourceCategories());
         }
@@ -128,13 +128,13 @@ public class TimeseriesCoreGrpcClient {
 
     // ── task status ────────────────────────────────────────────────────
 
-    public SyncResult updateTaskStatus(Integer taskId, String taskType, String status) {
+    public SyncResult updateTaskStatus(String taskId, String taskType, String status) {
         String address = grpcClientProperties.getCoreAddress();
         if (isBlank(address)) {
             return notConfigured("updateTaskStatus");
         }
         SyncTaskStatusRequest req = SyncTaskStatusRequest.newBuilder()
-                .setTaskId(nullToZero(taskId))
+                .setTaskId(nullToEmpty(taskId))
                 .setTaskType(nullToEmpty(taskType))
                 .setStatus(nullToEmpty(status))
                 .build();
@@ -154,10 +154,10 @@ public class TimeseriesCoreGrpcClient {
         }
 
         SyncTimeseriesDataRequest.Builder b = SyncTimeseriesDataRequest.newBuilder()
-                .setSequenceId(nullToZero(points.get(0).getSequenceId()));
+                .setSequenceId(nullToEmpty(points.get(0).getSequenceId()));
         for (TimeseriesDataPoint point : points) {
             b.addPoints(TimeseriesDataPointMessage.newBuilder()
-                    .setSequenceId(nullToZero(point.getSequenceId()))
+                    .setSequenceId(nullToEmpty(point.getSequenceId()))
                     .setTimestamp(point.getTimestamp() != null ? point.getTimestamp().toString() : "")
                     .setValue(point.getValue() != null ? point.getValue().toPlainString() : "0")
                     .build());
@@ -179,7 +179,7 @@ public class TimeseriesCoreGrpcClient {
             return new HistoryDataVO();
         }
         QueryHistoryDataRequest req = QueryHistoryDataRequest.newBuilder()
-                .setSequenceId(nullToZero(request.getSequenceId()))
+                .setSequenceId(nullToEmpty(request.getSequenceId()))
                 .setStartTime(request.getStartTime() != null ? request.getStartTime().toString() : "")
                 .setEndTime(request.getEndTime() != null ? request.getEndTime().toString() : "")
                 .setGranularity(nullToEmpty(request.getGranularity()))
@@ -215,12 +215,12 @@ public class TimeseriesCoreGrpcClient {
 
     // ── placeholder stubs (no proto RPC defined yet) ───────────────────
 
-    public Map<String, Object> queryWindowData(Integer sequenceId) {
+    public Map<String, Object> queryWindowData(String sequenceId) {
         LOG.debug("[{}] queryWindowData seq={} - stub", SERVICE_NAME, sequenceId);
         return Map.of();
     }
 
-    public Map<String, Object> queryStatistics(Integer sequenceId) {
+    public Map<String, Object> queryStatistics(String sequenceId) {
         LOG.debug("[{}] queryStatistics seq={} - stub", SERVICE_NAME, sequenceId);
         return Map.of();
     }
@@ -257,7 +257,6 @@ public class TimeseriesCoreGrpcClient {
         return SyncResult.fail("core address not configured");
     }
 
-    private static int nullToZero(Integer v) { return v != null ? v : 0; }
     private static String nullToEmpty(String v) { return v != null ? v : ""; }
     private static boolean isBlank(String s) { return s == null || s.isBlank(); }
 }

@@ -9,9 +9,9 @@ public interface TimeseriesConstraintMapper {
 
     void updateById(TimeseriesConstraint entity);
 
-    TimeseriesConstraint selectById(Integer constraintId);
+    TimeseriesConstraint selectById(String constraintId);
 
     List<TimeseriesConstraint> selectByCondition(Object condition);
 
-    void updateStatus(Integer constraintId, String status);
+    void updateStatus(String constraintId, String status);
 }

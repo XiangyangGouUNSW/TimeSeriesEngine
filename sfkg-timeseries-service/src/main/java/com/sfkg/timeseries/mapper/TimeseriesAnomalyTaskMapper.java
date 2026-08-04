@@ -9,9 +9,9 @@ public interface TimeseriesAnomalyTaskMapper {
 
     void updateById(TimeseriesAnomalyTask entity);
 
-    TimeseriesAnomalyTask selectById(Integer taskId);
+    TimeseriesAnomalyTask selectById(String taskId);
 
     List<TimeseriesAnomalyTask> selectByCondition(Object condition);
 
-    void updateStatus(Integer taskId, String status);
+    void updateStatus(String taskId, String status);
 }

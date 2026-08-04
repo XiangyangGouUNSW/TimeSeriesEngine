@@ -14,7 +14,7 @@ import com.sfkg.timeseries.service.TimeseriesInstanceService;
 import com.sfkg.timeseries.vo.InstanceConfigVO;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
@@ -39,9 +39,9 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
     }
 
     @Override
-    public Integer saveInstanceConfig(InstanceConfigSaveRequest request) {
+    public String saveInstanceConfig(InstanceConfigSaveRequest request) {
         cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
-        Integer sequenceId = request == null || request.getSequenceId() == null
+        String sequenceId = request == null || request.getSequenceId() == null
                 ? generateSequenceId()
                 : request.getSequenceId();
 
@@ -73,7 +73,7 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
     }
 
     @Override
-    public void validateCategory(Integer categoryId) {
+    public void validateCategory(String categoryId) {
         if (categoryId == null) {
             return;
         }
@@ -82,28 +82,28 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
     }
 
     @Override
-    public void validateDeviceInstance(Integer deviceInstanceId) {
+    public void validateDeviceInstance(String deviceInstanceId) {
         // TODO: Restore device instance validation against device service when the integration is available.
     }
 
     @Override
-    public Integer generateSequenceId() {
-        return ThreadLocalRandom.current().nextInt(100000, 1000000);
+    public String generateSequenceId() {
+        return UUID.randomUUID().toString();
     }
 
     @Override
-    public void syncInstanceToGraph(Integer sequenceId) {
+    public void syncInstanceToGraph(String sequenceId) {
         // TODO: Restore graph synchronization here.
     }
 
     @Override
-    public void syncInstanceToCore(Integer sequenceId) {
+    public void syncInstanceToCore(String sequenceId) {
         if (sequenceId == null) return;
         cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
         memoryCache.getInstanceConfig(sequenceId).ifPresent(coreGrpcClient::syncInstanceConfig);
     }
 
-    private String resolveCategoryName(Integer categoryId) {
+    private String resolveCategoryName(String categoryId) {
         if (categoryId == null) {
             return null;
         }
@@ -113,7 +113,7 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
                 .orElse(null);
     }
 
-    private String resolveDeviceInstanceName(Integer deviceInstanceId) {
+    private String resolveDeviceInstanceName(String deviceInstanceId) {
         return deviceInstanceId == null ? null : "device-" + deviceInstanceId;
     }
 
@@ -133,7 +133,7 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
                 && equalsTextIfPresent(request.getAccessStatus(), entity.getAccessStatus());
     }
 
-    private boolean equalsIfPresent(Integer expected, Integer actual) {
+    private boolean equalsIfPresent(String expected, String actual) {
         return expected == null || Objects.equals(expected, actual);
     }
 

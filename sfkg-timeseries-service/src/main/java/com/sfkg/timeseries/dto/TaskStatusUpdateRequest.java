@@ -5,7 +5,7 @@ import lombok.Data;
 @Data
 public class TaskStatusUpdateRequest {
 
-    private Integer taskId;
+    private String taskId;
     private String taskType;
     private String status;
 }

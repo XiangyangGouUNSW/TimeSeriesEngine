@@ -5,7 +5,7 @@ import lombok.Data;
 @Data
 public class CategoryStatusUpdateRequest {
 
-    private Integer categoryId;
+    private String categoryId;
     private String confirmStatus;
     private String effectiveStatus;
 }

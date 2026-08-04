@@ -105,7 +105,7 @@ public class DecisionGrpcClient {
             LOG.warn("[{}] failed to serialize decision context", SERVICE_NAME, e);
         }
         return DecisionContextRequest.newBuilder()
-                .setEventId(nullToZero(context.getEventId()))
+                .setEventId(nullToEmpty(context.getEventId()))
                 .setContextJson(contextJson)
                 .build();
     }
@@ -114,6 +114,6 @@ public class DecisionGrpcClient {
         return ManagedChannelBuilder.forTarget(address).usePlaintext().build();
     }
 
-    private static int nullToZero(Integer v) { return v != null ? v : 0; }
+    private static String nullToEmpty(String v) { return v != null ? v : ""; }
     private static boolean isBlank(String s) { return s == null || s.isBlank(); }
 }

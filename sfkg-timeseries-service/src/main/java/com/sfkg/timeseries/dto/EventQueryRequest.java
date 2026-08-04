@@ -12,7 +12,7 @@ public class EventQueryRequest {
     private String eventLevel;
     private String confirmStatus;
     private String handleStatus;
-    private Collection<Integer> relatedSequences;
+    private Collection<String> relatedSequences;
     private LocalDateTime startTime;
     private LocalDateTime endTime;
 }

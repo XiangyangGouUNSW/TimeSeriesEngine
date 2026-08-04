@@ -9,11 +9,11 @@ public interface TimeseriesInstanceConfigMapper {
 
     void updateById(TimeseriesInstanceConfig entity);
 
-    TimeseriesInstanceConfig selectById(Integer id);
+    TimeseriesInstanceConfig selectById(String id);
 
-    TimeseriesInstanceConfig selectBySequenceId(Integer sequenceId);
+    TimeseriesInstanceConfig selectBySequenceId(String sequenceId);
 
     List<TimeseriesInstanceConfig> selectByCondition(Object condition);
 
-    boolean existsBySequenceId(Integer sequenceId);
+    boolean existsBySequenceId(String sequenceId);
 }

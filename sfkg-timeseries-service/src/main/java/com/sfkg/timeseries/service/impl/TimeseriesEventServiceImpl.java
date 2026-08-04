@@ -14,7 +14,7 @@ import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
@@ -45,7 +45,7 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
     }
 
     @Override
-    public EventDetailVO getEventDetail(Integer eventId) {
+    public EventDetailVO getEventDetail(String eventId) {
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
         return memoryCache.getEvent(eventId)
                 .map(this::toDetailVO)
@@ -53,9 +53,9 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
     }
 
     @Override
-    public Integer saveEvent(EventSaveRequest request) {
+    public String saveEvent(EventSaveRequest request) {
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
-        Integer eventId = request == null || request.getEventId() == null
+        String eventId = request == null || request.getEventId() == null
                 ? generateEventId()
                 : request.getEventId();
 
@@ -75,12 +75,12 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
     }
 
     @Override
-    public Integer saveEventEntity(TimeseriesEvent entity) {
+    public String saveEventEntity(TimeseriesEvent entity) {
         if (entity == null) {
             return null;
         }
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
-        Integer eventId = entity.getEventId() != null
+        String eventId = entity.getEventId() != null
                 ? entity.getEventId()
                 : generateEventId();
         entity.setEventId(eventId);
@@ -104,17 +104,17 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
     }
 
     @Override
-    public EventDetailVO enrichEventDetail(Integer eventId) {
+    public EventDetailVO enrichEventDetail(String eventId) {
         return getEventDetail(eventId);
     }
 
     @Override
-    public void syncEventToGraph(Integer eventId) {
+    public void syncEventToGraph(String eventId) {
         // TODO: Restore graph synchronization here.
     }
 
-    private Integer generateEventId() {
-        return ThreadLocalRandom.current().nextInt(100000, 1000000);
+    private String generateEventId() {
+        return UUID.randomUUID().toString();
     }
 
     private EventListVO toListVO(TimeseriesEvent entity) {

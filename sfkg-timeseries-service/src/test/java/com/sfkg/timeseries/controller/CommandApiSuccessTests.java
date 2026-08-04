@@ -448,10 +448,10 @@ class CommandApiSuccessTests {
         verify(forecastTaskService).updateForecastTaskStatus(org.mockito.ArgumentMatchers.any(TaskStatusUpdateRequest.class));
 
         verify(eventService).listEvents(org.mockito.ArgumentMatchers.any(EventQueryRequest.class));
-        verify(eventService).getEventDetail(org.mockito.ArgumentMatchers.anyInt());
+        verify(eventService).getEventDetail(org.mockito.ArgumentMatchers.anyString());
         verify(eventService, times(2)).saveEvent(org.mockito.ArgumentMatchers.any(EventSaveRequest.class));
-        verify(decisionService).getDiagnosisResult(org.mockito.ArgumentMatchers.anyInt());
-        verify(decisionService).getDecisionSuggestion(org.mockito.ArgumentMatchers.anyInt());
+        verify(decisionService).getDiagnosisResult(org.mockito.ArgumentMatchers.anyString());
+        verify(decisionService).getDecisionSuggestion(org.mockito.ArgumentMatchers.anyString());
         verify(decisionService).submitDisposalFeedback(org.mockito.ArgumentMatchers.any(DisposalFeedbackRequest.class));
         verify(anomalyResultService).queryAnomalyResults(org.mockito.ArgumentMatchers.any(AnomalyResultQueryRequest.class));
         verify(forecastResultService).queryForecastResults(org.mockito.ArgumentMatchers.any(ForecastResultQueryRequest.class));

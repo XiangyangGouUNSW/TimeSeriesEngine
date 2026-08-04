@@ -1,8 +1,8 @@
 [ {
-  "relationId" : 6001,
+  "relationId" : "6001",
   "relationName" : "load affects temperature",
-  "sourceCategories" : [ 2002 ],
-  "targetCategoryId" : 2001,
+  "sourceCategories" : [ "2002" ],
+  "targetCategoryId" : "2001",
   "targetCategoryName" : "temperature",
   "relationType" : "CAUSE",
   "lagRange" : "0m-10m",

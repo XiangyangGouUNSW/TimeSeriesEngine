@@ -7,17 +7,17 @@ import java.util.List;
 
 public interface TimeseriesInstanceService {
 
-    Integer saveInstanceConfig(InstanceConfigSaveRequest request);
+    String saveInstanceConfig(InstanceConfigSaveRequest request);
 
     List<InstanceConfigVO> queryInstanceConfigs(InstanceConfigQueryRequest request);
 
-    void validateCategory(Integer categoryId);
+    void validateCategory(String categoryId);
 
-    void validateDeviceInstance(Integer deviceInstanceId);
+    void validateDeviceInstance(String deviceInstanceId);
 
-    Integer generateSequenceId();
+    String generateSequenceId();
 
-    void syncInstanceToGraph(Integer sequenceId);
+    void syncInstanceToGraph(String sequenceId);
 
-    void syncInstanceToCore(Integer sequenceId);
+    void syncInstanceToCore(String sequenceId);
 }

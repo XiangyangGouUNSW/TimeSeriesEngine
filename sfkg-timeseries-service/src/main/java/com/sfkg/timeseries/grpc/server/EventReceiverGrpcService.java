@@ -56,7 +56,7 @@ public class EventReceiverGrpcService extends TimeseriesEventReceiverServiceGrpc
 
     private TimeseriesEvent toEntity(EventMessage msg) {
         TimeseriesEvent entity = new TimeseriesEvent();
-        entity.setEventId(msg.getEventId() != 0 ? msg.getEventId() : null);
+        entity.setEventId(!msg.getEventId().isEmpty() ? msg.getEventId() : null);
         entity.setEventName(emptyToNull(msg.getEventName()));
         entity.setEventType(emptyToNull(msg.getEventType()));
         entity.setEventSource(emptyToNull(msg.getEventSource()));

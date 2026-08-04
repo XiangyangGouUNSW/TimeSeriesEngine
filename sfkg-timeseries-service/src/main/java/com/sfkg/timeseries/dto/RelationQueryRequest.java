@@ -5,10 +5,10 @@ import lombok.Data;
 @Data
 public class RelationQueryRequest {
 
-    private Integer relationId;
+    private String relationId;
     private String relationName;
-    private Integer sourceCategoryId;
-    private Integer targetCategoryId;
+    private String sourceCategoryId;
+    private String targetCategoryId;
     private String relationType;
     private String effectiveStatus;
     private String confirmStatus;

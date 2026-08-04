@@ -5,7 +5,7 @@ import lombok.Data;
 @Data
 public class DiagnosisResultVO {
 
-    private Integer eventId;
+    private String eventId;
     private String diagnosisResult;
     private String diagnosisBasis;
 }

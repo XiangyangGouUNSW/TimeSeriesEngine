@@ -39,7 +39,7 @@ public class TimeseriesDecisionServiceImpl implements TimeseriesDecisionService 
     }
 
     @Override
-    public DiagnosisResultVO getDiagnosisResult(Integer eventId) {
+    public DiagnosisResultVO getDiagnosisResult(String eventId) {
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
         DecisionContext context = buildDecisionContext(eventId);
         DiagnosisResultVO vo = decisionGrpcClient.generateDiagnosisResult(context);
@@ -55,7 +55,7 @@ public class TimeseriesDecisionServiceImpl implements TimeseriesDecisionService 
     }
 
     @Override
-    public DecisionSuggestionVO getDecisionSuggestion(Integer eventId) {
+    public DecisionSuggestionVO getDecisionSuggestion(String eventId) {
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
         DecisionContext context = buildDecisionContext(eventId);
         DecisionSuggestionVO vo = decisionGrpcClient.generateDecisionSuggestion(context);
@@ -94,7 +94,7 @@ public class TimeseriesDecisionServiceImpl implements TimeseriesDecisionService 
     }
 
     @Override
-    public DecisionContext buildDecisionContext(Integer eventId) {
+    public DecisionContext buildDecisionContext(String eventId) {
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
         DecisionContext context = new DecisionContext();
         context.setEventId(eventId);
@@ -107,7 +107,7 @@ public class TimeseriesDecisionServiceImpl implements TimeseriesDecisionService 
     }
 
     @Override
-    public void syncFeedbackToGraph(Integer eventId) {
+    public void syncFeedbackToGraph(String eventId) {
         // TODO: Restore graph synchronization here.
     }
 

@@ -13,5 +13,5 @@ public interface TimeseriesSyncLogMapper {
 
     List<TimeseriesSyncLog> selectFailedLogs();
 
-    void markRetried(Integer id);
+    void markRetried(String id);
 }

@@ -11,7 +11,7 @@ import com.sfkg.timeseries.service.TimeseriesForecastResultService;
 import com.sfkg.timeseries.vo.ForecastResultVO;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.UUID;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -49,8 +49,8 @@ public class TimeseriesForecastResultServiceImpl implements TimeseriesForecastRe
     }
 
     @Override
-    public Integer createWarningEvent(ForecastResultVO result) {
-        Integer eventId = ThreadLocalRandom.current().nextInt(100000, 1000000);
+    public String createWarningEvent(ForecastResultVO result) {
+        String eventId = UUID.randomUUID().toString();
         TimeseriesEvent event = new TimeseriesEvent();
         event.setEventId(eventId);
         event.setEventName("forecast warning event " + eventId);
@@ -98,7 +98,7 @@ public class TimeseriesForecastResultServiceImpl implements TimeseriesForecastRe
         return vo;
     }
 
-    private boolean sequenceMatches(Integer sequenceId, TimeseriesEvent event) {
+    private boolean sequenceMatches(String sequenceId, TimeseriesEvent event) {
         return sequenceId == null
                 || (event.getRelatedSequences() != null && event.getRelatedSequences().contains(sequenceId));
     }

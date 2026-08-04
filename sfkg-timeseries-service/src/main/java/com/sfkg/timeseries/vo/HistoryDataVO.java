@@ -7,6 +7,6 @@ import lombok.Data;
 @Data
 public class HistoryDataVO {
 
-    private Integer sequenceId;
+    private String sequenceId;
     private List<TimeseriesDataPoint> points;
 }

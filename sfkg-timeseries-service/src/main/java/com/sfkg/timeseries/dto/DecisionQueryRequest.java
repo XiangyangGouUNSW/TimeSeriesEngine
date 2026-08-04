@@ -5,5 +5,5 @@ import lombok.Data;
 @Data
 public class DecisionQueryRequest {
 
-    private Integer eventId;
+    private String eventId;
 }

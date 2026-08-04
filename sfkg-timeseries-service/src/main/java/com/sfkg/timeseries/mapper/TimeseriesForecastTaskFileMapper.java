@@ -32,7 +32,7 @@ public class TimeseriesForecastTaskFileMapper implements TimeseriesForecastTaskM
     }
 
     @Override
-    public TimeseriesForecastTask selectById(Integer taskId) {
+    public TimeseriesForecastTask selectById(String taskId) {
         return store.readAll().stream()
                 .filter(entity -> Objects.equals(taskId, entity.getTaskId()))
                 .findFirst()
@@ -47,7 +47,7 @@ public class TimeseriesForecastTaskFileMapper implements TimeseriesForecastTaskM
     }
 
     @Override
-    public void updateStatus(Integer taskId, String status) {
+    public void updateStatus(String taskId, String status) {
         store.update(
                 entity -> Objects.equals(taskId, entity.getTaskId()),
                 entity -> entity.setStatus(status));
@@ -72,7 +72,7 @@ public class TimeseriesForecastTaskFileMapper implements TimeseriesForecastTaskM
                 && matchesKeyword(request.getKeyword(), entity);
     }
 
-    private boolean equalsIfPresent(Integer expected, Integer actual) {
+    private boolean equalsIfPresent(String expected, String actual) {
         return expected == null || Objects.equals(expected, actual);
     }
 

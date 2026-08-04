@@ -6,7 +6,7 @@ import lombok.Data;
 @Data
 public class DecisionContext {
 
-    private Integer eventId;
+    private String eventId;
     private Map<String, Object> eventInfo;
     private Map<String, Object> semanticContext;
     private Map<String, Object> statisticsContext;

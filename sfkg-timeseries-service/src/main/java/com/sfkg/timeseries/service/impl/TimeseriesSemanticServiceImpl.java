@@ -26,7 +26,7 @@ import com.sfkg.timeseries.vo.RelationVO;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
@@ -66,9 +66,9 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
     }
 
     @Override
-    public Integer saveCategory(CategorySaveRequest request) {
+    public String saveCategory(CategorySaveRequest request) {
         cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
-        Integer categoryId = request == null || request.getCategoryId() == null
+        String categoryId = request == null || request.getCategoryId() == null
                 ? generateId()
                 : request.getCategoryId();
 
@@ -111,9 +111,9 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
     }
 
     @Override
-    public Integer saveConstraint(ConstraintSaveRequest request) {
+    public String saveConstraint(ConstraintSaveRequest request) {
         cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
-        Integer constraintId = request == null || request.getConstraintId() == null
+        String constraintId = request == null || request.getConstraintId() == null
                 ? generateId()
                 : request.getConstraintId();
 
@@ -151,7 +151,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
     }
 
     @Override
-    public void updateConstraintStatus(Integer constraintId, String status) {
+    public void updateConstraintStatus(String constraintId, String status) {
         if (constraintId == null) {
             return;
         }
@@ -171,9 +171,9 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
     }
 
     @Override
-    public Integer saveRelation(RelationSaveRequest request) {
+    public String saveRelation(RelationSaveRequest request) {
         cacheManager.ensureTableLoaded(CachedTable.RELATION);
-        Integer relationId = request == null || request.getRelationId() == null
+        String relationId = request == null || request.getRelationId() == null
                 ? generateId()
                 : request.getRelationId();
 
@@ -212,7 +212,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
     }
 
     @Override
-    public void updateRelationStatus(Integer relationId, String status) {
+    public void updateRelationStatus(String relationId, String status) {
         if (relationId == null) {
             return;
         }
@@ -228,7 +228,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
     }
 
     @Override
-    public void validateVariableMapping(Map<String, Integer> variableMapping) {
+    public void validateVariableMapping(Map<String, String> variableMapping) {
         // TODO: Restore variable mapping validation here.
     }
 
@@ -238,12 +238,12 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
     }
 
     @Override
-    public void syncSemanticToGraph(Integer semanticId) {
+    public void syncSemanticToGraph(String semanticId) {
         // TODO: Restore graph synchronization here.
     }
 
     @Override
-    public void syncSemanticToCore(Integer semanticId) {
+    public void syncSemanticToCore(String semanticId) {
         if (semanticId == null) return;
         cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
         cacheManager.ensureTableLoaded(CachedTable.RELATION);
@@ -251,8 +251,8 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         memoryCache.getRelation(semanticId).ifPresent(coreGrpcClient::syncRelationConfig);
     }
 
-    private Integer generateId() {
-        return ThreadLocalRandom.current().nextInt(100000, 1000000);
+    private String generateId() {
+        return UUID.randomUUID().toString();
     }
 
     private CategoryVO toCategoryVO(TimeseriesCategory entity) {
@@ -273,7 +273,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         return vo;
     }
 
-    private String resolveCategoryName(Integer categoryId) {
+    private String resolveCategoryName(String categoryId) {
         if (categoryId == null) {
             return null;
         }
@@ -320,12 +320,12 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 && matchesRelationKeyword(request.getKeyword(), entity);
     }
 
-    private boolean sourceContains(Integer sourceCategoryId, TimeseriesRelation entity) {
+    private boolean sourceContains(String sourceCategoryId, TimeseriesRelation entity) {
         return sourceCategoryId == null
                 || (entity.getSourceCategories() != null && entity.getSourceCategories().contains(sourceCategoryId));
     }
 
-    private boolean equalsIfPresent(Integer expected, Integer actual) {
+    private boolean equalsIfPresent(String expected, String actual) {
         return expected == null || Objects.equals(expected, actual);
     }
 

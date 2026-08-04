@@ -9,13 +9,13 @@ public interface TimeseriesEventMapper {
 
     void updateById(TimeseriesEvent entity);
 
-    TimeseriesEvent selectById(Integer eventId);
+    TimeseriesEvent selectById(String eventId);
 
     List<TimeseriesEvent> selectByCondition(Object condition);
 
-    void updateHandleStatus(Integer eventId, String status);
+    void updateHandleStatus(String eventId, String status);
 
-    void updateDiagnosisResult(Integer eventId, String diagnosisResult);
+    void updateDiagnosisResult(String eventId, String diagnosisResult);
 
-    void updateDisposalResult(Integer eventId, String disposalResult);
+    void updateDisposalResult(String eventId, String disposalResult);
 }

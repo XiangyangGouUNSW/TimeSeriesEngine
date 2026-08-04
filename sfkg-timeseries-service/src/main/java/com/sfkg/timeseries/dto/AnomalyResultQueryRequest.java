@@ -6,8 +6,8 @@ import lombok.Data;
 @Data
 public class AnomalyResultQueryRequest {
 
-    private Integer taskId;
-    private Integer sequenceId;
+    private String taskId;
+    private String sequenceId;
     private LocalDateTime startTime;
     private LocalDateTime endTime;
     private String eventLevel;

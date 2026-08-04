@@ -7,6 +7,6 @@ import lombok.Data;
 public class SyncCommand {
 
     private String syncType;
-    private Integer businessId;
+    private String businessId;
     private Map<String, Object> payload;
 }

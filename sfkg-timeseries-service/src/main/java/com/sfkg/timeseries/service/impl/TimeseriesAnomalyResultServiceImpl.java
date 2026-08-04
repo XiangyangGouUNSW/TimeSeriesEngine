@@ -11,7 +11,7 @@ import com.sfkg.timeseries.service.TimeseriesAnomalyResultService;
 import com.sfkg.timeseries.vo.AnomalyResultVO;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.UUID;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -49,8 +49,8 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
     }
 
     @Override
-    public Integer createAnomalyEvent(AnomalyResultVO result) {
-        Integer eventId = ThreadLocalRandom.current().nextInt(100000, 1000000);
+    public String createAnomalyEvent(AnomalyResultVO result) {
+        String eventId = UUID.randomUUID().toString();
         TimeseriesEvent event = new TimeseriesEvent();
         event.setEventId(eventId);
         event.setEventName("anomaly event " + eventId);
@@ -100,7 +100,7 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
         return vo;
     }
 
-    private boolean sequenceMatches(Integer sequenceId, TimeseriesEvent event) {
+    private boolean sequenceMatches(String sequenceId, TimeseriesEvent event) {
         return sequenceId == null
                 || (event.getRelatedSequences() != null && event.getRelatedSequences().contains(sequenceId));
     }

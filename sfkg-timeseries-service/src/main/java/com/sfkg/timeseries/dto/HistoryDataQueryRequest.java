@@ -8,7 +8,7 @@ import lombok.Data;
 public class HistoryDataQueryRequest {
 
     @JsonAlias("sequence_id")
-    private Integer sequenceId;
+    private String sequenceId;
     private LocalDateTime startTime;
     private LocalDateTime endTime;
     private String granularity;

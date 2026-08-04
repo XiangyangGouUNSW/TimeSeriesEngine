@@ -26,7 +26,7 @@ public class TimeseriesDecisionController {
     }
 
     @GetMapping(value = "/diagnosis", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> getDiagnosisResult(@RequestParam Integer eventId) {
+    public ApiResult<Void> getDiagnosisResult(@RequestParam String eventId) {
         decisionService.getDiagnosisResult(eventId);
         return returnSuccess("diagnosis query success");
     }
@@ -38,7 +38,7 @@ public class TimeseriesDecisionController {
     }
 
     @GetMapping(value = "/suggestion", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> getDecisionSuggestion(@RequestParam Integer eventId) {
+    public ApiResult<Void> getDecisionSuggestion(@RequestParam String eventId) {
         decisionService.getDecisionSuggestion(eventId);
         return returnSuccess("decision suggestion query success");
     }

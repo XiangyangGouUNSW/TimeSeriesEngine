@@ -9,9 +9,9 @@ public interface TimeseriesRelationMapper {
 
     void updateById(TimeseriesRelation entity);
 
-    TimeseriesRelation selectById(Integer relationId);
+    TimeseriesRelation selectById(String relationId);
 
     List<TimeseriesRelation> selectByCondition(Object condition);
 
-    void updateStatus(Integer relationId, String status);
+    void updateStatus(String relationId, String status);
 }

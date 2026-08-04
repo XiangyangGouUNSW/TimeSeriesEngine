@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class GraphClient {
 
-    public boolean checkDeviceInstanceExists(Integer deviceInstanceId) {
+    public boolean checkDeviceInstanceExists(String deviceInstanceId) {
         return true;
     }
 
@@ -36,23 +36,23 @@ public class GraphClient {
         return SyncResult.success();
     }
 
-    public SyncResult linkInstanceCategory(Integer sequenceId, Integer categoryId) {
+    public SyncResult linkInstanceCategory(String sequenceId, String categoryId) {
         return SyncResult.success();
     }
 
-    public SyncResult linkInstanceDevice(Integer sequenceId, Integer deviceInstanceId) {
+    public SyncResult linkInstanceDevice(String sequenceId, String deviceInstanceId) {
         return SyncResult.success();
     }
 
-    public SyncResult linkEventRelations(Integer eventId) {
+    public SyncResult linkEventRelations(String eventId) {
         return SyncResult.success();
     }
 
-    public Map<String, Object> queryEventSemanticContext(Integer eventId) {
+    public Map<String, Object> queryEventSemanticContext(String eventId) {
         return Map.of();
     }
 
-    public SyncResult updateEventFeedback(Integer eventId, String disposalResult, String handleStatus) {
+    public SyncResult updateEventFeedback(String eventId, String disposalResult, String handleStatus) {
         return SyncResult.success();
     }
 }

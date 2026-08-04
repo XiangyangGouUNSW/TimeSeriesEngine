@@ -6,9 +6,9 @@ import lombok.Data;
 @Data
 public class AnomalyTaskSaveRequest {
 
-    private Integer taskId;
+    private String taskId;
     private String taskName;
-    private Collection<Integer> detectObjects;
+    private Collection<String> detectObjects;
     private String detectMethod;
     private String warningRule;
     private String status;

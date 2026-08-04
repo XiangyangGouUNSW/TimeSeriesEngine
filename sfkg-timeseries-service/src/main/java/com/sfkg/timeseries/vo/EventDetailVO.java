@@ -6,7 +6,7 @@ import lombok.Data;
 @Data
 public class EventDetailVO {
 
-    private Integer eventId;
+    private String eventId;
     private String eventName;
     private String eventDescription;
     private Map<String, Object> semanticContext;

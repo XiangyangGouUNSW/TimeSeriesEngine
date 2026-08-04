@@ -35,7 +35,7 @@ public class TimeseriesInstanceConfigFileMapper implements TimeseriesInstanceCon
     }
 
     @Override
-    public TimeseriesInstanceConfig selectById(Integer id) {
+    public TimeseriesInstanceConfig selectById(String id) {
         return store.readAll().stream()
                 .filter(entity -> Objects.equals(id, entity.getId()))
                 .findFirst()
@@ -43,7 +43,7 @@ public class TimeseriesInstanceConfigFileMapper implements TimeseriesInstanceCon
     }
 
     @Override
-    public TimeseriesInstanceConfig selectBySequenceId(Integer sequenceId) {
+    public TimeseriesInstanceConfig selectBySequenceId(String sequenceId) {
         return store.readAll().stream()
                 .filter(entity -> Objects.equals(sequenceId, entity.getSequenceId()))
                 .findFirst()
@@ -58,7 +58,7 @@ public class TimeseriesInstanceConfigFileMapper implements TimeseriesInstanceCon
     }
 
     @Override
-    public boolean existsBySequenceId(Integer sequenceId) {
+    public boolean existsBySequenceId(String sequenceId) {
         return selectBySequenceId(sequenceId) != null;
     }
 
@@ -85,7 +85,7 @@ public class TimeseriesInstanceConfigFileMapper implements TimeseriesInstanceCon
                 && equalsTextIfPresent(request.getAccessStatus(), entity.getAccessStatus());
     }
 
-    private boolean equalsIfPresent(Integer expected, Integer actual) {
+    private boolean equalsIfPresent(String expected, String actual) {
         return expected == null || Objects.equals(expected, actual);
     }
 

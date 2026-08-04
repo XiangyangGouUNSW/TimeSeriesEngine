@@ -8,7 +8,7 @@ import java.util.List;
 
 public interface TimeseriesAnomalyTaskService {
 
-    Integer saveAnomalyTask(AnomalyTaskSaveRequest request);
+    String saveAnomalyTask(AnomalyTaskSaveRequest request);
 
     List<AnomalyTaskVO> listAnomalyTasks();
 
@@ -20,7 +20,7 @@ public interface TimeseriesAnomalyTaskService {
 
     void validateDetectMethod(String detectMethod);
 
-    void syncAnomalyTaskToCore(Integer taskId);
+    void syncAnomalyTaskToCore(String taskId);
 
-    void syncAnomalyTaskToAnomalyService(Integer taskId);
+    void syncAnomalyTaskToAnomalyService(String taskId);
 }

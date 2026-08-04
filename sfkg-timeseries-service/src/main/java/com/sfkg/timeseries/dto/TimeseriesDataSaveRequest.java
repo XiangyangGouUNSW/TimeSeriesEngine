@@ -10,7 +10,7 @@ import lombok.Data;
 public class TimeseriesDataSaveRequest {
 
     @JsonAlias("sequence_id")
-    private Integer sequenceId;
+    private String sequenceId;
 
     @JsonAlias({"data", "timestampValues", "timestampValueMap"})
     private Map<String, BigDecimal> points;

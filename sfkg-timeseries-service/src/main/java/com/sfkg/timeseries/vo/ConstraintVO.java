@@ -6,10 +6,10 @@ import lombok.Data;
 @Data
 public class ConstraintVO {
 
-    private Integer constraintId;
+    private String constraintId;
     private String constraintName;
-    private Integer categoryId;
-    private Map<String, Integer> variableMapping;
+    private String categoryId;
+    private Map<String, String> variableMapping;
     private String constraintDescription;
     private String constraintExpression;
     private String effectiveStatus;

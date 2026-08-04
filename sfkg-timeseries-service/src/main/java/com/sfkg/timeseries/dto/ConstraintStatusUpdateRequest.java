@@ -5,7 +5,7 @@ import lombok.Data;
 @Data
 public class ConstraintStatusUpdateRequest {
 
-    private Integer constraintId;
+    private String constraintId;
     private String confirmStatus;
     private String effectiveStatus;
 }

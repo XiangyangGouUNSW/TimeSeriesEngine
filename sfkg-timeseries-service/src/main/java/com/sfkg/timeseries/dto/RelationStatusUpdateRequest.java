@@ -5,7 +5,7 @@ import lombok.Data;
 @Data
 public class RelationStatusUpdateRequest {
 
-    private Integer relationId;
+    private String relationId;
     private String confirmStatus;
     private String effectiveStatus;
 }

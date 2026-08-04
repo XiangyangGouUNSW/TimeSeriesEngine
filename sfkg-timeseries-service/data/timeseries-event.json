@@ -1,10 +1,10 @@
 [ {
-  "eventId" : 8001,
+  "eventId" : "8001",
   "eventName" : "temperature warning",
   "eventType" : "ANOMALY",
   "eventSource" : "ANOMALY_DETECTION",
-  "relatedSequences" : [ 1001, 1002 ],
-  "relatedRules" : [ 5001 ],
+  "relatedSequences" : [ "1001", "1002" ],
+  "relatedRules" : [ "5001" ],
   "eventDescription" : "oil temperature is higher than the configured warning threshold",
   "eventLevel" : "WARNING",
   "eventTime" : "2026-08-03T10:30:00",

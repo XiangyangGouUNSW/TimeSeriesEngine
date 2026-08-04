@@ -14,7 +14,7 @@ import com.sfkg.timeseries.service.TimeseriesForecastTaskService;
 import com.sfkg.timeseries.vo.ForecastTaskVO;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
@@ -42,9 +42,9 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
     }
 
     @Override
-    public Integer saveForecastTask(ForecastTaskSaveRequest request) {
+    public String saveForecastTask(ForecastTaskSaveRequest request) {
         cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
-        Integer taskId = request == null || request.getTaskId() == null
+        String taskId = request == null || request.getTaskId() == null
                 ? generateTaskId()
                 : request.getTaskId();
 
@@ -104,21 +104,21 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
     }
 
     @Override
-    public void syncForecastTaskToCore(Integer taskId) {
+    public void syncForecastTaskToCore(String taskId) {
         if (taskId == null) return;
         cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
         memoryCache.getForecastTask(taskId).ifPresent(coreGrpcClient::syncForecastTaskConfig);
     }
 
     @Override
-    public void syncForecastTaskToForecastService(Integer taskId) {
+    public void syncForecastTaskToForecastService(String taskId) {
         if (taskId == null) return;
         cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
         memoryCache.getForecastTask(taskId).ifPresent(forecastGrpcClient::syncForecastTask);
     }
 
-    private Integer generateTaskId() {
-        return ThreadLocalRandom.current().nextInt(100000, 1000000);
+    private String generateTaskId() {
+        return UUID.randomUUID().toString();
     }
 
     private ForecastTaskVO toVO(TimeseriesForecastTask entity) {
@@ -142,7 +142,7 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
         return taskType == null || "FORECAST".equalsIgnoreCase(taskType);
     }
 
-    private boolean equalsIfPresent(Integer expected, Integer actual) {
+    private boolean equalsIfPresent(String expected, String actual) {
         return expected == null || Objects.equals(expected, actual);
     }
 

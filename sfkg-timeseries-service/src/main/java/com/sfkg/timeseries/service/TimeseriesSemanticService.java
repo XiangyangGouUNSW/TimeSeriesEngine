@@ -19,33 +19,33 @@ public interface TimeseriesSemanticService {
 
     List<CategoryVO> listCategories(CategoryQueryRequest request);
 
-    Integer saveCategory(CategorySaveRequest request);
+    String saveCategory(CategorySaveRequest request);
 
     void updateCategoryStatus(CategoryStatusUpdateRequest request);
 
     List<ConstraintVO> listConstraints(ConstraintQueryRequest request);
 
-    Integer saveConstraint(ConstraintSaveRequest request);
+    String saveConstraint(ConstraintSaveRequest request);
 
     void updateConstraintStatus(ConstraintStatusUpdateRequest request);
 
-    void updateConstraintStatus(Integer constraintId, String status);
+    void updateConstraintStatus(String constraintId, String status);
 
     List<RelationVO> listRelations(RelationQueryRequest request);
 
-    Integer saveRelation(RelationSaveRequest request);
+    String saveRelation(RelationSaveRequest request);
 
     void updateRelationStatus(RelationStatusUpdateRequest request);
 
-    void updateRelationStatus(Integer relationId, String status);
+    void updateRelationStatus(String relationId, String status);
 
     void validateConstraintExpression(String expression);
 
-    void validateVariableMapping(Map<String, Integer> variableMapping);
+    void validateVariableMapping(Map<String, String> variableMapping);
 
     void validateRelationConfig(RelationSaveRequest request);
 
-    void syncSemanticToGraph(Integer semanticId);
+    void syncSemanticToGraph(String semanticId);
 
-    void syncSemanticToCore(Integer semanticId);
+    void syncSemanticToCore(String semanticId);
 }

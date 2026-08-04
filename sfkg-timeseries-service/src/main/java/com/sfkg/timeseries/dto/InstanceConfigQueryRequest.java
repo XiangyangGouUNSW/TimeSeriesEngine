@@ -5,8 +5,8 @@ import lombok.Data;
 @Data
 public class InstanceConfigQueryRequest {
 
-    private Integer sequenceId;
-    private Integer categoryId;
-    private Integer deviceInstanceId;
+    private String sequenceId;
+    private String categoryId;
+    private String deviceInstanceId;
     private String accessStatus;
 }

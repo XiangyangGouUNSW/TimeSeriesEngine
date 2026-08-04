@@ -32,7 +32,7 @@ public class TimeseriesCategoryFileMapper implements TimeseriesCategoryMapper {
     }
 
     @Override
-    public TimeseriesCategory selectById(Integer categoryId) {
+    public TimeseriesCategory selectById(String categoryId) {
         return store.readAll().stream()
                 .filter(entity -> Objects.equals(categoryId, entity.getCategoryId()))
                 .findFirst()
@@ -47,7 +47,7 @@ public class TimeseriesCategoryFileMapper implements TimeseriesCategoryMapper {
     }
 
     @Override
-    public boolean existsConfirmedCategory(Integer categoryId) {
+    public boolean existsConfirmedCategory(String categoryId) {
         TimeseriesCategory category = selectById(categoryId);
         return category != null && "CONFIRMED".equalsIgnoreCase(category.getConfirmStatus());
     }
@@ -72,7 +72,7 @@ public class TimeseriesCategoryFileMapper implements TimeseriesCategoryMapper {
                 && equalsTextIfPresent(request.getConfirmStatus(), entity.getConfirmStatus());
     }
 
-    private boolean equalsIfPresent(Integer expected, Integer actual) {
+    private boolean equalsIfPresent(String expected, String actual) {
         return expected == null || Objects.equals(expected, actual);
     }
 

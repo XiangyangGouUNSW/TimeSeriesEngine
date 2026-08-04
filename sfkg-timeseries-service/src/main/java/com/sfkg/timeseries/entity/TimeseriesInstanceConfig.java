@@ -6,15 +6,15 @@ import lombok.Data;
 @Data
 public class TimeseriesInstanceConfig {
 
-    private Integer id;
-    private Integer sequenceId;
+    private String id;
+    private String sequenceId;
     private String instanceName;
-    private Integer externalSequenceId;
-    private Integer categoryId;
+    private String externalSequenceId;
+    private String categoryId;
     private String categoryName;
-    private Integer deviceInstanceId;
+    private String deviceInstanceId;
     private String deviceInstanceName;
-    private Integer dataSourceId;
+    private String dataSourceId;
     private String accessStatus;
     private LocalDateTime lastDataTime;
 }

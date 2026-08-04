@@ -5,6 +5,6 @@ import lombok.Data;
 @Data
 public class DecisionSuggestionVO {
 
-    private Integer eventId;
+    private String eventId;
     private String suggestion;
 }

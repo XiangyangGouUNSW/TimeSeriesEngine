@@ -44,7 +44,7 @@ public class ForecastGrpcClient {
             return SyncResult.fail("task is null");
         }
         SyncForecastTaskRequest.Builder b = SyncForecastTaskRequest.newBuilder()
-                .setTaskId(nullToZero(task.getTaskId()))
+                .setTaskId(nullToEmpty(task.getTaskId()))
                 .setForecastHorizon(nullToEmpty(task.getForecastHorizon()));
         if (task.getForecastObjects() != null) {
             b.addAllForecastObjects(task.getForecastObjects());
@@ -53,13 +53,13 @@ public class ForecastGrpcClient {
         return callForecast(address, stub -> stub.syncForecastTask(b.build()), "syncForecastTask");
     }
 
-    public SyncResult updateForecastTaskStatus(Integer taskId, String status) {
+    public SyncResult updateForecastTaskStatus(String taskId, String status) {
         String address = grpcClientProperties.getForecastAddress();
         if (isBlank(address)) {
             return notConfigured("updateForecastTaskStatus");
         }
         SyncTaskStatusRequest req = SyncTaskStatusRequest.newBuilder()
-                .setTaskId(nullToZero(taskId))
+                .setTaskId(nullToEmpty(taskId))
                 .setTaskType("FORECAST")
                 .setStatus(nullToEmpty(status))
                 .build();
@@ -77,8 +77,8 @@ public class ForecastGrpcClient {
             return new ForecastResultVO();
         }
         QueryForecastResultRequest req = QueryForecastResultRequest.newBuilder()
-                .setTaskId(nullToZero(request.getTaskId()))
-                .setSequenceId(nullToZero(request.getSequenceId()))
+                .setTaskId(nullToEmpty(request.getTaskId()))
+                .setSequenceId(nullToEmpty(request.getSequenceId()))
                 .build();
         LOG.info("[{}] -> queryForecastResult taskId={} seq={} at {}", SERVICE_NAME, request.getTaskId(), request.getSequenceId(), address);
 
@@ -96,7 +96,7 @@ public class ForecastGrpcClient {
                 try {
                     @SuppressWarnings("unchecked")
                     java.util.Map<String, Object> map = objectMapper.readValue(resp.getPayloadJson(), java.util.Map.class);
-                    vo.setResultId(map.get("resultId") instanceof Number n ? n.intValue() : null);
+                    vo.setResultId(map.get("resultId") != null ? map.get("resultId").toString() : null);
                     vo.setWarningLevel((String) map.get("warningLevel"));
                 } catch (JsonProcessingException e) {
                     LOG.warn("[{}] failed to parse forecast result payload", SERVICE_NAME, e);
@@ -143,7 +143,6 @@ public class ForecastGrpcClient {
         return SyncResult.fail("forecast address not configured");
     }
 
-    private static int nullToZero(Integer v) { return v != null ? v : 0; }
     private static String nullToEmpty(String v) { return v != null ? v : ""; }
     private static boolean isBlank(String s) { return s == null || s.isBlank(); }
 }

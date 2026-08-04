@@ -11,15 +11,15 @@ public interface TimeseriesEventService {
 
     List<EventListVO> listEvents(EventQueryRequest request);
 
-    EventDetailVO getEventDetail(Integer eventId);
+    EventDetailVO getEventDetail(String eventId);
 
-    Integer saveEvent(EventSaveRequest request);
+    String saveEvent(EventSaveRequest request);
 
-    Integer saveEventEntity(TimeseriesEvent entity);
+    String saveEventEntity(TimeseriesEvent entity);
 
     void validateEventRelations(EventSaveRequest request);
 
-    EventDetailVO enrichEventDetail(Integer eventId);
+    EventDetailVO enrichEventDetail(String eventId);
 
-    void syncEventToGraph(Integer eventId);
+    void syncEventToGraph(String eventId);
 }

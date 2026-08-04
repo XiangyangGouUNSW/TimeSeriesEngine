@@ -74,7 +74,7 @@ public class TimeseriesMemoryCache {
         }
     }
 
-    public Optional<TimeseriesInstanceConfig> getInstanceConfig(Integer sequenceId) {
+    public Optional<TimeseriesInstanceConfig> getInstanceConfig(String sequenceId) {
         return instanceConfigs.stream()
                 .filter(entity -> equalsValue(sequenceId, entity.getSequenceId()))
                 .findFirst();
@@ -96,7 +96,7 @@ public class TimeseriesMemoryCache {
         }
     }
 
-    public Optional<TimeseriesCategory> getCategory(Integer categoryId) {
+    public Optional<TimeseriesCategory> getCategory(String categoryId) {
         return categories.stream()
                 .filter(entity -> equalsValue(categoryId, entity.getCategoryId()))
                 .findFirst();
@@ -118,7 +118,7 @@ public class TimeseriesMemoryCache {
         }
     }
 
-    public Optional<TimeseriesConstraint> getConstraint(Integer constraintId) {
+    public Optional<TimeseriesConstraint> getConstraint(String constraintId) {
         return constraints.stream()
                 .filter(entity -> equalsValue(constraintId, entity.getConstraintId()))
                 .findFirst();
@@ -140,7 +140,7 @@ public class TimeseriesMemoryCache {
         }
     }
 
-    public Optional<TimeseriesRelation> getRelation(Integer relationId) {
+    public Optional<TimeseriesRelation> getRelation(String relationId) {
         return relations.stream()
                 .filter(entity -> equalsValue(relationId, entity.getRelationId()))
                 .findFirst();
@@ -162,7 +162,7 @@ public class TimeseriesMemoryCache {
         }
     }
 
-    public Optional<TimeseriesEvent> getEvent(Integer eventId) {
+    public Optional<TimeseriesEvent> getEvent(String eventId) {
         return events.stream()
                 .filter(entity -> equalsValue(eventId, entity.getEventId()))
                 .findFirst();
@@ -184,7 +184,7 @@ public class TimeseriesMemoryCache {
         }
     }
 
-    public Optional<TimeseriesAnomalyTask> getAnomalyTask(Integer taskId) {
+    public Optional<TimeseriesAnomalyTask> getAnomalyTask(String taskId) {
         return anomalyTasks.stream()
                 .filter(entity -> equalsValue(taskId, entity.getTaskId()))
                 .findFirst();
@@ -206,7 +206,7 @@ public class TimeseriesMemoryCache {
         }
     }
 
-    public Optional<TimeseriesForecastTask> getForecastTask(Integer taskId) {
+    public Optional<TimeseriesForecastTask> getForecastTask(String taskId) {
         return forecastTasks.stream()
                 .filter(entity -> equalsValue(taskId, entity.getTaskId()))
                 .findFirst();
@@ -237,7 +237,7 @@ public class TimeseriesMemoryCache {
         markLoaded(CachedTable.TIMESERIES_DATA);
     }
 
-    public void replaceTimeseriesDataPoints(Integer sequenceId, Collection<TimeseriesDataPoint> points) {
+    public void replaceTimeseriesDataPoints(String sequenceId, Collection<TimeseriesDataPoint> points) {
         if (sequenceId == null) {
             replaceTimeseriesDataPoints(points);
             return;
@@ -269,7 +269,7 @@ public class TimeseriesMemoryCache {
         return dataPoints.stream()
                 .filter(point -> matchesDataQuery(request, point))
                 .sorted(Comparator
-                        .comparing(TimeseriesDataPoint::getSequenceId, Comparator.nullsLast(Integer::compareTo))
+                        .comparing(TimeseriesDataPoint::getSequenceId, Comparator.nullsLast(String::compareTo))
                         .thenComparing(TimeseriesDataPoint::getTimestamp, Comparator.nullsLast(java.time.LocalDateTime::compareTo)))
                 .collect(Collectors.toList());
     }
@@ -286,7 +286,7 @@ public class TimeseriesMemoryCache {
         records.add(entity);
     }
 
-    private boolean equalsValue(Integer left, Integer right) {
+    private boolean equalsValue(String left, String right) {
         return left != null && left.equals(right);
     }
 

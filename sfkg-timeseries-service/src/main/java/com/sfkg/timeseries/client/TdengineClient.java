@@ -12,7 +12,7 @@ public class TdengineClient {
         return new HistoryDataVO();
     }
 
-    public LocalDateTime queryLatestDataTime(Integer sequenceId) {
+    public LocalDateTime queryLatestDataTime(String sequenceId) {
         return null;
     }
 

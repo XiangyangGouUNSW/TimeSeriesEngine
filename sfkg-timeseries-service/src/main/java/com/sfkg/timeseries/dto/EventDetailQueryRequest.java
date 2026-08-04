@@ -5,5 +5,5 @@ import lombok.Data;
 @Data
 public class EventDetailQueryRequest {
 
-    private Integer eventId;
+    private String eventId;
 }

@@ -9,5 +9,5 @@ public interface TimeseriesForecastResultService {
 
     ForecastResultVO handleForecastResult(Object rawResult);
 
-    Integer createWarningEvent(ForecastResultVO result);
+    String createWarningEvent(ForecastResultVO result);
 }

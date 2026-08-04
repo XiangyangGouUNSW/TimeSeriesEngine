@@ -8,7 +8,7 @@ import java.util.List;
 
 public interface TimeseriesForecastTaskService {
 
-    Integer saveForecastTask(ForecastTaskSaveRequest request);
+    String saveForecastTask(ForecastTaskSaveRequest request);
 
     List<ForecastTaskVO> listForecastTasks();
 
@@ -20,7 +20,7 @@ public interface TimeseriesForecastTaskService {
 
     void validateForecastHorizon(String forecastHorizon);
 
-    void syncForecastTaskToCore(Integer taskId);
+    void syncForecastTaskToCore(String taskId);
 
-    void syncForecastTaskToForecastService(Integer taskId);
+    void syncForecastTaskToForecastService(String taskId);
 }

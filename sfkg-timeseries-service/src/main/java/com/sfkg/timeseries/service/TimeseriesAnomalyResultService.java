@@ -9,5 +9,5 @@ public interface TimeseriesAnomalyResultService {
 
     AnomalyResultVO handleAnomalyResult(Object rawResult);
 
-    Integer createAnomalyEvent(AnomalyResultVO result);
+    String createAnomalyEvent(AnomalyResultVO result);
 }

@@ -5,7 +5,7 @@ import lombok.Data;
 @Data
 public class TimeseriesCategory {
 
-    private Integer categoryId;
+    private String categoryId;
     private String categoryName;
     private String dataType;
     private String categoryDescription;

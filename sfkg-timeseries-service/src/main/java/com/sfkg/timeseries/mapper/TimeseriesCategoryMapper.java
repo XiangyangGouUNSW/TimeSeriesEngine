@@ -9,9 +9,9 @@ public interface TimeseriesCategoryMapper {
 
     void updateById(TimeseriesCategory entity);
 
-    TimeseriesCategory selectById(Integer categoryId);
+    TimeseriesCategory selectById(String categoryId);
 
     List<TimeseriesCategory> selectByCondition(Object condition);
 
-    boolean existsConfirmedCategory(Integer categoryId);
+    boolean existsConfirmedCategory(String categoryId);
 }

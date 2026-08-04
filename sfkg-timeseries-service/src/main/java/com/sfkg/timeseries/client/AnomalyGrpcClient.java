@@ -44,7 +44,7 @@ public class AnomalyGrpcClient {
             return SyncResult.fail("task is null");
         }
         SyncAnomalyTaskRequest.Builder b = SyncAnomalyTaskRequest.newBuilder()
-                .setTaskId(nullToZero(task.getTaskId()))
+                .setTaskId(nullToEmpty(task.getTaskId()))
                 .setDetectMethod(nullToEmpty(task.getDetectMethod()));
         if (task.getDetectObjects() != null) {
             b.addAllDetectObjects(task.getDetectObjects());
@@ -53,13 +53,13 @@ public class AnomalyGrpcClient {
         return callAnomaly(address, stub -> stub.syncAnomalyTask(b.build()), "syncAnomalyTask");
     }
 
-    public SyncResult updateAnomalyTaskStatus(Integer taskId, String status) {
+    public SyncResult updateAnomalyTaskStatus(String taskId, String status) {
         String address = grpcClientProperties.getAnomalyAddress();
         if (isBlank(address)) {
             return notConfigured("updateAnomalyTaskStatus");
         }
         SyncTaskStatusRequest req = SyncTaskStatusRequest.newBuilder()
-                .setTaskId(nullToZero(taskId))
+                .setTaskId(nullToEmpty(taskId))
                 .setTaskType("ANOMALY")
                 .setStatus(nullToEmpty(status))
                 .build();
@@ -77,8 +77,8 @@ public class AnomalyGrpcClient {
             return new AnomalyResultVO();
         }
         QueryAnomalyResultRequest req = QueryAnomalyResultRequest.newBuilder()
-                .setTaskId(nullToZero(request.getTaskId()))
-                .setSequenceId(nullToZero(request.getSequenceId()))
+                .setTaskId(nullToEmpty(request.getTaskId()))
+                .setSequenceId(nullToEmpty(request.getSequenceId()))
                 .build();
         LOG.info("[{}] -> queryAnomalyResult taskId={} seq={} at {}", SERVICE_NAME, request.getTaskId(), request.getSequenceId(), address);
 
@@ -96,7 +96,7 @@ public class AnomalyGrpcClient {
                 try {
                     @SuppressWarnings("unchecked")
                     java.util.Map<String, Object> map = objectMapper.readValue(resp.getPayloadJson(), java.util.Map.class);
-                    vo.setResultId(map.get("resultId") instanceof Number n ? n.intValue() : null);
+                    vo.setResultId(map.get("resultId") != null ? map.get("resultId").toString() : null);
                     vo.setAnomalyLevel((String) map.get("anomalyLevel"));
                 } catch (JsonProcessingException e) {
                     LOG.warn("[{}] failed to parse anomaly result payload", SERVICE_NAME, e);
@@ -143,7 +143,6 @@ public class AnomalyGrpcClient {
         return SyncResult.fail("anomaly address not configured");
     }
 
-    private static int nullToZero(Integer v) { return v != null ? v : 0; }
     private static String nullToEmpty(String v) { return v != null ? v : ""; }
     private static boolean isBlank(String s) { return s == null || s.isBlank(); }
 }

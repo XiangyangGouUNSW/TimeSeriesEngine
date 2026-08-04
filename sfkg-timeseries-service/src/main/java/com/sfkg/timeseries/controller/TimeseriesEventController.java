@@ -39,7 +39,7 @@ public class TimeseriesEventController {
     }
 
     @GetMapping(value = "/{eventId}", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> getEventDetail(@PathVariable Integer eventId) {
+    public ApiResult<Void> getEventDetail(@PathVariable String eventId) {
         eventService.getEventDetail(eventId);
         return returnSuccess("event detail query success");
     }

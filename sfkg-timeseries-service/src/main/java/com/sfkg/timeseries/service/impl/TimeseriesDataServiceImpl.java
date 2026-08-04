@@ -39,7 +39,7 @@ public class TimeseriesDataServiceImpl implements TimeseriesDataService {
     }
 
     @Override
-    public Integer saveTimeseriesData(TimeseriesDataSaveRequest request) {
+    public String saveTimeseriesData(TimeseriesDataSaveRequest request) {
         List<TimeseriesDataPoint> points = convertSaveRequest(request);
         dataFileMapper.appendDataPoints(points);
         memoryCache.putTimeseriesDataPoints(points);
@@ -47,7 +47,7 @@ public class TimeseriesDataServiceImpl implements TimeseriesDataService {
         if (!syncResult.isSuccess()) {
             LOGGER.warn("timeseries core grpc sync skipped or failed: {}", syncResult.getMessage());
         }
-        return points.size();
+        return String.valueOf(points.size());
     }
 
     @Override
@@ -111,7 +111,7 @@ public class TimeseriesDataServiceImpl implements TimeseriesDataService {
         return points;
     }
 
-    private TimeseriesDataPoint createPoint(Integer sequenceId, LocalDateTime timestamp, BigDecimal value) {
+    private TimeseriesDataPoint createPoint(String sequenceId, LocalDateTime timestamp, BigDecimal value) {
         if (timestamp == null) {
             throw new BusinessException("timestamp is required");
         }

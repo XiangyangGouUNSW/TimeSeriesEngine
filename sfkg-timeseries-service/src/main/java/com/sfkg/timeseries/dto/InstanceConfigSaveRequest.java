@@ -5,11 +5,11 @@ import lombok.Data;
 @Data
 public class InstanceConfigSaveRequest {
 
-    private Integer sequenceId;
+    private String sequenceId;
     private String instanceName;
-    private Integer externalSequenceId;
-    private Integer categoryId;
-    private Integer deviceInstanceId;
-    private Integer dataSourceId;
+    private String externalSequenceId;
+    private String categoryId;
+    private String deviceInstanceId;
+    private String dataSourceId;
     private String accessStatus;
 }

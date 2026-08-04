@@ -5,7 +5,7 @@ import lombok.Data;
 @Data
 public class TaskQueryRequest {
 
-    private Integer taskId;
+    private String taskId;
     private String taskName;
     private String taskType;
     private String status;

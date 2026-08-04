@@ -6,7 +6,7 @@ import com.sfkg.timeseries.vo.HistoryDataVO;
 
 public interface TimeseriesDataService {
 
-    Integer saveTimeseriesData(TimeseriesDataSaveRequest request);
+    String saveTimeseriesData(TimeseriesDataSaveRequest request);
 
     HistoryDataVO queryHistoryData(HistoryDataQueryRequest request);
 

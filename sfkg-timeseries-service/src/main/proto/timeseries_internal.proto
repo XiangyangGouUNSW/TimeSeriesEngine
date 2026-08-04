@@ -40,68 +40,68 @@ message SyncResponse {
 }
 
 message SyncInstanceConfigRequest {
-  int32 sequence_id = 1;
+  string sequence_id = 1;
   string instance_name = 2;
-  int32 category_id = 3;
-  int32 device_instance_id = 4;
+  string category_id = 3;
+  string device_instance_id = 4;
 }
 
 message SyncConstraintConfigRequest {
-  int32 constraint_id = 1;
+  string constraint_id = 1;
   string constraint_expression = 2;
-  map<string, int32> variable_mapping = 3;
+  map<string, string> variable_mapping = 3;
 }
 
 message SyncRelationConfigRequest {
-  int32 relation_id = 1;
-  repeated int32 source_categories = 2;
-  int32 target_category_id = 3;
+  string relation_id = 1;
+  repeated string source_categories = 2;
+  string target_category_id = 3;
 }
 
 message TimeseriesDataPointMessage {
-  int32 sequence_id = 1;
+  string sequence_id = 1;
   string timestamp = 2;
   string value = 3;
 }
 
 message SyncTimeseriesDataRequest {
-  int32 sequence_id = 1;
+  string sequence_id = 1;
   repeated TimeseriesDataPointMessage points = 2;
 }
 
 message SyncTaskStatusRequest {
-  int32 task_id = 1;
+  string task_id = 1;
   string task_type = 2;
   string status = 3;
 }
 
 message SyncAnomalyTaskRequest {
-  int32 task_id = 1;
-  repeated int32 detect_objects = 2;
+  string task_id = 1;
+  repeated string detect_objects = 2;
   string detect_method = 3;
 }
 
 message SyncForecastTaskRequest {
-  int32 task_id = 1;
-  repeated int32 forecast_objects = 2;
+  string task_id = 1;
+  repeated string forecast_objects = 2;
   string forecast_horizon = 3;
 }
 
 message QueryHistoryDataRequest {
-  int32 sequence_id = 1;
+  string sequence_id = 1;
   string start_time = 2;
   string end_time = 3;
   string granularity = 4;
 }
 
 message QueryHistoryDataResponse {
-  int32 sequence_id = 1;
+  string sequence_id = 1;
   string payload_json = 2;
 }
 
 message QueryAnomalyResultRequest {
-  int32 task_id = 1;
-  int32 sequence_id = 2;
+  string task_id = 1;
+  string sequence_id = 2;
 }
 
 message QueryAnomalyResultResponse {
@@ -109,8 +109,8 @@ message QueryAnomalyResultResponse {
 }
 
 message QueryForecastResultRequest {
-  int32 task_id = 1;
-  int32 sequence_id = 2;
+  string task_id = 1;
+  string sequence_id = 2;
 }
 
 message QueryForecastResultResponse {
@@ -118,7 +118,7 @@ message QueryForecastResultResponse {
 }
 
 message DecisionContextRequest {
-  int32 event_id = 1;
+  string event_id = 1;
   string context_json = 2;
 }
 
@@ -132,12 +132,12 @@ message DecisionSuggestionResponse {
 }
 
 message EventMessage {
-  int32 event_id = 1;
+  string event_id = 1;
   string event_name = 2;
   string event_type = 3;
   string event_source = 4;
-  repeated int32 related_sequences = 5;
-  repeated int32 related_rules = 6;
+  repeated string related_sequences = 5;
+  repeated string related_rules = 6;
   string event_description = 7;
   string event_level = 8;
   string event_time = 9;

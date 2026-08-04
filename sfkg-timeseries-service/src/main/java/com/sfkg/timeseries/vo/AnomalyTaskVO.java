@@ -5,7 +5,7 @@ import lombok.Data;
 @Data
 public class AnomalyTaskVO {
 
-    private Integer taskId;
+    private String taskId;
     private String taskName;
     private String detectMethod;
     private String status;

@@ -32,7 +32,7 @@ public class TimeseriesConstraintFileMapper implements TimeseriesConstraintMappe
     }
 
     @Override
-    public TimeseriesConstraint selectById(Integer constraintId) {
+    public TimeseriesConstraint selectById(String constraintId) {
         return store.readAll().stream()
                 .filter(entity -> Objects.equals(constraintId, entity.getConstraintId()))
                 .findFirst()
@@ -47,7 +47,7 @@ public class TimeseriesConstraintFileMapper implements TimeseriesConstraintMappe
     }
 
     @Override
-    public void updateStatus(Integer constraintId, String status) {
+    public void updateStatus(String constraintId, String status) {
         store.update(
                 entity -> Objects.equals(constraintId, entity.getConstraintId()),
                 entity -> entity.setEffectiveStatus(status));
@@ -74,7 +74,7 @@ public class TimeseriesConstraintFileMapper implements TimeseriesConstraintMappe
                 && matchesKeyword(request.getKeyword(), entity);
     }
 
-    private boolean equalsIfPresent(Integer expected, Integer actual) {
+    private boolean equalsIfPresent(String expected, String actual) {
         return expected == null || Objects.equals(expected, actual);
     }
 

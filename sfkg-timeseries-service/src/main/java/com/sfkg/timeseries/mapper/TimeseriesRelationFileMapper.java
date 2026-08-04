@@ -32,7 +32,7 @@ public class TimeseriesRelationFileMapper implements TimeseriesRelationMapper {
     }
 
     @Override
-    public TimeseriesRelation selectById(Integer relationId) {
+    public TimeseriesRelation selectById(String relationId) {
         return store.readAll().stream()
                 .filter(entity -> Objects.equals(relationId, entity.getRelationId()))
                 .findFirst()
@@ -47,7 +47,7 @@ public class TimeseriesRelationFileMapper implements TimeseriesRelationMapper {
     }
 
     @Override
-    public void updateStatus(Integer relationId, String status) {
+    public void updateStatus(String relationId, String status) {
         store.update(
                 entity -> Objects.equals(relationId, entity.getRelationId()),
                 entity -> entity.setEffectiveStatus(status));
@@ -76,12 +76,12 @@ public class TimeseriesRelationFileMapper implements TimeseriesRelationMapper {
                 && matchesKeyword(request.getKeyword(), entity);
     }
 
-    private boolean sourceContains(Integer sourceCategoryId, TimeseriesRelation entity) {
+    private boolean sourceContains(String sourceCategoryId, TimeseriesRelation entity) {
         return sourceCategoryId == null
                 || (entity.getSourceCategories() != null && entity.getSourceCategories().contains(sourceCategoryId));
     }
 
-    private boolean equalsIfPresent(Integer expected, Integer actual) {
+    private boolean equalsIfPresent(String expected, String actual) {
         return expected == null || Objects.equals(expected, actual);
     }
 

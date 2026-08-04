@@ -7,12 +7,12 @@ import lombok.Data;
 @Data
 public class EventSaveRequest {
 
-    private Integer eventId;
+    private String eventId;
     private String eventName;
     private String eventType;
     private String eventSource;
-    private Collection<Integer> relatedSequences;
-    private Collection<Integer> relatedRules;
+    private Collection<String> relatedSequences;
+    private Collection<String> relatedRules;
     private String eventDescription;
     private String eventLevel;
     private LocalDateTime eventTime;

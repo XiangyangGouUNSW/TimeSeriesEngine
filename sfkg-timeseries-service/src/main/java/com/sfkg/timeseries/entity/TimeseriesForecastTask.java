@@ -6,9 +6,9 @@ import lombok.Data;
 @Data
 public class TimeseriesForecastTask {
 
-    private Integer taskId;
+    private String taskId;
     private String taskName;
-    private Collection<Integer> forecastObjects;
+    private Collection<String> forecastObjects;
     private String forecastHorizon;
     private String warningRule;
     private String status;

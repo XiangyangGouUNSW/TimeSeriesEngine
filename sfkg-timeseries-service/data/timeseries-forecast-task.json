@@ -1,7 +1,7 @@
 [ {
-  "taskId" : 7002,
+  "taskId" : "7002",
   "taskName" : "temperature forecast",
-  "forecastObjects" : [ 1001, 1002 ],
+  "forecastObjects" : [ "1001", "1002" ],
   "forecastHorizon" : "24h",
   "warningRule" : "forecast temperature > 90",
   "status" : "DISABLE"

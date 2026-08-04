@@ -14,7 +14,7 @@ import com.sfkg.timeseries.service.TimeseriesAnomalyTaskService;
 import com.sfkg.timeseries.vo.AnomalyTaskVO;
 import java.util.List;
 import java.util.Objects;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
@@ -42,9 +42,9 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
     }
 
     @Override
-    public Integer saveAnomalyTask(AnomalyTaskSaveRequest request) {
+    public String saveAnomalyTask(AnomalyTaskSaveRequest request) {
         cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
-        Integer taskId = request == null || request.getTaskId() == null
+        String taskId = request == null || request.getTaskId() == null
                 ? generateTaskId()
                 : request.getTaskId();
 
@@ -104,21 +104,21 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
     }
 
     @Override
-    public void syncAnomalyTaskToCore(Integer taskId) {
+    public void syncAnomalyTaskToCore(String taskId) {
         if (taskId == null) return;
         cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
         memoryCache.getAnomalyTask(taskId).ifPresent(coreGrpcClient::syncAnomalyTaskConfig);
     }
 
     @Override
-    public void syncAnomalyTaskToAnomalyService(Integer taskId) {
+    public void syncAnomalyTaskToAnomalyService(String taskId) {
         if (taskId == null) return;
         cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
         memoryCache.getAnomalyTask(taskId).ifPresent(anomalyGrpcClient::syncAnomalyTask);
     }
 
-    private Integer generateTaskId() {
-        return ThreadLocalRandom.current().nextInt(100000, 1000000);
+    private String generateTaskId() {
+        return UUID.randomUUID().toString();
     }
 
     private AnomalyTaskVO toVO(TimeseriesAnomalyTask entity) {
@@ -142,7 +142,7 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
         return taskType == null || "ANOMALY".equalsIgnoreCase(taskType);
     }
 
-    private boolean equalsIfPresent(Integer expected, Integer actual) {
+    private boolean equalsIfPresent(String expected, String actual) {
         return expected == null || Objects.equals(expected, actual);
     }
 

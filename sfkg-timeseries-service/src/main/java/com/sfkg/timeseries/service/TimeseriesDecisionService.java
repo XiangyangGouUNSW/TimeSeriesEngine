@@ -7,13 +7,13 @@ import com.sfkg.timeseries.vo.DiagnosisResultVO;
 
 public interface TimeseriesDecisionService {
 
-    DiagnosisResultVO getDiagnosisResult(Integer eventId);
+    DiagnosisResultVO getDiagnosisResult(String eventId);
 
-    DecisionSuggestionVO getDecisionSuggestion(Integer eventId);
+    DecisionSuggestionVO getDecisionSuggestion(String eventId);
 
     void submitDisposalFeedback(DisposalFeedbackRequest request);
 
-    DecisionContext buildDecisionContext(Integer eventId);
+    DecisionContext buildDecisionContext(String eventId);
 
-    void syncFeedbackToGraph(Integer eventId);
+    void syncFeedbackToGraph(String eventId);
 }

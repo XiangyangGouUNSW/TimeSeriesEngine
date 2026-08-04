@@ -7,10 +7,10 @@ import lombok.Data;
 @Data
 public class RelationVO {
 
-    private Integer relationId;
+    private String relationId;
     private String relationName;
-    private Collection<Integer> sourceCategories;
-    private Integer targetCategoryId;
+    private Collection<String> sourceCategories;
+    private String targetCategoryId;
     private String targetCategoryName;
     private String relationType;
     private String lagRange;

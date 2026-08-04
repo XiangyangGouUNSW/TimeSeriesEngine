@@ -33,7 +33,7 @@ public class TimeseriesEventFileMapper implements TimeseriesEventMapper {
     }
 
     @Override
-    public TimeseriesEvent selectById(Integer eventId) {
+    public TimeseriesEvent selectById(String eventId) {
         return store.readAll().stream()
                 .filter(entity -> Objects.equals(eventId, entity.getEventId()))
                 .findFirst()
@@ -48,21 +48,21 @@ public class TimeseriesEventFileMapper implements TimeseriesEventMapper {
     }
 
     @Override
-    public void updateHandleStatus(Integer eventId, String status) {
+    public void updateHandleStatus(String eventId, String status) {
         store.update(
                 entity -> Objects.equals(eventId, entity.getEventId()),
                 entity -> entity.setHandleStatus(status));
     }
 
     @Override
-    public void updateDiagnosisResult(Integer eventId, String diagnosisResult) {
+    public void updateDiagnosisResult(String eventId, String diagnosisResult) {
         store.update(
                 entity -> Objects.equals(eventId, entity.getEventId()),
                 entity -> entity.setDiagnosisResult(diagnosisResult));
     }
 
     @Override
-    public void updateDisposalResult(Integer eventId, String disposalResult) {
+    public void updateDisposalResult(String eventId, String disposalResult) {
         store.update(
                 entity -> Objects.equals(eventId, entity.getEventId()),
                 entity -> entity.setDisposalResult(disposalResult));

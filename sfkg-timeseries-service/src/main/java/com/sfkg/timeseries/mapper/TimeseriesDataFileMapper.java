@@ -72,7 +72,7 @@ public class TimeseriesDataFileMapper {
                         .map(this::readJsonLine)
                         .filter(point -> matches(request, point))
                         .sorted(Comparator
-                                .comparing(TimeseriesDataPoint::getSequenceId, Comparator.nullsLast(Integer::compareTo))
+                                .comparing(TimeseriesDataPoint::getSequenceId, Comparator.nullsLast(String::compareTo))
                                 .thenComparing(TimeseriesDataPoint::getTimestamp, Comparator.nullsLast(LocalDateTime::compareTo)))
                         .collect(Collectors.toList());
             } catch (IOException exception) {

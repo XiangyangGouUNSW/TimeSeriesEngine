@@ -2,7 +2,7 @@ package com.sfkg.timeseries.mapper;
 
 import com.sfkg.timeseries.entity.TimeseriesSyncLog;
 import java.time.LocalDateTime;
-import java.util.Comparator;
+import java.util.UUID;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -48,7 +48,7 @@ public class TimeseriesSyncLogFileMapper implements TimeseriesSyncLogMapper {
     }
 
     @Override
-    public void markRetried(Integer id) {
+    public void markRetried(String id) {
         store.update(
                 log -> Objects.equals(id, log.getId()),
                 log -> {
@@ -58,13 +58,8 @@ public class TimeseriesSyncLogFileMapper implements TimeseriesSyncLogMapper {
                 });
     }
 
-    private Integer nextId() {
-        return store.readAll().stream()
-                .map(TimeseriesSyncLog::getId)
-                .filter(Objects::nonNull)
-                .max(Comparator.naturalOrder())
-                .map(id -> id + 1)
-                .orElse(1);
+    private String nextId() {
+        return UUID.randomUUID().toString();
     }
 
     private boolean sameBusinessKey(TimeseriesSyncLog incoming, TimeseriesSyncLog stored) {

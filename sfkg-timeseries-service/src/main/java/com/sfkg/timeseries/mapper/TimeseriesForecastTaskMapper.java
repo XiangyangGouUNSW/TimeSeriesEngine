@@ -9,9 +9,9 @@ public interface TimeseriesForecastTaskMapper {
 
     void updateById(TimeseriesForecastTask entity);
 
-    TimeseriesForecastTask selectById(Integer taskId);
+    TimeseriesForecastTask selectById(String taskId);
 
     List<TimeseriesForecastTask> selectByCondition(Object condition);
 
-    void updateStatus(Integer taskId, String status);
+    void updateStatus(String taskId, String status);
 }
