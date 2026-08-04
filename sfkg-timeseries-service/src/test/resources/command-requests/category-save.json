@@ -1,0 +1,9 @@
+{
+  "categoryId": 2001,
+  "categoryName": "temperature",
+  "dataType": "DOUBLE",
+  "categoryDescription": "temperature semantic category",
+  "applicableObjectType": "transformer",
+  "defaultUnit": "celsius",
+  "confirmStatus": "CONFIRMED"
+}

@@ -1,0 +1,12 @@
+{
+  "eventType": "ANOMALY",
+  "eventSource": "ANOMALY_DETECTION",
+  "eventLevel": "WARNING",
+  "confirmStatus": "CONFIRMED",
+  "handleStatus": "UNHANDLED",
+  "relatedSequences": [
+    1001
+  ],
+  "startTime": "2026-08-03T10:00:00",
+  "endTime": "2026-08-03T11:00:00"
+}

@@ -1,0 +1,11 @@
+{
+  "taskId": 7001,
+  "taskName": "temperature anomaly detection",
+  "detectObjects": [
+    1001,
+    1002
+  ],
+  "detectMethod": "RULE",
+  "warningRule": "temperature > 90",
+  "status": "ENABLE"
+}

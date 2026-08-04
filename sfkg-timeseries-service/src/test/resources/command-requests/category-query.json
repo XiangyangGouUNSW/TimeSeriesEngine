@@ -1,0 +1,7 @@
+{
+  "categoryId": 2001,
+  "categoryName": "temperature",
+  "dataType": "DOUBLE",
+  "applicableObjectType": "transformer",
+  "confirmStatus": "CONFIRMED"
+}

@@ -1,9 +1,0 @@
-{
-  "sequenceId": 1001,
-  "instanceName": "main transformer oil temperature",
-  "externalSequenceId": 9001,
-  "categoryId": 2001,
-  "deviceInstanceId": 3001,
-  "dataSourceId": 4001,
-  "accessStatus": "ENABLE"
-}
