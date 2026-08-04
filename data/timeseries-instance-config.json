@@ -1,0 +1,13 @@
+[ {
+  "id" : 1001,
+  "sequenceId" : 1001,
+  "instanceName" : "main transformer oil temperature",
+  "externalSequenceId" : 9001,
+  "categoryId" : 2001,
+  "categoryName" : "temperature",
+  "deviceInstanceId" : 3001,
+  "deviceInstanceName" : "device-3001",
+  "dataSourceId" : 4001,
+  "accessStatus" : "ENABLE",
+  "lastDataTime" : null
+} ]

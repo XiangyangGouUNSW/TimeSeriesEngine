@@ -1,0 +1,14 @@
+{
+  "relationId": 6001,
+  "relationName": "load affects temperature",
+  "sourceCategories": [
+    2002
+  ],
+  "targetCategoryId": 2001,
+  "relationType": "CAUSE",
+  "lagRange": "0m-10m",
+  "confidence": 0.86,
+  "relationDescription": "load changes may affect transformer oil temperature with a short lag",
+  "effectiveStatus": "ENABLE",
+  "confirmStatus": "CONFIRMED"
+}

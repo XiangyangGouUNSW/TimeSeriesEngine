@@ -1,0 +1,16 @@
+spring:
+  application:
+    name: timeseries-service
+
+server:
+  port: 8080
+
+timeseries:
+  local-store-dir: ${TIMESERIES_LOCAL_STORE_DIR:data}
+  local-data-file: ${TIMESERIES_LOCAL_DATA_FILE:data/timeseries-data.jsonl}
+  grpc:
+    server-port: ${TIMESERIES_GRPC_SERVER_PORT:9105}
+    core-address: ${TIMESERIES_CORE_GRPC_ADDRESS:localhost:9101}
+    anomaly-address: ${TIMESERIES_ANOMALY_GRPC_ADDRESS:}
+    forecast-address: ${TIMESERIES_FORECAST_GRPC_ADDRESS:}
+    decision-address: ${TIMESERIES_DECISION_GRPC_ADDRESS:}

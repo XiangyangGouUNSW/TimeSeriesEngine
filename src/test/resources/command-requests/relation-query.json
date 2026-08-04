@@ -1,0 +1,10 @@
+{
+  "relationId": 6001,
+  "relationName": "load affects temperature",
+  "sourceCategoryId": 2002,
+  "targetCategoryId": 2001,
+  "relationType": "CAUSE",
+  "effectiveStatus": "ENABLE",
+  "confirmStatus": "CONFIRMED",
+  "keyword": "load"
+}
