@@ -20,8 +20,8 @@ import grpc
 
 # 模块根目录 = tools 的上一级
 ROOT = Path(__file__).resolve().parent.parent
-# 把 core/ 和 generated/ 加进模块搜索路径
-for _p in (str(ROOT / "core"), str(ROOT / "generated")):
+# 把 src/ 和 generated/ 加进模块搜索路径
+for _p in (str(ROOT / "src"), str(ROOT / "generated")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 

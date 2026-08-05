@@ -18,6 +18,10 @@ Makefile
 # ---- 生成的 gRPC stub（从 proto 生成，不提交，各端自己生成）----
 generated/
 
+# ---- 文档（不上传）：权威文档 core/、理解文档 docs/ ----
+/core/
+/docs/
+
 # ---- 日志/临时 ----
 *.log
 *.tmp

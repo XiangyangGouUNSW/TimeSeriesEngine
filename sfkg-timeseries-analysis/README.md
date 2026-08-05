@@ -61,12 +61,13 @@ python app/main.py --provider grpc
 ## 目录结构
 
 - `app/`        入口程序：`main.py`（训练推理演示）、`analysis_server.py`（对外服务）
-- `core/`       核心逻辑：CoreDataClient/Mock、grpc_client、servicer、训练、推理、模型、数据结构
+- `src/`        核心逻辑：CoreDataClient/Mock、grpc_client、servicer、训练、推理、模型、数据结构
 - `tools/`      工具：`fake_core_server.py`（假 C 端，联调预演）
 - `tests/`      测试：`test_analysis_client.py`（模拟 S 端调用）
 - `proto/`      接口合同（`timeseries_core.proto` 与 C 共享、`timeseries_analysis.proto` 与 S）
 - `generated/`  生成的 gRPC stub（gitignore，各端自己生成）
 - `data/`       ETT 测试数据（模块自包含）
+- `core/` `docs/`  文档（权威文档 + 理解文档，gitignore 不上传）
 
 ## 说明
 
