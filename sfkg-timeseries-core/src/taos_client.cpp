@@ -262,6 +262,8 @@ struct TaosClient::Impl {
     std::uint32_t keep_days{};
     std::string config_error;
     std::string connection_error;
+    // These locks serialize use of the shared connection objects. They do not
+    // imply that writes and queries share one connection or one lock.
     mutable std::mutex write_mutex;
     mutable std::mutex query_mutex;
 #if SFKG_WITH_TAOS
@@ -328,6 +330,9 @@ OperationResult TaosClient::ensureSchema() {
 #if !SFKG_WITH_TAOS
     return internalError("TDengine support was disabled at configure time");
 #else
+    // Schema setup changes the shared write connection state. The query
+    // connection is selected under query_mutex below; keep this lock order
+    // documented for future reconnect/lifecycle changes.
     std::lock_guard lock(impl_->write_mutex);
     if (impl_->write_connection == nullptr) {
         return unavailable("TDengine is unreachable: " + impl_->connection_error);
@@ -357,6 +362,8 @@ OperationResult TaosClient::ensureSchema() {
         return looksUnavailable(message) ? unavailable(message) : internalError(message);
     }
     {
+        // This is a separate connection, so selecting its database does not
+        // serialize ordinary history reads with writes.
         std::lock_guard query_lock(impl_->query_mutex);
         if (impl_->query_connection != nullptr &&
             taos_select_db(impl_->query_connection, impl_->database.c_str()) != 0) {
@@ -366,6 +373,27 @@ OperationResult TaosClient::ensureSchema() {
         }
     }
     return ok(0, "TDengine schema is ready");
+#endif
+}
+
+OperationResult TaosClient::dropDatabaseForTesting() {
+    if (!impl_->config_error.empty()) {
+        return invalidArgument(impl_->config_error);
+    }
+#if !SFKG_WITH_TAOS
+    return internalError("TDengine support was disabled at configure time");
+#else
+    std::lock_guard lock(impl_->write_mutex);
+    if (impl_->write_connection == nullptr) {
+        return unavailable("TDengine is unreachable: " + impl_->connection_error);
+    }
+    const std::string sql =
+        "DROP DATABASE IF EXISTS " + quoteIdentifier(impl_->database);
+    ResultGuard result{taos_query(impl_->write_connection, sql.c_str())};
+    if (result.result == nullptr || taos_errno(result.result) != 0) {
+        return queryError(result.result, "drop test database");
+    }
+    return ok(0, "test database dropped");
 #endif
 }
 
@@ -415,6 +443,9 @@ OperationResult TaosClient::insertRaw(const TimeseriesBatch& batch) {
         }
     }
 
+    // Grouping and type validation above are already outside this lock. The
+    // current first version also keeps statement binding here for simplicity;
+    // pure buffer construction can be moved out in a later throughput pass.
     std::lock_guard lock(impl_->write_mutex);
     if (impl_->write_connection == nullptr) {
         return unavailable("TDengine is unreachable: " + impl_->connection_error);
@@ -498,6 +529,7 @@ OperationResult TaosClient::queryRaw(
 #if !SFKG_WITH_TAOS
     return internalError("TDengine support was disabled at configure time");
 #else
+    // Serialize access to the shared query connection and its result handle.
     std::lock_guard lock(impl_->query_mutex);
     if (impl_->query_connection == nullptr) {
         return unavailable("TDengine is unreachable: " + impl_->connection_error);
@@ -602,6 +634,8 @@ OperationResult TaosClient::queryHistoryOverview(
 #if !SFKG_WITH_TAOS
     return internalError("TDengine support was disabled at configure time");
 #else
+    // Overview queries use the same dedicated query connection as raw reads;
+    // they are independent of the write connection lock.
     std::lock_guard lock(impl_->query_mutex);
     if (impl_->query_connection == nullptr) {
         return unavailable("TDengine is unreachable: " + impl_->connection_error);

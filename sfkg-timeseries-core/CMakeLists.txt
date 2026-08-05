@@ -149,16 +149,36 @@ if(SFKG_BUILD_TESTS)
     add_test(NAME runtime_config_registry_test
         COMMAND runtime_config_registry_test)
 
+    add_executable(constraint_check_engine_test
+        tests/constraint_check_engine_test.cpp)
+    target_link_libraries(constraint_check_engine_test
+        PRIVATE sfkg_timeseries_domain)
+    add_test(NAME constraint_check_engine_test
+        COMMAND constraint_check_engine_test)
+
     if(SFKG_WITH_TAOS)
         add_executable(taos_client_smoke tests/taos_client_smoke.cpp)
         target_link_libraries(taos_client_smoke
             PRIVATE sfkg_timeseries_domain)
         add_test(NAME taos_client_smoke COMMAND taos_client_smoke)
+
+        add_executable(direct_ingest_history_roundtrip_test
+            tests/direct_ingest_history_roundtrip_test.cpp)
+        target_link_libraries(direct_ingest_history_roundtrip_test
+            PRIVATE sfkg_timeseries_domain)
+        add_test(
+            NAME direct_ingest_history_roundtrip_test
+            COMMAND direct_ingest_history_roundtrip_test)
     endif()
 endif()
 
 if(SFKG_BUILD_DEMOS AND SFKG_WITH_TAOS)
     add_executable(etth1-taos-demo tools/etth1_taos_demo.cpp)
     target_link_libraries(etth1-taos-demo
+        PRIVATE sfkg_timeseries_domain)
+
+    add_executable(etth1-direct-ingest-demo
+        tools/etth1_direct_ingest_demo.cpp)
+    target_link_libraries(etth1-direct-ingest-demo
         PRIVATE sfkg_timeseries_domain)
 endif()

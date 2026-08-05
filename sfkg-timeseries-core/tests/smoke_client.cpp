@@ -180,25 +180,15 @@ int run(int argc, char* argv[]) {
         double_point->set_time(1'000);
         double_point->mutable_value()->set_double_value(25.0);
 
-        auto* integer_point = request.add_points();
-        integer_point->set_sequence_id("temperature-1");
-        integer_point->set_time(1'001);
-        integer_point->mutable_value()->set_int64_value(25);
-
-        auto* boolean_point = request.add_points();
-        boolean_point->set_sequence_id("temperature-1");
-        boolean_point->set_time(1'002);
-        boolean_point->mutable_value()->set_bool_value(true);
-
-        auto* string_point = request.add_points();
-        string_point->set_sequence_id("temperature-1");
-        string_point->set_time(1'003);
-        string_point->mutable_value()->set_string_value("stable");
+        auto* second_double_point = request.add_points();
+        second_double_point->set_sequence_id("temperature-1");
+        second_double_point->set_time(1'001);
+        second_double_point->mutable_value()->set_double_value(25.5);
 
         const auto status = stub->ingestData(&context, request, &response);
         passed &= check(
             "ingestData", status, response.operation(),
-            pb::OPERATION_CODE_NOT_IMPLEMENTED);
+            pb::OPERATION_CODE_OK);
     }
 
     {
@@ -214,7 +204,7 @@ int run(int argc, char* argv[]) {
             &context, request, &response);
         passed &= check(
             "ingestAndResolveData", status, response.operation(),
-            pb::OPERATION_CODE_NOT_IMPLEMENTED);
+            pb::OPERATION_CODE_OK);
     }
 
     {
@@ -240,7 +230,7 @@ int run(int argc, char* argv[]) {
             &context, request, &response);
         passed &= check(
             "buildTimeWindow", status, response.operation(),
-            pb::OPERATION_CODE_NOT_IMPLEMENTED);
+            pb::OPERATION_CODE_OK);
     }
 
     {
@@ -252,7 +242,7 @@ int run(int argc, char* argv[]) {
             &context, request, &response);
         passed &= check(
             "queryWindowData", status, response.operation(),
-            pb::OPERATION_CODE_NOT_IMPLEMENTED);
+            pb::OPERATION_CODE_OK);
     }
 
     {

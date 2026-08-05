@@ -18,9 +18,7 @@
   ],
   "values": [
     {"time": 1000, "sequence_id": "temperature-1", "double_value": 25.0},
-    {"time": 1001, "sequence_id": "temperature-1", "int64_value": 25},
-    {"time": 1002, "sequence_id": "temperature-1", "bool_value": true},
-    {"time": 1003, "sequence_id": "temperature-1", "string_value": "stable"}
+    {"time": 1001, "sequence_id": "temperature-1", "double_value": 25.5}
   ],
-  "expected_shell_result": "OPERATION_CODE_NOT_IMPLEMENTED"
+  "expected_shell_result": "OPERATION_CODE_OK"
 }

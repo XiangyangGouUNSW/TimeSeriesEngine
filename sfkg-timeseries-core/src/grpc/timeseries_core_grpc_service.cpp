@@ -3,6 +3,7 @@
 #include <chrono>
 #include <exception>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -21,6 +22,17 @@ OperationResult failedPrecondition(std::string message) {
 OperationResult internalError(std::string message) {
     return internal::makeOperationResult(
         OperationCode::InternalError, 0, 0, std::move(message));
+}
+
+std::string joinConstraintIds(const std::vector<std::string>& ids) {
+    std::ostringstream output;
+    for (std::size_t index = 0; index < ids.size(); ++index) {
+        if (index != 0) {
+            output << ", ";
+        }
+        output << ids[index];
+    }
+    return output.str();
 }
 
 template <typename Response, typename Function>
@@ -65,23 +77,45 @@ OperationResult combineIngestResults(
     if (!isSuccessful(resolve.code)) {
         return resolve;
     }
-    if (storage.code == OperationCode::Ok &&
-        window.code == OperationCode::Ok) {
-        return resolve;
-    }
-    if (storage.code == OperationCode::NotImplemented ||
-        window.code == OperationCode::NotImplemented) {
+    const bool storage_succeeded = isSuccessful(storage.code);
+    const bool window_succeeded = isSuccessful(window.code);
+
+    if (!storage_succeeded && !window_succeeded) {
         return internal::makeOperationResult(
-            OperationCode::NotImplemented,
+            storage.code,
             0,
-            resolve.success_count,
-            "one or more ingest stages are not implemented");
+            resolve.failed_count + resolve.success_count,
+            "cold storage and hot window writes failed; cold: " +
+                storage.message + "; hot: " + window.message);
     }
-    return internal::makeOperationResult(
-        OperationCode::PartialSuccess,
-        storage.success_count + window.success_count,
-        storage.failed_count + window.failed_count,
-        "ingest stages completed with partial success");
+    if (!storage_succeeded) {
+        return internal::makeOperationResult(
+            OperationCode::PartialSuccess,
+            window.success_count,
+            resolve.failed_count + storage.failed_count,
+            "hot window updated but cold storage failed: " +
+                storage.message);
+    }
+    if (!window_succeeded) {
+        return internal::makeOperationResult(
+            OperationCode::PartialSuccess,
+            storage.success_count,
+            resolve.failed_count + window.failed_count,
+            "cold storage succeeded but hot window update failed: " +
+                window.message);
+    }
+    if (resolve.code == OperationCode::PartialSuccess ||
+        storage.code == OperationCode::PartialSuccess ||
+        window.code == OperationCode::PartialSuccess) {
+        return internal::makeOperationResult(
+            OperationCode::PartialSuccess,
+            resolve.success_count,
+            resolve.failed_count + storage.failed_count + window.failed_count,
+            "cold storage and hot window writes completed with partial "
+            "success");
+    }
+    return internal::ok(
+        resolve.success_count, "ingest data stored and hot window updated");
 }
 
 bool validTimeRange(
@@ -112,7 +146,7 @@ bool validTimeRange(
             snapshot.items.push_back(std::move(converted));
         }
         conversion::toProto(
-            config_registry_.replaceInstanceConfigs(snapshot),
+            config_registry_.upsertInstanceConfigs(snapshot),
             response->mutable_operation());
         return ::grpc::Status::OK;
     });
@@ -138,7 +172,7 @@ bool validTimeRange(
             snapshot.items.push_back(std::move(converted));
         }
         conversion::toProto(
-            config_registry_.replaceConstraints(snapshot),
+            config_registry_.upsertConstraints(snapshot),
             response->mutable_operation());
         return ::grpc::Status::OK;
     });
@@ -164,7 +198,7 @@ bool validTimeRange(
             snapshot.items.push_back(std::move(converted));
         }
         conversion::toProto(
-            config_registry_.replaceRelations(snapshot),
+            config_registry_.upsertRelations(snapshot),
             response->mutable_operation());
         return ::grpc::Status::OK;
     });
@@ -207,6 +241,13 @@ bool validTimeRange(
         OperationResult storage_result;
         OperationResult window_result;
         if (isSuccessful(resolved.operation.code)) {
+            // First version: attempt both destinations independently in the
+            // request thread. This is a logical dual write, not an atomic
+            // transaction: one destination may succeed while the other fails.
+            // Future work can move these calls to independent workers or a
+            // write queue, add batch/request IDs for idempotent retries, and
+            // add compensation so cold storage remains the rebuildable source
+            // of truth for the hot window.
             storage_result = storage_service_.writeRawData(resolved.resolved_data);
             window_result = window_service_.buildTimeWindow(
                 resolved.resolved_data, request->window_size());
@@ -472,14 +513,24 @@ bool validTimeRange(
         }
         const std::vector<std::string> constraint_ids(
             request->constraint_ids().begin(), request->constraint_ids().end());
-        const auto rules =
-            config_registry_.enabledConstraints(constraint_ids);
-        if (rules.empty()) {
+        const auto lookup = config_registry_.lookupConstraints(constraint_ids);
+        if (!lookup.missing_ids.empty() || !lookup.disabled_ids.empty()) {
+            std::ostringstream message;
+            message << "requested constraints are not all enabled";
+            if (!lookup.missing_ids.empty()) {
+                message << "; missing=["
+                        << joinConstraintIds(lookup.missing_ids) << "]";
+            }
+            if (!lookup.disabled_ids.empty()) {
+                message << "; disabled=["
+                        << joinConstraintIds(lookup.disabled_ids) << "]";
+            }
             conversion::toProto(
-                failedPrecondition("no requested constraint is enabled"),
+                failedPrecondition(message.str()),
                 response->mutable_operation());
             return ::grpc::Status::OK;
         }
+        const auto& rules = lookup.enabled_rules;
 
         std::string error;
         if (request->source_case() ==

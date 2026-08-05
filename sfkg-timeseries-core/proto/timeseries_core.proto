@@ -12,8 +12,8 @@ service TimeseriesCoreService {
   rpc syncRelations(SyncRelationsRequest)
       returns (SyncConfigResponse);
 
-  // Production ingest entry: resolve once, then persist and update the hot
-  // window in parallel inside Core.
+  // Production ingest entry: resolve once, persist to cold storage, then
+  // update the hot window inside Core.
   rpc ingestData(IngestDataRequest)
       returns (IngestDataResponse);
   // Fine-grained ingest RPCs are retained for testing, replay and compensation.

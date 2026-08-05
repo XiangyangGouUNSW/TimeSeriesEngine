@@ -1,28 +1,23 @@
 # sfkg-timeseries-core 时序核心
 
-本目录是时序数据引擎的 C++ 核心代码。它提供跨模块 Protobuf/gRPC
-协议、运行时配置注册表、TDengine 原始数据存储、历史查询、服务启动入口
-和测试/演示程序。
+本目录是时序数据核心服务，负责运行时配置接收、数据接入与冷热双写、内存窗口、约束检查、历史数据查询，以及通过 Protobuf/gRPC 向统一服务提供接口。
 
-第一次接触项目时，可以先看上一级目录的
-`异常检测模块对接说明.md`；只关心跨模块字段和调用方式时，直接查看
-`proto/timeseries_core.proto`。
+跨模块接口以 [proto/timeseries_core.proto](proto/timeseries_core.proto) 为准。
 
 ## 当前实现范围
 
-- 五类运行时配置支持完整快照替换、基础引用校验和并发查询；
-- 所有 RPC 均完成 Protobuf 与 C++ 类型转换和参数边界检查；
-- TDengine 原始时序写入、历史数据查询和历史概览查询已可运行；
-- 尚未完整实现的窗口、对齐、统计和约束功能明确返回
-  `OPERATION_CODE_NOT_IMPLEMENTED`；
-- gRPC 正常完成而业务尚未实现时，gRPC 状态仍为 `OK`，业务结果写入
-  `OperationResult`；
-- `ingestData` 已搭出识别、持久化和窗口更新三个阶段的组合控制流。
+- 运行时实例配置、约束和关联关系支持增量同步与更新；
+- `IngestData` 已完成识别、标准化、冷数据写入和热窗口更新的控制流程；
+- TDengine 原始数据写入、历史数据查询和历史概览查询可运行；
+- `ConstraintCheckEngine` 支持单序列 `WindowData`、多序列 `AlignedWindowData`、固定采样偏移和约束违反明细；
+- `AlignmentService` 和 `StatisticsService` 仍按接口返回未实现状态，后续单独完善；
+- Core 不负责启动 TDengine，也不保存统一服务的业务配置；Core 启动后由统一服务通过同步 RPC 写入运行时配置。
 
 ## 构建
 
-需要 CMake 3.20+、C++17 编译器、Protobuf 和 gRPC 的 CMake config 包。
-如果只想验证配置注册表，可以不安装 TDengine 和 gRPC：
+需要 CMake 3.20+、C++17 编译器、Protobuf、gRPC，以及 TDengine Native Client。生成文件和二进制必须放在 `build-*` 目录中。
+
+### 仅构建不依赖 TDengine/gRPC 的基础测试
 
 ```bash
 cmake -S . -B build-core \
@@ -32,314 +27,172 @@ cmake --build build-core
 ./build-core/runtime_config_registry_test
 ```
 
-完整构建默认会生成服务器、gRPC 冒烟客户端、测试和 ETTh1 演示程序。
+### 构建完整 Core 服务
+
+当前环境中的 TDengine 安装目录为 `/home/yumiduo/sfkg/tdengine`；其他机器请替换为实际路径。
 
 ```bash
-cmake -S . -B build
-cmake --build build -j2
-ctest --test-dir build --output-on-failure
-```
-
-Windows PowerShell 也可以使用：
-
-```powershell
-cmake -S . -B build
-cmake --build build --config Debug
-ctest --test-dir build -C Debug --output-on-failure
-```
-
-项目禁止在源码目录内直接运行 `cmake .`；所有生成文件、目标文件和二进制
-产物必须位于 `build/` 或 `build-*` 目录。上述目录已加入 Git 忽略规则。
-
-启用 TDengine 时，CMake 会严格检查 `taos.h` 和 `libtaos.so`，不会静默降级：
-
-```bash
-cmake -S . -B build-taos \
-  -DSFKG_WITH_TAOS=ON \
-  -DSFKG_TAOS_ROOT="$HOME/sfkg/tdengine"
-cmake --build build-taos -j2
-```
-
-运行 Core 前设置 `SFKG_TAOS_HOST`、`SFKG_TAOS_PORT`、`SFKG_TAOS_USER`、
-`SFKG_TAOS_PASSWORD` 和 `SFKG_TAOS_DB`；未设置时默认连接本机 6030、
-`root/taosdata` 和 `sfkg_timeseries`。Core 启动时创建 `ms` 精度的
-`raw_timeseries_data` 超级表；子表名由 sequence ID 的稳定 FNV-1a 哈希生成，
-原始 sequence ID 保存在 TAG 中。
-
-## 运行
-
-完整服务启动前需要 TDengine 正常运行。服务器默认监听 `0.0.0.0:50051`，
-可通过环境变量或第一个命令行参数修改：
-
-```bash
-export SFKG_TIMESERIES_CORE_ADDRESS='0.0.0.0:50051'
-export LD_LIBRARY_PATH="$HOME/sfkg/tdengine/lib"
-./build-taos/sfkg-timeseries-core-server
-```
-
-另开终端运行 gRPC 冒烟客户端：
-
-```bash
-./build-taos/sfkg-timeseries-core-smoke localhost:50051
-```
-
-客户端依次同步实例、约束、关联、任务和状态，再覆盖全部业务 RPC、四种
-`TimeseriesValue` 以及一个非法请求。配置同步应返回 `OK`，尚未实现的业务
-应返回 `NOT_IMPLEMENTED`。
-
-## 从全部关闭状态开始运行
-
-下面是 Core 服务器从没有启动任何相关进程时的顺序。两台服务器联调时，前
-三步在 `222.29.156.141` 执行，最后一步在 `222.29.156.142` 执行。
-
-### 1. 启动 TDengine
-
-先准备 TDengine 路径：
-
-```bash
-export TDENGINE_ROOT="$HOME/sfkg/tdengine"
-export PATH="$TDENGINE_ROOT/bin:$PATH"
-export LD_LIBRARY_PATH="$TDENGINE_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-```
-
-如果 TDengine 是系统服务：
-
-```bash
-sudo systemctl start taosd
-```
-
-如果没有系统服务，可以在 `tmux` 中直接启动：
-
-```bash
-tmux new -s tdengine
-"$TDENGINE_ROOT/bin/taosd" -c "$TDENGINE_ROOT/cfg"
-```
-
-启动后按 `Ctrl-B`、再按 `D` 退出 `tmux`，然后继续下面的步骤。
-
-另开终端检查：
-
-```bash
-ss -lntp | grep 6030
-```
-
-看到 `6030` 处于 `LISTEN` 后，再继续下一步。
-
-### 2. 编译 Core
-
-```bash
-cd /home/yumiduo/attempt/暑期项目/sfkg-timeseries-core
-export TDENGINE_ROOT="$HOME/sfkg/tdengine"
-export LD_LIBRARY_PATH="$TDENGINE_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 cmake -S . -B build-taos \
   -DSFKG_WITH_TAOS=ON \
   -DSFKG_BUILD_GRPC=ON \
-  -DSFKG_TAOS_ROOT="$TDENGINE_ROOT"
+  -DSFKG_BUILD_TESTS=ON \
+  -DSFKG_TAOS_ROOT=/home/yumiduo/sfkg/tdengine
 cmake --build build-taos -j2
 ```
 
-### 3. 准备演示数据并启动 Core
-
-先导入 ETTh1 数据：
+运行测试：
 
 ```bash
-cd /home/yumiduo/attempt/暑期项目
-export TDENGINE_ROOT="$HOME/sfkg/tdengine"
-export LD_LIBRARY_PATH="$TDENGINE_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export SFKG_TAOS_DB=sfkg_etth1_demo
-./sfkg-timeseries-core/build-taos/etth1-taos-demo ETTh1.csv
+ctest --test-dir build-taos --output-on-failure
 ```
 
-看到 `ETTh1 demo passed` 后，在同一台服务器启动 Core：
+## 正式运行方式
+
+运行时分成两个进程：
+
+```text
+TDengine       tmux 中长期运行，默认监听 6030
+Core gRPC 服务 普通终端前台运行，默认监听 50051
+```
+
+Core 主服务不会自动启动 TDengine。启动 Core 前必须先确认 TDengine 可连接。
+
+### 1. 在 tmux 中启动 TDengine
+
+创建专用会话：
+
+```bash
+tmux new -s sfkg-tdengine
+```
+
+进入 tmux 后，在其中执行：
+
+```bash
+LD_LIBRARY_PATH=/home/yumiduo/sfkg/tdengine/lib \
+/home/yumiduo/sfkg/tdengine/bin/taosd \
+-c /home/yumiduo/sfkg/tdengine/cfg
+```
+
+看到 `The daemon initialized successfully` 后，按 `Ctrl-B`，再按 `D`，退出 tmux 但保持 TDengine 运行。
+
+检查服务状态：
+
+```bash
+LD_LIBRARY_PATH=/home/yumiduo/sfkg/tdengine/lib \
+/home/yumiduo/sfkg/tdengine/bin/taos \
+-c /home/yumiduo/sfkg/tdengine/cfg -k
+```
+
+预期返回：
+
+```text
+2: service ok
+```
+
+也可以检查端口：
+
+```bash
+ss -lntp | grep ':6030'
+```
+
+重新查看 TDengine 日志：
+
+```bash
+tmux attach -t sfkg-tdengine
+```
+
+### 2. 在普通终端启动 Core
+
+TDengine 确认就绪后，在普通终端执行：
 
 ```bash
 cd /home/yumiduo/attempt/暑期项目/sfkg-timeseries-core
-export TDENGINE_ROOT="$HOME/sfkg/tdengine"
-export LD_LIBRARY_PATH="$TDENGINE_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export SFKG_TAOS_DB=sfkg_etth1_demo
-./build-taos/sfkg-timeseries-core-server 0.0.0.0:50052
+
+LD_LIBRARY_PATH=/home/yumiduo/sfkg/tdengine/lib \
+SFKG_TAOS_HOST=127.0.0.1 \
+SFKG_TAOS_PORT=6030 \
+SFKG_TAOS_USER=root \
+SFKG_TAOS_PASSWORD=taosdata \
+SFKG_TAOS_DB=sfkg_timeseries \
+SFKG_TIMESERIES_CORE_ADDRESS=0.0.0.0:50051 \
+./build-taos/sfkg-timeseries-core-server 0.0.0.0:50051
 ```
 
-另开终端检查：
-
-```bash
-ss -lntp | grep 50052
-```
-
-看到 `LISTEN` 后，Core 已经启动。不要在同一端口重复启动第二个 Core。
-
-### 4. 启动客户端或异常检测模块
-
-在 `222.29.156.142` 上先确认能连接 Core：
-
-```bash
-nc -vz 222.29.156.141 50052
-```
-
-然后启动客户端或异常检测模块，并将 Core 地址填写为：
+Core 正常启动后应打印：
 
 ```text
-222.29.156.141:50052
+sfkg-timeseries-core listening on 0.0.0.0:50051
 ```
 
-历史查询演示可以这样运行：
+Core 保持前台运行，方便观察日志；停止时在该终端按 `Ctrl-C`。
+
+检查 Core 端口：
 
 ```bash
-cd /home/yumiduo/attempt/暑期项目/sfkg-timeseries-core
-cmake -S . -B build-grpc \
-  -DSFKG_WITH_TAOS=OFF \
-  -DSFKG_BUILD_GRPC=ON
-cmake --build build-grpc --target etth1-grpc-history-demo -j2
-./build-grpc/etth1-grpc-history-demo 222.29.156.141:50052
+ss -lntp | grep ':50051'
 ```
 
-停止时按相反顺序操作：先停止客户端，再在 Core 终端按 `Ctrl-C`，最后按需
-停止 TDengine。系统服务使用 `sudo systemctl stop taosd`；`tmux` 中启动的
-TDengine 重新进入会话后按 `Ctrl-C`。
+### 3. 统一服务连接方式
 
-## 两台服务器联调
-
-本次约定：
+统一服务连接 Core 时使用服务器实际 IP 和端口：
 
 ```text
-Core 服务器：222.29.156.141
-客户端服务器：222.29.156.142
-临时端口：50052
+同一台机器：127.0.0.1:50051
+跨机器联调：<Core服务器实际IP>:50051
 ```
 
-### 1. 在 Core 服务器上准备数据
+不要把 `0.0.0.0:50051` 作为客户端连接地址；`0.0.0.0` 只表示 Core 的监听地址。
+
+统一服务启动后，建议按以下顺序调用：
+
+1. `syncInstanceConfigs` 同步实例配置；
+2. `syncConstraints`、`syncRelations` 同步约束和关联关系；
+3. 调用 `ingestData` 或 `ingestAndResolveData` 接入数据；
+4. 调用窗口、约束检查或历史查询接口。
+
+Core 重启后运行时配置会清空，因此每次启动后都需要由统一服务重新同步配置。TDengine 中的历史数据不会因此清空。
+
+### 4. 数据库保留期
+
+TDengine 的时间戳仍然必须使用数据库的 `ms` 精度，数据库也不能提供数学意义上的无限时间范围。TDengine 的 `KEEP` 最大可配置为 `365000d`；长期历史数据场景建议在新数据库首次创建时显式设置：
 
 ```bash
-cd /home/yumiduo/attempt/暑期项目
-export LD_LIBRARY_PATH="$HOME/sfkg/tdengine/lib"
-export SFKG_TAOS_DB=sfkg_etth1_demo
-./sfkg-timeseries-core/build-taos/etth1-taos-demo ETTh1.csv
+SFKG_TAOS_KEEP_DAYS=365000
 ```
 
-看到 `ETTh1 demo passed` 后，说明 ETTh1 数据已经写入 TDengine。
+该环境变量只在数据库首次创建时参与 `CREATE DATABASE`。如果数据库已经存在，重新启动 Core 不会修改原有 `KEEP`，需要单独执行：
 
-### 2. 在 Core 服务器上启动服务
+```sql
+ALTER DATABASE sfkg_timeseries KEEP 365000d;
+```
+
+调整 `KEEP` 不会恢复之前已经被拒绝或删除的数据；这类数据需要在调整后重新接入。
+
+### 5. 停止服务
+
+先在 Core 普通终端按 `Ctrl-C`，再进入 TDengine tmux 会话：
 
 ```bash
-cd /home/yumiduo/attempt/暑期项目/sfkg-timeseries-core
-export LD_LIBRARY_PATH="$HOME/sfkg/tdengine/lib"
-export SFKG_TAOS_DB=sfkg_etth1_demo
-./build-taos/sfkg-timeseries-core-server 0.0.0.0:50052
+tmux attach -t sfkg-tdengine
 ```
 
-保持这个终端运行。另开终端检查：
+在 tmux 中按 `Ctrl-C` 停止 TDengine。确认不再需要该会话时，可以退出 shell：
 
 ```bash
-ss -lntp | grep 50052
+exit
 ```
 
-看到 `LISTEN` 后，服务已经启动。
+如果只是断开 SSH，不要按 `Ctrl-C`，直接使用 `Ctrl-B`、`D` 分离即可。
 
-如果希望退出终端后服务继续运行，可以使用下面的方式替代上面的直接启动命令，
-不要同时启动两个 Core：
+## 目录说明
 
-```bash
-tmux new -s sfkg-core
-./build-taos/sfkg-timeseries-core-server 0.0.0.0:50052
-```
-
-按 `Ctrl-B`、再按 `D` 退出 tmux；重新进入使用：
-
-```bash
-tmux attach -t sfkg-core
-```
-
-### 3. 在客户端服务器上检查端口
-
-在 `222.29.156.142` 上执行：
-
-```bash
-nc -vz 222.29.156.141 50052
-```
-
-如果检查失败，请联系服务器管理员开通 `222.29.156.141` 的 TCP 50052 端口。
-
-### 4. 运行历史查询演示
-
-在客户端服务器准备同一份代码后执行：
-
-```bash
-cmake -S . -B build-grpc \
-  -DSFKG_WITH_TAOS=OFF \
-  -DSFKG_BUILD_GRPC=ON
-cmake --build build-grpc --target etth1-grpc-history-demo -j2
-./build-grpc/etth1-grpc-history-demo 222.29.156.141:50052
-```
-
-演示程序会先同步 `ETTh1_*` 序列，再调用：
-
-```text
-queryHistoryOverview
-queryHistoryData
-```
-
-异常检测模块使用的服务地址也是：
-
-```text
-222.29.156.141:50052
-```
-
-如果返回 `NOT_FOUND`，先确认序列配置已经同步；如果返回
-`UNAVAILABLE`，先检查 Core 进程和端口。
-
-联调结束后，在 Core 服务器的服务终端按 `Ctrl-C` 停止服务。
-
-## ETT 临时导入演示
-
-`etth1-taos-demo` 是一个临时验证工具：它直接读取上一级项目目录下的
-`ETTh1.csv`，绕过 gRPC `WriteRawData`，直接调用 `TaosClient` 批量写入独立的
-演示数据库；随后在本地注册 7 个 ETT 序列，并调用
-`HistoryQueryService::queryHistoryOverview` 和
-`HistoryQueryService::queryHistoryData`，打印摘要和查询结果样例。
-
-sequence ID 使用“文件名_变量名”格式，例如 `ETTh1_HUFL`、`ETTm2_OT`。
-
-在外层项目目录下运行：
-
-```bash
-export LD_LIBRARY_PATH="$HOME/sfkg/tdengine/lib"
-./sfkg-timeseries-core/build-taos/etth1-taos-demo ETTh1.csv
-```
-
-程序预期打印 `121940` 个写入点、7 个序列，并以 `ETTh1 demo passed` 结束。
-临时演示库会自动设置较长的保留期，以覆盖 ETTh1 的 2016 年时间戳。
-
-### 跨进程 gRPC 历史查询演示
-
-先启动 ETTh1 临时 Core 服务。它启动时会在本地运行时注册表中预置 7 个
-ETTh1 变量，因此后续可以直接查询单个变量：
-
-```bash
-cd sfkg-timeseries-core
-SFKG_TAOS_DB=sfkg_etth1_demo \
-  LD_LIBRARY_PATH="$HOME/sfkg/tdengine/lib" \
-  ./build-taos/etth1-temp-core-server 127.0.0.1:50052
-```
-
-另开终端运行交互式 gRPC 客户端：
-
-```bash
-cd "/home/yumiduo/attempt/暑期项目"
-./sfkg-timeseries-core/build-taos/etth1-grpc-history-demo 127.0.0.1:50052
-```
-
-客户端会先通过 gRPC 同步 `ETTh1_*` sequence，然后显示菜单：
-
-```text
-1. queryHistoryOverview
-2. query first hour
-3. query latest points
-4. query custom [start, end)
-q. quit
-```
+- `app/main.cpp`：正式 Core gRPC 服务入口；
+- `src/`：领域服务和 gRPC 适配实现；
+- `include/`：公共 C++ 接口和数据结构；
+- `proto/`：跨模块 Protobuf/gRPC 协议；
+- `tests/`：单元测试和本地测试程序；
+- `tools/`：开发阶段演示和辅助工具，不作为正式服务入口。
 
 ## Git 节点管理
 
-修改应在一个可独立解释和验证的节点完成后提交。推荐节点为：协议或设计
-基线、领域结构、通信适配、可运行入口、测试闭环，以及单项真实业务实现。
-提交前至少执行适用的编译或测试，并保持工作区不混入生成文件和构建产物。
+修改应在一个可独立解释和验证的节点完成后提交。提交前至少执行适用的编译或测试，并保持工作区不混入生成文件和构建产物。

@@ -17,6 +17,9 @@ public:
     TaosClient& operator=(const TaosClient&) = delete;
 
     OperationResult ensureSchema();
+    // Explicitly scoped for local tests and demos; normal services must not
+    // drop their configured database as part of ordinary shutdown.
+    OperationResult dropDatabaseForTesting();
     OperationResult insertRaw(const TimeseriesBatch& batch);
     OperationResult queryRaw(
         const std::vector<SequenceId>& sequence_ids,
