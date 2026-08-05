@@ -1,21 +1,24 @@
 package com.sfkg.timeseries.client;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sfkg.timeseries.config.GrpcClientProperties;
 import com.sfkg.timeseries.dto.ForecastResultQueryRequest;
 import com.sfkg.timeseries.dto.SyncResult;
 import com.sfkg.timeseries.entity.TimeseriesForecastTask;
-import com.sfkg.timeseries.grpc.QueryForecastResultRequest;
-import com.sfkg.timeseries.grpc.QueryForecastResultResponse;
-import com.sfkg.timeseries.grpc.SyncForecastTaskRequest;
-import com.sfkg.timeseries.grpc.SyncResponse;
-import com.sfkg.timeseries.grpc.SyncTaskStatusRequest;
-import com.sfkg.timeseries.grpc.TimeseriesForecastServiceGrpc;
+import com.sfkg.timeseries.grpc.AnalysisSyncForecastTaskRequest;
+import com.sfkg.timeseries.grpc.AnalysisTaskStatus;
+import com.sfkg.timeseries.grpc.AnalysisUpdateTaskStatusRequest;
+import com.sfkg.timeseries.grpc.ForecastTaskConfig;
+import com.sfkg.timeseries.grpc.QueryForecastResultsRequest;
+import com.sfkg.timeseries.grpc.QueryForecastResultsResponse;
+import com.sfkg.timeseries.grpc.RequestMeta;
+import com.sfkg.timeseries.grpc.ResultQuery;
+import com.sfkg.timeseries.grpc.TaskAck;
+import com.sfkg.timeseries.grpc.TimeseriesAnalysisServiceGrpc;
 import com.sfkg.timeseries.vo.ForecastResultVO;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,86 +28,119 @@ import org.springframework.stereotype.Component;
 public class ForecastGrpcClient {
 
     private static final Logger LOG = LoggerFactory.getLogger(ForecastGrpcClient.class);
-    private static final String SERVICE_NAME = "timeseries-forecast";
+    private static final String SERVICE_NAME = "timeseries-analysis";
 
     private final GrpcClientProperties grpcClientProperties;
-    private final ObjectMapper objectMapper;
 
-    public ForecastGrpcClient(GrpcClientProperties grpcClientProperties, ObjectMapper objectMapper) {
+    public ForecastGrpcClient(GrpcClientProperties grpcClientProperties) {
         this.grpcClientProperties = grpcClientProperties;
-        this.objectMapper = objectMapper;
     }
 
     public SyncResult syncForecastTask(TimeseriesForecastTask task) {
         String address = grpcClientProperties.getForecastAddress();
         if (isBlank(address)) {
-            return notConfigured("syncForecastTask");
+            return notConfigured("SyncForecastTask");
         }
         if (task == null) {
             return SyncResult.fail("task is null");
         }
-        SyncForecastTaskRequest.Builder b = SyncForecastTaskRequest.newBuilder()
+        ForecastTaskConfig.Builder configBuilder = ForecastTaskConfig.newBuilder()
                 .setTaskId(nullToEmpty(task.getTaskId()))
-                .setForecastHorizon(nullToEmpty(task.getForecastHorizon()));
+                .setTaskName(nullToEmpty(task.getTaskName()));
         if (task.getForecastObjects() != null) {
-            b.addAllForecastObjects(task.getForecastObjects());
+            configBuilder.addAllTargetSequenceIds(task.getForecastObjects());
         }
-        LOG.info("[{}] -> syncForecastTask taskId={} horizon={} at {}", SERVICE_NAME, task.getTaskId(), task.getForecastHorizon(), address);
-        return callForecast(address, stub -> stub.syncForecastTask(b.build()), "syncForecastTask");
+        if (task.getForecastHorizon() != null) {
+            try {
+                configBuilder.setForecastHorizonSteps(Integer.parseInt(task.getForecastHorizon()));
+            } catch (NumberFormatException ignored) {}
+        }
+
+        AnalysisSyncForecastTaskRequest req = AnalysisSyncForecastTaskRequest.newBuilder()
+                .setMeta(newMeta())
+                .setTask(configBuilder.build())
+                .build();
+
+        LOG.info("[{}] -> SyncForecastTask taskId={} at {}", SERVICE_NAME, task.getTaskId(), address);
+        ManagedChannel channel = newChannel(address);
+        try {
+            TaskAck ack = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
+                    .withDeadlineAfter(5, TimeUnit.SECONDS)
+                    .syncForecastTask(req);
+            LOG.info("[{}] <- SyncForecastTask accepted={} msg={}", SERVICE_NAME, ack.getAccepted(), ack.getMessage());
+            return SyncResult.of(ack.getAccepted(), ack.getMessage());
+        } catch (StatusRuntimeException e) {
+            LOG.warn("[{}] <- SyncForecastTask FAILED: {}", SERVICE_NAME, e.getStatus().getDescription());
+            return SyncResult.fail(e.getStatus().getDescription());
+        } finally {
+            channel.shutdown();
+        }
     }
 
     public SyncResult updateForecastTaskStatus(String taskId, String status) {
         String address = grpcClientProperties.getForecastAddress();
         if (isBlank(address)) {
-            return notConfigured("updateForecastTaskStatus");
+            return notConfigured("UpdateTaskStatus");
         }
-        SyncTaskStatusRequest req = SyncTaskStatusRequest.newBuilder()
+        AnalysisTaskStatus protoStatus;
+        if ("ENABLE".equalsIgnoreCase(status) || "ENABLED".equalsIgnoreCase(status)) {
+            protoStatus = AnalysisTaskStatus.TASK_STATUS_ENABLED;
+        } else if ("DISABLE".equalsIgnoreCase(status) || "DISABLED".equalsIgnoreCase(status)) {
+            protoStatus = AnalysisTaskStatus.TASK_STATUS_DISABLED;
+        } else {
+            protoStatus = AnalysisTaskStatus.TASK_STATUS_UNSPECIFIED;
+        }
+        AnalysisUpdateTaskStatusRequest req = AnalysisUpdateTaskStatusRequest.newBuilder()
+                .setMeta(newMeta())
                 .setTaskId(nullToEmpty(taskId))
-                .setTaskType("FORECAST")
-                .setStatus(nullToEmpty(status))
+                .setStatus(protoStatus)
                 .build();
-        LOG.info("[{}] -> updateForecastTaskStatus taskId={} status={} at {}", SERVICE_NAME, taskId, status, address);
-        return callForecast(address, stub -> stub.updateForecastTaskStatus(req), "updateForecastTaskStatus");
+        LOG.info("[{}] -> UpdateTaskStatus taskId={} status={} at {}", SERVICE_NAME, taskId, status, address);
+        ManagedChannel channel = newChannel(address);
+        try {
+            TaskAck ack = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
+                    .withDeadlineAfter(5, TimeUnit.SECONDS)
+                    .updateTaskStatus(req);
+            return SyncResult.of(ack.getAccepted(), ack.getMessage());
+        } catch (StatusRuntimeException e) {
+            LOG.warn("[{}] <- UpdateTaskStatus FAILED: {}", SERVICE_NAME, e.getStatus().getDescription());
+            return SyncResult.fail(e.getStatus().getDescription());
+        } finally {
+            channel.shutdown();
+        }
     }
 
     public ForecastResultVO queryForecastResult(ForecastResultQueryRequest request) {
         String address = grpcClientProperties.getForecastAddress();
         if (isBlank(address)) {
-            LOG.info("[{}] queryForecastResult skipped: address not configured", SERVICE_NAME);
+            LOG.info("[{}] queryForecastResults skipped: address not configured", SERVICE_NAME);
             return new ForecastResultVO();
         }
         if (request == null) {
             return new ForecastResultVO();
         }
-        QueryForecastResultRequest req = QueryForecastResultRequest.newBuilder()
-                .setTaskId(nullToEmpty(request.getTaskId()))
-                .setSequenceId(nullToEmpty(request.getSequenceId()))
+        QueryForecastResultsRequest req = QueryForecastResultsRequest.newBuilder()
+                .setQuery(ResultQuery.newBuilder()
+                        .setMeta(newMeta())
+                        .setTaskId(nullToEmpty(request.getTaskId()))
+                        .setLatestOnly(true)
+                        .setLimit(10)
+                        .build())
                 .build();
-        LOG.info("[{}] -> queryForecastResult taskId={} seq={} at {}", SERVICE_NAME, request.getTaskId(), request.getSequenceId(), address);
-
+        LOG.info("[{}] -> QueryForecastResults taskId={} at {}", SERVICE_NAME, request.getTaskId(), address);
         ManagedChannel channel = newChannel(address);
         try {
-            QueryForecastResultResponse resp = TimeseriesForecastServiceGrpc.newBlockingStub(channel)
-                    .withDeadlineAfter(3, TimeUnit.SECONDS)
-                    .queryForecastResult(req);
-            LOG.info("[{}] <- queryForecastResult payload {} chars", SERVICE_NAME,
-                    resp.getPayloadJson() != null ? resp.getPayloadJson().length() : 0);
+            QueryForecastResultsResponse resp = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
+                    .withDeadlineAfter(5, TimeUnit.SECONDS)
+                    .queryForecastResults(req);
             ForecastResultVO vo = new ForecastResultVO();
-            vo.setTaskId(request.getTaskId());
-            vo.setSequenceId(request.getSequenceId());
-            if (resp.getPayloadJson() != null && !resp.getPayloadJson().isBlank()) {
-                try {
-                    @SuppressWarnings("unchecked")
-                    java.util.Map<String, Object> map = objectMapper.readValue(resp.getPayloadJson(), java.util.Map.class);
-                    vo.setResultId(map.get("resultId") != null ? map.get("resultId").toString() : null);
-                    vo.setWarningLevel((String) map.get("warningLevel"));
-                } catch (JsonProcessingException e) {
-                    LOG.warn("[{}] failed to parse forecast result payload", SERVICE_NAME, e);
-                }
+            vo.setTaskId(resp.getTaskId());
+            if (resp.getResultsCount() > 0) {
+                vo.setResultId(resp.getResults(0).getRunId());
             }
             return vo;
         } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] queryForecastResult failed: {}", SERVICE_NAME, e.getStatus().getDescription());
+            LOG.warn("[{}] queryForecastResults failed: {}", SERVICE_NAME, e.getStatus().getDescription());
             return new ForecastResultVO();
         } finally {
             channel.shutdown();
@@ -117,25 +153,11 @@ public class ForecastGrpcClient {
         return ManagedChannelBuilder.forTarget(address).usePlaintext().build();
     }
 
-    @FunctionalInterface
-    private interface ForecastStubCall {
-        SyncResponse call(TimeseriesForecastServiceGrpc.TimeseriesForecastServiceBlockingStub stub);
-    }
-
-    private SyncResult callForecast(String address, ForecastStubCall callable, String operation) {
-        ManagedChannel channel = newChannel(address);
-        try {
-            SyncResponse resp = callable.call(
-                    TimeseriesForecastServiceGrpc.newBlockingStub(channel)
-                            .withDeadlineAfter(3, TimeUnit.SECONDS));
-            LOG.info("[{}] <- {} success={} msg={}", SERVICE_NAME, operation, resp.getSuccess(), resp.getMessage());
-            return SyncResult.of(resp.getSuccess(), resp.getMessage());
-        } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] <- {} FAILED: {}", SERVICE_NAME, operation, e.getStatus().getDescription());
-            return SyncResult.fail(e.getStatus().getDescription());
-        } finally {
-            channel.shutdown();
-        }
+    private RequestMeta newMeta() {
+        return RequestMeta.newBuilder()
+                .setRequestId(UUID.randomUUID().toString())
+                .setSentAtMs(System.currentTimeMillis())
+                .build();
     }
 
     private SyncResult notConfigured(String operation) {

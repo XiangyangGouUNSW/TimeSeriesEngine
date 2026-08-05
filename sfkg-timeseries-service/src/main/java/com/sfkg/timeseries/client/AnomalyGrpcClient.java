@@ -1,21 +1,25 @@
 package com.sfkg.timeseries.client;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sfkg.timeseries.config.GrpcClientProperties;
 import com.sfkg.timeseries.dto.AnomalyResultQueryRequest;
 import com.sfkg.timeseries.dto.SyncResult;
 import com.sfkg.timeseries.entity.TimeseriesAnomalyTask;
-import com.sfkg.timeseries.grpc.QueryAnomalyResultRequest;
-import com.sfkg.timeseries.grpc.QueryAnomalyResultResponse;
-import com.sfkg.timeseries.grpc.SyncAnomalyTaskRequest;
-import com.sfkg.timeseries.grpc.SyncResponse;
-import com.sfkg.timeseries.grpc.SyncTaskStatusRequest;
-import com.sfkg.timeseries.grpc.TimeseriesAnomalyServiceGrpc;
+import com.sfkg.timeseries.grpc.AnalysisStatus;
+import com.sfkg.timeseries.grpc.AnalysisSyncAnomalyTaskRequest;
+import com.sfkg.timeseries.grpc.AnalysisTaskStatus;
+import com.sfkg.timeseries.grpc.AnalysisUpdateTaskStatusRequest;
+import com.sfkg.timeseries.grpc.AnomalyTaskConfig;
+import com.sfkg.timeseries.grpc.QueryAnomalyResultsRequest;
+import com.sfkg.timeseries.grpc.QueryAnomalyResultsResponse;
+import com.sfkg.timeseries.grpc.RequestMeta;
+import com.sfkg.timeseries.grpc.ResultQuery;
+import com.sfkg.timeseries.grpc.TaskAck;
+import com.sfkg.timeseries.grpc.TimeseriesAnalysisServiceGrpc;
 import com.sfkg.timeseries.vo.AnomalyResultVO;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,86 +29,121 @@ import org.springframework.stereotype.Component;
 public class AnomalyGrpcClient {
 
     private static final Logger LOG = LoggerFactory.getLogger(AnomalyGrpcClient.class);
-    private static final String SERVICE_NAME = "timeseries-anomaly";
+    private static final String SERVICE_NAME = "timeseries-analysis";
 
     private final GrpcClientProperties grpcClientProperties;
-    private final ObjectMapper objectMapper;
 
-    public AnomalyGrpcClient(GrpcClientProperties grpcClientProperties, ObjectMapper objectMapper) {
+    public AnomalyGrpcClient(GrpcClientProperties grpcClientProperties) {
         this.grpcClientProperties = grpcClientProperties;
-        this.objectMapper = objectMapper;
     }
 
     public SyncResult syncAnomalyTask(TimeseriesAnomalyTask task) {
         String address = grpcClientProperties.getAnomalyAddress();
         if (isBlank(address)) {
-            return notConfigured("syncAnomalyTask");
+            return notConfigured("SyncAnomalyTask");
         }
         if (task == null) {
             return SyncResult.fail("task is null");
         }
-        SyncAnomalyTaskRequest.Builder b = SyncAnomalyTaskRequest.newBuilder()
+
+        AnomalyTaskConfig.Builder configBuilder = AnomalyTaskConfig.newBuilder()
                 .setTaskId(nullToEmpty(task.getTaskId()))
-                .setDetectMethod(nullToEmpty(task.getDetectMethod()));
-        if (task.getDetectObjects() != null) {
-            b.addAllDetectObjects(task.getDetectObjects());
+                .setTaskName(nullToEmpty(task.getTaskName()))
+                .setWarningRule(nullToEmpty(task.getWarningRule()));
+        if (task.getSequenceIds() != null) {
+            configBuilder.addAllSequenceIds(task.getSequenceIds());
         }
-        LOG.info("[{}] -> syncAnomalyTask taskId={} method={} at {}", SERVICE_NAME, task.getTaskId(), task.getDetectMethod(), address);
-        return callAnomaly(address, stub -> stub.syncAnomalyTask(b.build()), "syncAnomalyTask");
+        if (task.getMethods() != null) {
+            configBuilder.addAllMethods(task.getMethods());
+        }
+        if (task.getContextLength() != null) {
+            configBuilder.setContextLength(task.getContextLength());
+        }
+        if (task.getSlideStepMs() != null) {
+            configBuilder.setSlideStepMs(task.getSlideStepMs());
+        }
+        if (task.getMinimumPoints() != null) {
+            configBuilder.setMinimumPoints(task.getMinimumPoints());
+        }
+
+        AnalysisSyncAnomalyTaskRequest req = AnalysisSyncAnomalyTaskRequest.newBuilder()
+                .setMeta(newMeta())
+                .setTask(configBuilder.build())
+                .build();
+
+        LOG.info("[{}] -> SyncAnomalyTask taskId={} at {}", SERVICE_NAME, task.getTaskId(), address);
+        return callSyncTask(address, req);
     }
 
     public SyncResult updateAnomalyTaskStatus(String taskId, String status) {
         String address = grpcClientProperties.getAnomalyAddress();
         if (isBlank(address)) {
-            return notConfigured("updateAnomalyTaskStatus");
+            return notConfigured("UpdateTaskStatus");
         }
-        SyncTaskStatusRequest req = SyncTaskStatusRequest.newBuilder()
+
+        AnalysisTaskStatus protoStatus = mapTaskStatus(status);
+        AnalysisUpdateTaskStatusRequest req = AnalysisUpdateTaskStatusRequest.newBuilder()
+                .setMeta(newMeta())
                 .setTaskId(nullToEmpty(taskId))
-                .setTaskType("ANOMALY")
-                .setStatus(nullToEmpty(status))
+                .setStatus(protoStatus)
                 .build();
-        LOG.info("[{}] -> updateAnomalyTaskStatus taskId={} status={} at {}", SERVICE_NAME, taskId, status, address);
-        return callAnomaly(address, stub -> stub.updateAnomalyTaskStatus(req), "updateAnomalyTaskStatus");
+
+        LOG.info("[{}] -> UpdateTaskStatus taskId={} status={} at {}", SERVICE_NAME, taskId, status, address);
+        ManagedChannel channel = newChannel(address);
+        try {
+            TaskAck ack = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
+                    .withDeadlineAfter(5, TimeUnit.SECONDS)
+                    .updateTaskStatus(req);
+            LOG.info("[{}] <- UpdateTaskStatus accepted={} msg={}", SERVICE_NAME, ack.getAccepted(), ack.getMessage());
+            return SyncResult.of(ack.getAccepted(), ack.getMessage());
+        } catch (StatusRuntimeException e) {
+            LOG.warn("[{}] <- UpdateTaskStatus FAILED: {}", SERVICE_NAME, e.getStatus().getDescription());
+            return SyncResult.fail(e.getStatus().getDescription());
+        } finally {
+            channel.shutdown();
+        }
     }
 
     public AnomalyResultVO queryAnomalyResult(AnomalyResultQueryRequest request) {
         String address = grpcClientProperties.getAnomalyAddress();
         if (isBlank(address)) {
-            LOG.info("[{}] queryAnomalyResult skipped: address not configured", SERVICE_NAME);
+            LOG.info("[{}] queryAnomalyResults skipped: address not configured", SERVICE_NAME);
             return new AnomalyResultVO();
         }
         if (request == null) {
             return new AnomalyResultVO();
         }
-        QueryAnomalyResultRequest req = QueryAnomalyResultRequest.newBuilder()
-                .setTaskId(nullToEmpty(request.getTaskId()))
-                .setSequenceId(nullToEmpty(request.getSequenceId()))
-                .build();
-        LOG.info("[{}] -> queryAnomalyResult taskId={} seq={} at {}", SERVICE_NAME, request.getTaskId(), request.getSequenceId(), address);
 
+        ResultQuery.Builder queryBuilder = ResultQuery.newBuilder()
+                .setMeta(newMeta())
+                .setTaskId(nullToEmpty(request.getTaskId()))
+                .setLatestOnly(true)
+                .setLimit(10);
+
+        QueryAnomalyResultsRequest req = QueryAnomalyResultsRequest.newBuilder()
+                .setQuery(queryBuilder.build())
+                .build();
+
+        LOG.info("[{}] -> QueryAnomalyResults taskId={} at {}", SERVICE_NAME, request.getTaskId(), address);
         ManagedChannel channel = newChannel(address);
         try {
-            QueryAnomalyResultResponse resp = TimeseriesAnomalyServiceGrpc.newBlockingStub(channel)
-                    .withDeadlineAfter(3, TimeUnit.SECONDS)
-                    .queryAnomalyResult(req);
-            LOG.info("[{}] <- queryAnomalyResult payload {} chars", SERVICE_NAME,
-                    resp.getPayloadJson() != null ? resp.getPayloadJson().length() : 0);
+            QueryAnomalyResultsResponse resp = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
+                    .withDeadlineAfter(5, TimeUnit.SECONDS)
+                    .queryAnomalyResults(req);
+            LOG.info("[{}] <- QueryAnomalyResults taskId={} results={}", SERVICE_NAME,
+                    resp.getTaskId(), resp.getResultsCount());
             AnomalyResultVO vo = new AnomalyResultVO();
-            vo.setTaskId(request.getTaskId());
-            vo.setSequenceId(request.getSequenceId());
-            if (resp.getPayloadJson() != null && !resp.getPayloadJson().isBlank()) {
-                try {
-                    @SuppressWarnings("unchecked")
-                    java.util.Map<String, Object> map = objectMapper.readValue(resp.getPayloadJson(), java.util.Map.class);
-                    vo.setResultId(map.get("resultId") != null ? map.get("resultId").toString() : null);
-                    vo.setAnomalyLevel((String) map.get("anomalyLevel"));
-                } catch (JsonProcessingException e) {
-                    LOG.warn("[{}] failed to parse anomaly result payload", SERVICE_NAME, e);
+            vo.setTaskId(resp.getTaskId());
+            if (resp.getResultsCount() > 0) {
+                var first = resp.getResults(0);
+                vo.setResultId(first.getRunId());
+                if (first.getFindingsCount() > 0) {
+                    vo.setAnomalyLevel(first.getFindings(0).getSeverity());
                 }
             }
             return vo;
         } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] queryAnomalyResult failed: {}", SERVICE_NAME, e.getStatus().getDescription());
+            LOG.warn("[{}] queryAnomalyResults failed: {}", SERVICE_NAME, e.getStatus().getDescription());
             return new AnomalyResultVO();
         } finally {
             channel.shutdown();
@@ -113,34 +152,47 @@ public class AnomalyGrpcClient {
 
     // ── helpers ────────────────────────────────────────────────────────
 
-    private ManagedChannel newChannel(String address) {
-        return ManagedChannelBuilder.forTarget(address).usePlaintext().build();
-    }
-
-    @FunctionalInterface
-    private interface AnomalyStubCall {
-        SyncResponse call(TimeseriesAnomalyServiceGrpc.TimeseriesAnomalyServiceBlockingStub stub);
-    }
-
-    private SyncResult callAnomaly(String address, AnomalyStubCall callable, String operation) {
+    private SyncResult callSyncTask(String address, AnalysisSyncAnomalyTaskRequest req) {
         ManagedChannel channel = newChannel(address);
         try {
-            SyncResponse resp = callable.call(
-                    TimeseriesAnomalyServiceGrpc.newBlockingStub(channel)
-                            .withDeadlineAfter(3, TimeUnit.SECONDS));
-            LOG.info("[{}] <- {} success={} msg={}", SERVICE_NAME, operation, resp.getSuccess(), resp.getMessage());
-            return SyncResult.of(resp.getSuccess(), resp.getMessage());
+            TaskAck ack = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
+                    .withDeadlineAfter(5, TimeUnit.SECONDS)
+                    .syncAnomalyTask(req);
+            LOG.info("[{}] <- SyncAnomalyTask accepted={} status={} msg={}",
+                    SERVICE_NAME, ack.getAccepted(), ack.getStatus(), ack.getMessage());
+            return SyncResult.of(ack.getAccepted(), ack.getMessage());
         } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] <- {} FAILED: {}", SERVICE_NAME, operation, e.getStatus().getDescription());
+            LOG.warn("[{}] <- SyncAnomalyTask FAILED: {}", SERVICE_NAME, e.getStatus().getDescription());
             return SyncResult.fail(e.getStatus().getDescription());
         } finally {
             channel.shutdown();
         }
     }
 
+    private ManagedChannel newChannel(String address) {
+        return ManagedChannelBuilder.forTarget(address).usePlaintext().build();
+    }
+
+    private RequestMeta newMeta() {
+        return RequestMeta.newBuilder()
+                .setRequestId(UUID.randomUUID().toString())
+                .setSentAtMs(System.currentTimeMillis())
+                .build();
+    }
+
+    private AnalysisTaskStatus mapTaskStatus(String status) {
+        if (status == null) return AnalysisTaskStatus.TASK_STATUS_UNSPECIFIED;
+        switch (status.toUpperCase()) {
+            case "ENABLE": case "ENABLED": return AnalysisTaskStatus.TASK_STATUS_ENABLED;
+            case "DISABLE": case "DISABLED": return AnalysisTaskStatus.TASK_STATUS_DISABLED;
+            case "DELETE": case "DELETED": return AnalysisTaskStatus.TASK_STATUS_DELETED;
+            default: return AnalysisTaskStatus.TASK_STATUS_UNSPECIFIED;
+        }
+    }
+
     private SyncResult notConfigured(String operation) {
-        LOG.info("[{}] {} skipped: anomaly address not configured", SERVICE_NAME, operation);
-        return SyncResult.fail("anomaly address not configured");
+        LOG.info("[{}] {} skipped: analysis address not configured", SERVICE_NAME, operation);
+        return SyncResult.fail("analysis address not configured");
     }
 
     private static String nullToEmpty(String v) { return v != null ? v : ""; }

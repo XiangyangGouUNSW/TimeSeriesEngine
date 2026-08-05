@@ -4,7 +4,8 @@ package sfkg.timeseries.core.v1;
 
 option java_multiple_files = true;
 option java_package = "com.sfkg.timeseries.grpc";
-option java_outer_classname = "TimeseriesInternalProto";
+
+// ── Core service: Java → C++ engine ───────────────────────────────
 
 service TimeseriesCoreService {
   rpc syncInstanceConfigs (SyncInstanceConfigsRequest) returns (SyncConfigResponse);
@@ -15,7 +16,7 @@ service TimeseriesCoreService {
   rpc QueryHistoryData (QueryHistoryDataRequest) returns (QueryHistoryDataResponse);
 }
 
-// ── Core messages (aligned with timeseries_core.proto) ─────────────
+// ── Shared enums & messages ───────────────────────────────────────
 
 enum OperationCode {
   OPERATION_CODE_OK = 0;
@@ -34,6 +35,13 @@ message OperationResult {
   uint64 failed_count = 3;
   string message = 4;
 }
+
+message SyncResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// ── Instance config ───────────────────────────────────────────────
 
 message TimeseriesValue {
   oneof kind {
@@ -55,6 +63,8 @@ message RuntimeInstanceConfig {
 message SyncInstanceConfigsRequest {
   repeated RuntimeInstanceConfig items = 1;
 }
+
+// ── Constraint config ─────────────────────────────────────────────
 
 message ConstraintTerm {
   string variable = 1;
@@ -78,6 +88,8 @@ message RuntimeConstraintConfig {
 message SyncConstraintsRequest {
   repeated RuntimeConstraintConfig items = 1;
 }
+
+// ── Relation config ───────────────────────────────────────────────
 
 message RuntimeRelationSource {
   string source_category_id = 1;
@@ -108,9 +120,13 @@ message SyncRelationsRequest {
   repeated RuntimeRelationConfig items = 1;
 }
 
+// ── Sync config response ──────────────────────────────────────────
+
 message SyncConfigResponse {
   OperationResult operation = 1;
 }
+
+// ── Ingest ────────────────────────────────────────────────────────
 
 message TimeseriesIngestData {
   optional string sequence_id = 1;
@@ -144,50 +160,12 @@ message IngestDataResponse {
   TimeseriesBatch resolved_data = 5;
 }
 
-service TimeseriesAnomalyService {
-  rpc SyncAnomalyTask (SyncAnomalyTaskRequest) returns (SyncResponse);
-  rpc UpdateAnomalyTaskStatus (SyncTaskStatusRequest) returns (SyncResponse);
-  rpc QueryAnomalyResult (QueryAnomalyResultRequest) returns (QueryAnomalyResultResponse);
-}
-
-service TimeseriesForecastService {
-  rpc SyncForecastTask (SyncForecastTaskRequest) returns (SyncResponse);
-  rpc UpdateForecastTaskStatus (SyncTaskStatusRequest) returns (SyncResponse);
-  rpc QueryForecastResult (QueryForecastResultRequest) returns (QueryForecastResultResponse);
-}
-
-service TimeseriesDecisionService {
-  rpc GenerateDiagnosisResult (DecisionContextRequest) returns (DiagnosisResultResponse);
-  rpc GenerateDecisionSuggestion (DecisionContextRequest) returns (DecisionSuggestionResponse);
-}
-
-service TimeseriesEventReceiverService {
-  rpc ReceiveEvent (EventMessage) returns (SyncResponse);
-}
-
-message SyncResponse {
-  bool success = 1;
-  string message = 2;
-}
-
-
+// ── Task status & history ─────────────────────────────────────────
 
 message SyncTaskStatusRequest {
   string task_id = 1;
   string task_type = 2;
   string status = 3;
-}
-
-message SyncAnomalyTaskRequest {
-  string task_id = 1;
-  repeated string detect_objects = 2;
-  string detect_method = 3;
-}
-
-message SyncForecastTaskRequest {
-  string task_id = 1;
-  repeated string forecast_objects = 2;
-  string forecast_horizon = 3;
 }
 
 message QueryHistoryDataRequest {
@@ -202,36 +180,10 @@ message QueryHistoryDataResponse {
   string payload_json = 2;
 }
 
-message QueryAnomalyResultRequest {
-  string task_id = 1;
-  string sequence_id = 2;
-}
+// ── Event receiver (C++ / external → Java) ────────────────────────
 
-message QueryAnomalyResultResponse {
-  string payload_json = 1;
-}
-
-message QueryForecastResultRequest {
-  string task_id = 1;
-  string sequence_id = 2;
-}
-
-message QueryForecastResultResponse {
-  string payload_json = 1;
-}
-
-message DecisionContextRequest {
-  string event_id = 1;
-  string context_json = 2;
-}
-
-message DiagnosisResultResponse {
-  string diagnosis_result = 1;
-  string diagnosis_basis = 2;
-}
-
-message DecisionSuggestionResponse {
-  string suggestion = 1;
+service TimeseriesEventReceiverService {
+  rpc ReceiveEvent (EventMessage) returns (SyncResponse);
 }
 
 message EventMessage {

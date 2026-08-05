@@ -1,0 +1,9 @@
+{
+  "sequenceId": "ETTh1_HUFL",
+  "instanceName": "ETTh1 High Useful Load Front",
+  "externalSequenceId": "ETTh1_HUFL",
+  "categoryId": "ETTh1",
+  "dataSourceId": "ETTh1.csv",
+  "dataType": "double",
+  "accessStatus": "ENABLE"
+}

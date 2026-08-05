@@ -1,11 +1,17 @@
 {
-  "taskId": "7001",
+  "taskId": "task-anomaly-001",
   "taskName": "temperature anomaly detection",
-  "detectObjects": [
-    "1001",
-    "1002"
+  "sequenceIds": [
+    "temperature-1",
+    "pressure-1"
   ],
-  "detectMethod": "RULE",
+  "methods": [
+    "DISCRETE_OUTLIER",
+    "CAUSAL_PATTERN"
+  ],
   "warningRule": "temperature > 90",
+  "contextLength": 96,
+  "slideStepMs": 60000,
+  "minimumPoints": 200,
   "status": "ENABLE"
 }

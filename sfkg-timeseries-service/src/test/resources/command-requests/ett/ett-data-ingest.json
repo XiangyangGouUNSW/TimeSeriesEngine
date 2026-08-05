@@ -1,0 +1,27 @@
+{
+  "windowSize": 3600000,
+  "returnResolvedData": true,
+  "points": [
+    {"sequence_id":"ETTh1_HUFL","data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_HUFL","time":1467331200000,"double_value":5.827},
+    {"sequence_id":"ETTh1_HULL","data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_HULL","time":1467331200000,"double_value":2.009},
+    {"sequence_id":"ETTh1_MUFL","data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_MUFL","time":1467331200000,"double_value":1.599},
+    {"sequence_id":"ETTh1_MULL","data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_MULL","time":1467331200000,"double_value":0.462},
+    {"sequence_id":"ETTh1_LUFL","data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_LUFL","time":1467331200000,"double_value":4.203},
+    {"sequence_id":"ETTh1_LULL","data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_LULL","time":1467331200000,"double_value":1.34},
+    {"sequence_id":"ETTh1_OT",  "data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_OT",  "time":1467331200000,"double_value":30.531},
+    {"sequence_id":"ETTh1_HUFL","data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_HUFL","time":1467334800000,"double_value":5.693},
+    {"sequence_id":"ETTh1_HULL","data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_HULL","time":1467334800000,"double_value":2.076},
+    {"sequence_id":"ETTh1_MUFL","data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_MUFL","time":1467334800000,"double_value":1.492},
+    {"sequence_id":"ETTh1_MULL","data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_MULL","time":1467334800000,"double_value":0.426},
+    {"sequence_id":"ETTh1_LUFL","data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_LUFL","time":1467334800000,"double_value":4.142},
+    {"sequence_id":"ETTh1_LULL","data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_LULL","time":1467334800000,"double_value":1.371},
+    {"sequence_id":"ETTh1_OT",  "data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_OT",  "time":1467334800000,"double_value":27.787},
+    {"sequence_id":"ETTh1_HUFL","data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_HUFL","time":1467338400000,"double_value":5.157},
+    {"sequence_id":"ETTh1_HULL","data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_HULL","time":1467338400000,"double_value":1.741},
+    {"sequence_id":"ETTh1_MUFL","data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_MUFL","time":1467338400000,"double_value":1.279},
+    {"sequence_id":"ETTh1_MULL","data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_MULL","time":1467338400000,"double_value":0.355},
+    {"sequence_id":"ETTh1_LUFL","data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_LUFL","time":1467338400000,"double_value":3.777},
+    {"sequence_id":"ETTh1_LULL","data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_LULL","time":1467338400000,"double_value":1.218},
+    {"sequence_id":"ETTh1_OT",  "data_source_id":"ETTh1.csv","external_sequence_id":"ETTh1_OT",  "time":1467338400000,"double_value":27.787}
+  ]
+}

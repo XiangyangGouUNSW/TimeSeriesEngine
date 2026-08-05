@@ -192,11 +192,14 @@ class CommandApiSuccessTests {
 
     private static final String ANOMALY_TASK_SAVE_JSON = """
             {
-              "taskId": 7001,
+              "taskId": "task-anomaly-001",
               "taskName": "temperature anomaly detection",
-              "detectObjects": [1001, 1002],
-              "detectMethod": "RULE",
+              "sequenceIds": ["temperature-1", "pressure-1"],
+              "methods": ["DISCRETE_OUTLIER", "CAUSAL_PATTERN"],
               "warningRule": "temperature > 90",
+              "contextLength": 96,
+              "slideStepMs": 60000,
+              "minimumPoints": 200,
               "status": "ENABLE"
             }
             """;

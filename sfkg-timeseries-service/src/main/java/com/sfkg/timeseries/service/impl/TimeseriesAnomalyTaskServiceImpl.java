@@ -57,7 +57,7 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
 
         anomalyTaskMapper.insert(entity);
         memoryCache.putAnomalyTask(entity);
-        syncAnomalyTaskToCore(taskId);
+        // syncAnomalyTaskToCore(taskId);  // C端 SyncTaskStatus 暂不启用
         syncAnomalyTaskToAnomalyService(taskId);
         return taskId;
     }
@@ -89,7 +89,7 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
 
         anomalyTaskMapper.updateById(entity);
         memoryCache.putAnomalyTask(entity);
-        syncAnomalyTaskToCore(request.getTaskId());
+        // syncAnomalyTaskToCore(request.getTaskId());  // C端 SyncTaskStatus 暂不启用
         syncAnomalyTaskToAnomalyService(request.getTaskId());
     }
 
@@ -160,7 +160,6 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
             return true;
         }
         return containsIfPresent(keyword, entity.getTaskName())
-                || containsIfPresent(keyword, entity.getDetectMethod())
                 || containsIfPresent(keyword, entity.getWarningRule());
     }
 }

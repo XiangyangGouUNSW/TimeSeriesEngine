@@ -1,5 +1,6 @@
 package com.sfkg.timeseries.cache;
 
+import com.sfkg.timeseries.entity.TimeseriesAnomalyResult;
 import com.sfkg.timeseries.entity.TimeseriesAnomalyTask;
 import com.sfkg.timeseries.entity.TimeseriesCategory;
 import com.sfkg.timeseries.entity.TimeseriesConstraint;
@@ -32,6 +33,7 @@ public class TimeseriesMemoryCache {
     private final List<TimeseriesEvent> events = new CopyOnWriteArrayList<>();
     private final List<TimeseriesAnomalyTask> anomalyTasks = new CopyOnWriteArrayList<>();
     private final List<TimeseriesForecastTask> forecastTasks = new CopyOnWriteArrayList<>();
+    private final List<TimeseriesAnomalyResult> anomalyResults = new CopyOnWriteArrayList<>();
     private final List<TimeseriesSyncLog> syncLogs = new CopyOnWriteArrayList<>();
     private final List<TimeseriesDataPoint> dataPoints = new CopyOnWriteArrayList<>();
 
@@ -56,6 +58,7 @@ public class TimeseriesMemoryCache {
             case EVENT -> events.clear();
             case ANOMALY_TASK -> anomalyTasks.clear();
             case FORECAST_TASK -> forecastTasks.clear();
+            case ANOMALY_RESULT -> anomalyResults.clear();
             case SYNC_LOG -> syncLogs.clear();
             case TIMESERIES_DATA -> dataPoints.clear();
         }
@@ -214,6 +217,22 @@ public class TimeseriesMemoryCache {
 
     public List<TimeseriesForecastTask> listForecastTasks() {
         return List.copyOf(forecastTasks);
+    }
+
+    public void replaceAnomalyResults(Collection<TimeseriesAnomalyResult> entities) {
+        replaceAll(anomalyResults, entities);
+        markLoaded(CachedTable.ANOMALY_RESULT);
+    }
+
+    public void putAnomalyResult(TimeseriesAnomalyResult entity) {
+        if (entity != null && entity.getResultId() != null) {
+            upsert(anomalyResults, item -> entity.getResultId().equals(item.getResultId()), entity);
+            markLoaded(CachedTable.ANOMALY_RESULT);
+        }
+    }
+
+    public List<TimeseriesAnomalyResult> listAnomalyResults() {
+        return List.copyOf(anomalyResults);
     }
 
     public void replaceSyncLogs(Collection<TimeseriesSyncLog> entities) {

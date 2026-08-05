@@ -43,6 +43,7 @@ public class TimeseriesCacheManager {
             case EVENT -> memoryCache.replaceEvents(cacheLoader.loadEvents());
             case ANOMALY_TASK -> memoryCache.replaceAnomalyTasks(cacheLoader.loadAnomalyTasks());
             case FORECAST_TASK -> memoryCache.replaceForecastTasks(cacheLoader.loadForecastTasks());
+            case ANOMALY_RESULT -> memoryCache.replaceAnomalyResults(cacheLoader.loadAnomalyResults());
             case SYNC_LOG -> memoryCache.replaceSyncLogs(cacheLoader.loadSyncLogs());
             case TIMESERIES_DATA -> memoryCache.replaceTimeseriesDataPoints(cacheLoader.loadTimeseriesDataPoints());
         }

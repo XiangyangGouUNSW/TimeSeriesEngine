@@ -1,6 +1,6 @@
 package com.sfkg.timeseries.entity;
 
-import java.util.Collection;
+import java.util.List;
 import lombok.Data;
 
 @Data
@@ -8,8 +8,11 @@ public class TimeseriesAnomalyTask {
 
     private String taskId;
     private String taskName;
-    private Collection<String> detectObjects;
-    private String detectMethod;
+    private List<String> sequenceIds;
+    private List<String> methods;
     private String warningRule;
+    private Integer contextLength;
+    private Long slideStepMs;
+    private Integer minimumPoints;
     private String status;
 }

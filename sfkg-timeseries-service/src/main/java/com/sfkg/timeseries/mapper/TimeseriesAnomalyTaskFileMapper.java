@@ -90,7 +90,6 @@ public class TimeseriesAnomalyTaskFileMapper implements TimeseriesAnomalyTaskMap
             return true;
         }
         return containsIfPresent(keyword, entity.getTaskName())
-                || containsIfPresent(keyword, entity.getDetectMethod())
                 || containsIfPresent(keyword, entity.getWarningRule());
     }
 }

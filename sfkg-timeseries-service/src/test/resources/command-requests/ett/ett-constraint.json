@@ -1,0 +1,21 @@
+{
+  "constraintId": "ett-ot-upper-limit",
+  "constraintName": "oil temperature upper limit",
+  "categoryId": "ETTh1",
+  "variableMapping": {
+    "x": "ETTh1_OT"
+  },
+  "constraintDescription": "OT should be monitored below threshold",
+  "constraintExpression": "x < 40",
+  "lowerBound": null,
+  "upperBound": 40.0,
+  "terms": [
+    {
+      "variable": "x",
+      "coefficient": 1.0,
+      "sampleOffset": 0
+    }
+  ],
+  "effectiveStatus": "ENABLE",
+  "confirmStatus": "CONFIRMED"
+}

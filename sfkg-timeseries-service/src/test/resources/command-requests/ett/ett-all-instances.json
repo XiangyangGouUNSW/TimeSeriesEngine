@@ -1,0 +1,12 @@
+{
+  "operation": "batch",
+  "requests": [
+    {"url":"POST /api/timeseries/instances", "body":"ett-instance-hufl.json"},
+    {"url":"POST /api/timeseries/instances", "body":"ett-instance-hull.json"},
+    {"url":"POST /api/timeseries/instances", "body":"ett-instance-mufl.json"},
+    {"url":"POST /api/timeseries/instances", "body":"ett-instance-mull.json"},
+    {"url":"POST /api/timeseries/instances", "body":"ett-instance-lufl.json"},
+    {"url":"POST /api/timeseries/instances", "body":"ett-instance-lull.json"},
+    {"url":"POST /api/timeseries/instances", "body":"ett-instance-ot.json"}
+  ]
+}

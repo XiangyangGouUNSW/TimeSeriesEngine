@@ -58,3 +58,6 @@
 {"sequenceId":null,"timestamp":"2024-08-04T00:00:00","value":32.5}
 {"sequenceId":null,"timestamp":"2024-08-04T00:01:00","value":33.1}
 {"sequenceId":"temperature-1","timestamp":"2024-08-04T00:02:00","value":32.8}
+{"sequenceId":null,"timestamp":"2024-08-04T00:00:00","value":32.5}
+{"sequenceId":null,"timestamp":"2024-08-04T00:01:00","value":33.1}
+{"sequenceId":"temperature-1","timestamp":"2024-08-04T00:02:00","value":32.8}
