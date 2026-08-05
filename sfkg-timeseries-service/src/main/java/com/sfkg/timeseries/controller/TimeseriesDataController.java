@@ -7,6 +7,7 @@ import com.sfkg.timeseries.dto.HistoryDataQueryRequest;
 import com.sfkg.timeseries.dto.TimeseriesDataSaveRequest;
 import com.sfkg.timeseries.service.TimeseriesDataService;
 import com.sfkg.timeseries.vo.HistoryDataVO;
+import java.util.Map;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -55,5 +56,23 @@ public class TimeseriesDataController {
     public ApiResult<HistoryDataVO> queryHistoryDataByJson(@RequestBody HistoryDataQueryRequest request) {
         HistoryDataVO data = dataService.queryHistoryData(request);
         return returnSuccess("history data query success", data);
+    }
+
+    @PostMapping(
+            value = "/history/overview",
+            consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public ApiResult<Map<String, Object>> queryHistoryOverview(@RequestBody HistoryDataQueryRequest request) {
+        Map<String, Object> data = dataService.queryHistoryOverview(request);
+        return returnSuccess("history overview query success", data);
+    }
+
+    @PostMapping(
+            value = "/window/query",
+            consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public ApiResult<Map<String, Object>> queryWindowData(@RequestBody HistoryDataQueryRequest request) {
+        Map<String, Object> data = dataService.queryWindowData(request);
+        return returnSuccess("window data query success", data);
     }
 }

@@ -13,6 +13,7 @@ public enum CachedTable {
     ANOMALY_TASK("timeseries_anomaly_task"),
     FORECAST_TASK("timeseries_forecast_task"),
     ANOMALY_RESULT("timeseries_anomaly_result"),
+    FORECAST_RESULT("timeseries_forecast_result"),
     SYNC_LOG("timeseries_sync_log"),
     TIMESERIES_DATA("timeseries_data");
 

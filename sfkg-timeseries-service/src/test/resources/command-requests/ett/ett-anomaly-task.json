@@ -7,5 +7,6 @@
   "contextLength": 96,
   "slideStepMs": 3600000,
   "minimumPoints": 200,
+  "constraintIds": ["ett-ot-upper-limit"],
   "status": "ENABLE"
 }

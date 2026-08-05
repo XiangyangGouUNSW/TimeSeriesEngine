@@ -13,6 +13,7 @@ import com.sfkg.timeseries.grpc.QueryAnomalyResultsRequest;
 import com.sfkg.timeseries.grpc.QueryAnomalyResultsResponse;
 import com.sfkg.timeseries.grpc.RequestMeta;
 import com.sfkg.timeseries.grpc.ResultQuery;
+import com.sfkg.timeseries.grpc.SemanticContext;
 import com.sfkg.timeseries.grpc.TaskAck;
 import com.sfkg.timeseries.grpc.TimeseriesAnalysisServiceGrpc;
 import com.sfkg.timeseries.vo.AnomalyResultVO;
@@ -64,6 +65,10 @@ public class AnomalyGrpcClient {
         }
         if (task.getMinimumPoints() != null) {
             configBuilder.setMinimumPoints(task.getMinimumPoints());
+        }
+        if (task.getConstraintIds() != null && !task.getConstraintIds().isEmpty()) {
+            configBuilder.setSemanticContext(
+                    SemanticContext.newBuilder().addAllConstraintIds(task.getConstraintIds()).build());
         }
 
         AnalysisSyncAnomalyTaskRequest req = AnalysisSyncAnomalyTaskRequest.newBuilder()

@@ -12,6 +12,7 @@ import com.sfkg.timeseries.grpc.QueryForecastResultsRequest;
 import com.sfkg.timeseries.grpc.QueryForecastResultsResponse;
 import com.sfkg.timeseries.grpc.RequestMeta;
 import com.sfkg.timeseries.grpc.ResultQuery;
+import com.sfkg.timeseries.grpc.SemanticContext;
 import com.sfkg.timeseries.grpc.TaskAck;
 import com.sfkg.timeseries.grpc.TimeseriesAnalysisServiceGrpc;
 import com.sfkg.timeseries.vo.ForecastResultVO;
@@ -54,6 +55,22 @@ public class ForecastGrpcClient {
             try {
                 configBuilder.setForecastHorizonSteps(Integer.parseInt(task.getForecastHorizon()));
             } catch (NumberFormatException ignored) {}
+        }
+        if (task.getFeatureSequenceIds() != null) {
+            configBuilder.addAllFeatureSequenceIds(task.getFeatureSequenceIds());
+        }
+        if (task.getObservationWindowMs() != null) {
+            configBuilder.setObservationWindowMs(task.getObservationWindowMs());
+        }
+        if (task.getMinimumPoints() != null) {
+            configBuilder.setMinimumPoints(task.getMinimumPoints());
+        }
+        if (task.getModelKey() != null) {
+            configBuilder.setModelKey(task.getModelKey());
+        }
+        if (task.getConstraintIds() != null && !task.getConstraintIds().isEmpty()) {
+            configBuilder.setSemanticContext(
+                    SemanticContext.newBuilder().addAllConstraintIds(task.getConstraintIds()).build());
         }
 
         AnalysisSyncForecastTaskRequest req = AnalysisSyncForecastTaskRequest.newBuilder()

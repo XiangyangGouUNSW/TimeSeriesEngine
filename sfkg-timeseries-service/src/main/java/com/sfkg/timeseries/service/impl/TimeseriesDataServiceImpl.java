@@ -16,6 +16,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -59,17 +60,17 @@ public class TimeseriesDataServiceImpl implements TimeseriesDataService {
     @Override
     public HistoryDataVO queryHistoryData(HistoryDataQueryRequest request) {
         validateHistoryQuery(request);
-        List<TimeseriesDataPoint> filePoints = dataFileMapper.selectByCondition(request);
-        memoryCache.replaceTimeseriesDataPoints(
-                request == null ? null : request.getSequenceId(),
-                filePoints);
+        return coreGrpcClient.queryHistoryData(request);
+    }
 
-        HistoryDataVO vo = new HistoryDataVO();
-        if (request != null) {
-            vo.setSequenceId(request.getSequenceId());
-        }
-        vo.setPoints(memoryCache.listTimeseriesDataPoints(request));
-        return vo;
+    @Override
+    public Map<String, Object> queryHistoryOverview(HistoryDataQueryRequest request) {
+        return coreGrpcClient.queryHistoryOverview(request);
+    }
+
+    @Override
+    public Map<String, Object> queryWindowData(HistoryDataQueryRequest request) {
+        return coreGrpcClient.queryWindowData(request);
     }
 
     @Override

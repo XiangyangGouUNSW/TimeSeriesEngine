@@ -1,15 +1,15 @@
 package com.sfkg.timeseries.dto;
 
-import com.fasterxml.jackson.annotation.JsonAlias;
 import java.time.LocalDateTime;
+import java.util.List;
 import lombok.Data;
 
 @Data
 public class HistoryDataQueryRequest {
 
-    @JsonAlias("sequence_id")
     private String sequenceId;
+    private List<String> sequenceIds;
     private LocalDateTime startTime;
     private LocalDateTime endTime;
-    private String granularity;
+    private Long granularity;
 }

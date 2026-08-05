@@ -1,0 +1,13 @@
+{
+  "taskId": "ett-forecast-001",
+  "taskName": "ETTh1 OT forecast",
+  "forecastObjects": ["ETTh1_OT"],
+  "featureSequenceIds": ["ETTh1_HUFL","ETTh1_HULL","ETTh1_MUFL","ETTh1_MULL","ETTh1_LUFL","ETTh1_LULL"],
+  "forecastHorizon": "24",
+  "observationWindowMs": 86400000,
+  "minimumPoints": 200,
+  "modelKey": "ett_ot_lstm_v1",
+  "constraintIds": ["ett-ot-upper-limit"],
+  "warningRule": "OT > 38",
+  "status": "ENABLE"
+}

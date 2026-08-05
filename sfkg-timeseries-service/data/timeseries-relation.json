@@ -9,4 +9,15 @@
   "confidence" : 0.86,
   "effectiveStatus" : "ENABLE",
   "confirmStatus" : "CONFIRMED"
+}, {
+  "relationId" : "ett-hufl-ot",
+  "relationName" : "HUFL influences OT",
+  "sourceCategories" : [ "ETTh1_HUFL", "ETTh1_HULL" ],
+  "targetCategoryId" : "ETTh1_OT",
+  "targetCategoryName" : null,
+  "relationType" : "CAUSAL",
+  "lagRange" : "1",
+  "confidence" : 0.85,
+  "effectiveStatus" : "ENABLE",
+  "confirmStatus" : "CONFIRMED"
 } ]

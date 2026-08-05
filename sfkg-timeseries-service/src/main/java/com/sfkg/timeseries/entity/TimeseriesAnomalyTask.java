@@ -14,5 +14,6 @@ public class TimeseriesAnomalyTask {
     private Integer contextLength;
     private Long slideStepMs;
     private Integer minimumPoints;
+    private List<String> constraintIds;
     private String status;
 }

@@ -8,6 +8,7 @@ import com.sfkg.timeseries.dto.SyncResult;
 import com.sfkg.timeseries.dto.TimeseriesDataSaveRequest;
 import com.sfkg.timeseries.entity.TimeseriesAnomalyTask;
 import com.sfkg.timeseries.entity.TimeseriesConstraint;
+import com.sfkg.timeseries.entity.TimeseriesDataPoint;
 import com.sfkg.timeseries.entity.TimeseriesForecastTask;
 import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.entity.TimeseriesRelation;
@@ -19,16 +20,25 @@ import com.sfkg.timeseries.grpc.OperationCode;
 import com.sfkg.timeseries.grpc.OperationResult;
 import com.sfkg.timeseries.grpc.QueryHistoryDataRequest;
 import com.sfkg.timeseries.grpc.QueryHistoryDataResponse;
+import com.sfkg.timeseries.grpc.QueryHistoryOverviewRequest;
+import com.sfkg.timeseries.grpc.QueryHistoryOverviewResponse;
+import com.sfkg.timeseries.grpc.QueryWindowDataRequest;
+import com.sfkg.timeseries.grpc.QueryWindowDataResponse;
+import com.sfkg.timeseries.grpc.RawTimeseriesPoint;
 import com.sfkg.timeseries.grpc.RuntimeConstraintConfig;
 import com.sfkg.timeseries.grpc.RuntimeInstanceConfig;
+import com.sfkg.timeseries.grpc.RuntimeRelationConfig;
+import com.sfkg.timeseries.grpc.RuntimeRelationSource;
 import com.sfkg.timeseries.grpc.SyncConfigResponse;
 import com.sfkg.timeseries.grpc.SyncConstraintsRequest;
 import com.sfkg.timeseries.grpc.SyncInstanceConfigsRequest;
+import com.sfkg.timeseries.grpc.SyncRelationsRequest;
 import com.sfkg.timeseries.grpc.SyncResponse;
 import com.sfkg.timeseries.grpc.SyncTaskStatusRequest;
 import com.sfkg.timeseries.grpc.TimeseriesCoreServiceGrpc;
 import com.sfkg.timeseries.grpc.TimeseriesIngestData;
 import com.sfkg.timeseries.grpc.TimeseriesValue;
+import com.sfkg.timeseries.grpc.WindowData;
 import com.sfkg.timeseries.vo.HistoryDataVO;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
@@ -148,9 +158,43 @@ public class TimeseriesCoreGrpcClient {
         if (relation == null) {
             return SyncResult.fail("relation is null");
         }
-        // Relation sync delegates to the new proto format but is not the focus of this change.
+
+        RuntimeRelationConfig.Builder relationBuilder = RuntimeRelationConfig.newBuilder()
+                .setRelationId(nullToEmpty(relation.getRelationId()))
+                .setTargetCategoryId(nullToEmpty(relation.getTargetCategoryId()))
+                .setRelationType(nullToEmpty(relation.getRelationType()))
+                .setConfidence(relation.getConfidence() != null ? relation.getConfidence().doubleValue() : 0.0)
+                .setEnabled("ENABLE".equalsIgnoreCase(relation.getEffectiveStatus()));
+
+        if (relation.getSourceCategories() != null) {
+            for (String sourceCatId : relation.getSourceCategories()) {
+                RuntimeRelationSource.Builder sourceBuilder = RuntimeRelationSource.newBuilder()
+                        .setSourceCategoryId(nullToEmpty(sourceCatId))
+                        .setWeight(1.0);
+                long lag = parseLag(relation.getLagRange());
+                if (lag >= 0) {
+                    sourceBuilder.setFixedLag(lag);
+                }
+                relationBuilder.addSources(sourceBuilder.build());
+            }
+        }
+
+        SyncRelationsRequest req = SyncRelationsRequest.newBuilder()
+                .addItems(relationBuilder.build())
+                .build();
         LOG.info("[{}] -> syncRelations relationId={} at {}", SERVICE_NAME, relation.getRelationId(), address);
-        return SyncResult.success();
+        return callCoreSync(address, stub -> stub.syncRelations(req), "syncRelations");
+    }
+
+    private long parseLag(String lagRange) {
+        if (lagRange == null || lagRange.isBlank()) {
+            return -1;
+        }
+        try {
+            return Long.parseLong(lagRange.trim());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     // ── anomaly / forecast task config ────────────────────────────────
@@ -269,31 +313,40 @@ public class TimeseriesCoreGrpcClient {
         if (request == null) {
             return new HistoryDataVO();
         }
-        QueryHistoryDataRequest req = QueryHistoryDataRequest.newBuilder()
-                .setSequenceId(nullToEmpty(request.getSequenceId()))
-                .setStartTime(request.getStartTime() != null ? request.getStartTime().toString() : "")
-                .setEndTime(request.getEndTime() != null ? request.getEndTime().toString() : "")
-                .setGranularity(nullToEmpty(request.getGranularity()))
-                .build();
-        LOG.info("[{}] -> queryHistoryData seq={} at {}", SERVICE_NAME, request.getSequenceId(), address);
+        QueryHistoryDataRequest.Builder reqBuilder = QueryHistoryDataRequest.newBuilder();
+        if (request.getSequenceIds() != null && !request.getSequenceIds().isEmpty()) {
+            reqBuilder.addAllSequenceIds(request.getSequenceIds());
+        } else if (request.getSequenceId() != null) {
+            reqBuilder.addSequenceIds(request.getSequenceId());
+        }
+        if (request.getStartTime() != null) {
+            reqBuilder.setStartTime(request.getStartTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+        }
+        if (request.getEndTime() != null) {
+            reqBuilder.setEndTime(request.getEndTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+        }
+        if (request.getGranularity() != null) {
+            reqBuilder.setGranularity(request.getGranularity());
+        }
+        QueryHistoryDataRequest req = reqBuilder.build();
+        LOG.info("[{}] -> queryHistoryData seqs={} at {}", SERVICE_NAME, req.getSequenceIdsList(), address);
 
         ManagedChannel channel = newChannel(address);
         try {
             QueryHistoryDataResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
-                    .withDeadlineAfter(3, TimeUnit.SECONDS)
+                    .withDeadlineAfter(5, TimeUnit.SECONDS)
                     .queryHistoryData(req);
-            LOG.info("[{}] <- queryHistoryData seq={} returned payload {} chars",
-                    SERVICE_NAME, resp.getSequenceId(),
-                    resp.getPayloadJson() != null ? resp.getPayloadJson().length() : 0);
+            OperationResult op = resp.getOperation();
+            LOG.info("[{}] <- queryHistoryData code={} points={}",
+                    SERVICE_NAME, op.getCode(), resp.getData().getPointsCount());
+
             HistoryDataVO vo = new HistoryDataVO();
-            vo.setSequenceId(resp.getSequenceId());
-            if (resp.getPayloadJson() != null && !resp.getPayloadJson().isBlank()) {
-                try {
-                    HistoryDataVO parsed = objectMapper.readValue(resp.getPayloadJson(), HistoryDataVO.class);
-                    vo.setPoints(parsed.getPoints());
-                } catch (JsonProcessingException e) {
-                    LOG.warn("[{}] failed to parse history data payload", SERVICE_NAME, e);
-                }
+            if (resp.hasData() && resp.getData().getPointsCount() > 0) {
+                String firstSeq = resp.getData().getPoints(0).getSequenceId();
+                vo.setSequenceId(firstSeq);
+                vo.setPoints(resp.getData().getPointsList().stream()
+                        .map(this::toDataPoint)
+                        .collect(java.util.stream.Collectors.toList()));
             }
             return vo;
         } catch (StatusRuntimeException e) {
@@ -304,12 +357,133 @@ public class TimeseriesCoreGrpcClient {
         }
     }
 
-    // ── placeholder stubs ──────────────────────────────────────────────
-
-    public Map<String, Object> queryWindowData(String sequenceId) {
-        LOG.debug("[{}] queryWindowData seq={} - stub", SERVICE_NAME, sequenceId);
-        return Map.of();
+    private TimeseriesDataPoint toDataPoint(RawTimeseriesPoint p) {
+        TimeseriesDataPoint dp = new TimeseriesDataPoint();
+        dp.setSequenceId(p.getSequenceId());
+        dp.setTimestamp(p.getTime() > 0
+                ? java.time.LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(p.getTime()), java.time.ZoneId.systemDefault())
+                : null);
+        if (p.hasValue()) {
+            TimeseriesValue v = p.getValue();
+            switch (v.getKindCase()) {
+                case DOUBLE_VALUE -> dp.setValue(java.math.BigDecimal.valueOf(v.getDoubleValue()));
+                case INT64_VALUE -> dp.setValue(java.math.BigDecimal.valueOf(v.getInt64Value()));
+                case BOOL_VALUE -> dp.setValue(v.getBoolValue() ? java.math.BigDecimal.ONE : java.math.BigDecimal.ZERO);
+                case STRING_VALUE -> {
+                    try { dp.setValue(new java.math.BigDecimal(v.getStringValue())); } catch (Exception ignored) {}
+                }
+                default -> {}
+            }
+        }
+        return dp;
     }
+
+    // ── history overview ──────────────────────────────────────────────
+
+    public Map<String, Object> queryHistoryOverview(HistoryDataQueryRequest request) {
+        String address = grpcClientProperties.getCoreAddress();
+        if (isBlank(address)) {
+            return Map.of("error", "core address not configured");
+        }
+        QueryHistoryOverviewRequest.Builder b = QueryHistoryOverviewRequest.newBuilder();
+        if (request != null && request.getSequenceIds() != null) {
+            b.addAllSequenceIds(request.getSequenceIds());
+        }
+        if (request != null && request.getStartTime() != null) {
+            b.setStartTime(request.getStartTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+        }
+        if (request != null && request.getEndTime() != null) {
+            b.setEndTime(request.getEndTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+        }
+        LOG.info("[{}] -> queryHistoryOverview at {}", SERVICE_NAME, address);
+        ManagedChannel channel = newChannel(address);
+        try {
+            QueryHistoryOverviewResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
+                    .withDeadlineAfter(5, TimeUnit.SECONDS)
+                    .queryHistoryOverview(b.build());
+            Map<String, Object> result = new java.util.LinkedHashMap<>();
+            result.put("totalPointCount", resp.getTotalPointCount());
+            result.put("sequenceCount", resp.getSequenceCount());
+            result.put("columnNames", resp.getColumnNamesList());
+            result.put("firstTime", resp.hasFirstTime() ? resp.getFirstTime() : null);
+            result.put("lastTime", resp.hasLastTime() ? resp.getLastTime() : null);
+            result.put("series", resp.getSeriesList().stream().map(s -> {
+                Map<String, Object> m = new java.util.LinkedHashMap<>();
+                m.put("sequenceId", s.getSequenceId());
+                m.put("pointCount", s.getPointCount());
+                m.put("firstTime", s.hasFirstTime() ? s.getFirstTime() : null);
+                m.put("lastTime", s.hasLastTime() ? s.getLastTime() : null);
+                return m;
+            }).collect(java.util.stream.Collectors.toList()));
+            LOG.info("[{}] <- queryHistoryOverview total={} seqs={}", SERVICE_NAME, resp.getTotalPointCount(), resp.getSequenceCount());
+            return result;
+        } catch (StatusRuntimeException e) {
+            LOG.warn("[{}] queryHistoryOverview failed: {}", SERVICE_NAME, e.getStatus().getDescription());
+            return Map.of("error", e.getStatus().getDescription());
+        } finally {
+            channel.shutdown();
+        }
+    }
+
+    // ── window data ──────────────────────────────────────────────────
+
+    public Map<String, Object> queryWindowData(HistoryDataQueryRequest request) {
+        String address = grpcClientProperties.getCoreAddress();
+        if (isBlank(address)) {
+            return Map.of("error", "core address not configured");
+        }
+        QueryWindowDataRequest.Builder b = QueryWindowDataRequest.newBuilder();
+        if (request != null && request.getSequenceIds() != null) {
+            b.addAllSequenceIds(request.getSequenceIds());
+        }
+        if (request != null && request.getStartTime() != null) {
+            b.setStartTime(request.getStartTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+        }
+        if (request != null && request.getEndTime() != null) {
+            b.setEndTime(request.getEndTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+        }
+        LOG.info("[{}] -> queryWindowData at {}", SERVICE_NAME, address);
+        ManagedChannel channel = newChannel(address);
+        try {
+            QueryWindowDataResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
+                    .withDeadlineAfter(5, TimeUnit.SECONDS)
+                    .queryWindowData(b.build());
+            Map<String, Object> result = new java.util.LinkedHashMap<>();
+            if (resp.hasData()) {
+                WindowData wd = resp.getData();
+                result.put("windowStartTime", wd.getWindowStartTime());
+                result.put("windowEndTime", wd.getWindowEndTime());
+                result.put("sequences", wd.getSequencesList().stream().map(seq -> {
+                    Map<String, Object> sm = new java.util.LinkedHashMap<>();
+                    sm.put("sequenceId", seq.getSequenceId());
+                    sm.put("points", seq.getPointsList().stream().map(p -> {
+                        Map<String, Object> pm = new java.util.LinkedHashMap<>();
+                        pm.put("time", p.getTime());
+                        if (p.hasValue()) {
+                            TimeseriesValue v = p.getValue();
+                            switch (v.getKindCase()) {
+                                case DOUBLE_VALUE -> pm.put("value", v.getDoubleValue());
+                                case INT64_VALUE -> pm.put("value", v.getInt64Value());
+                                default -> pm.put("value", 0);
+                            }
+                        }
+                        return pm;
+                    }).collect(java.util.stream.Collectors.toList()));
+                    return sm;
+                }).collect(java.util.stream.Collectors.toList()));
+            }
+            LOG.info("[{}] <- queryWindowData seqs={}", SERVICE_NAME,
+                    resp.hasData() ? resp.getData().getSequencesCount() : 0);
+            return result;
+        } catch (StatusRuntimeException e) {
+            LOG.warn("[{}] queryWindowData failed: {}", SERVICE_NAME, e.getStatus().getDescription());
+            return Map.of("error", e.getStatus().getDescription());
+        } finally {
+            channel.shutdown();
+        }
+    }
+
+    // ── placeholder stubs ──────────────────────────────────────────────
 
     public Map<String, Object> queryStatistics(String sequenceId) {
         LOG.debug("[{}] queryStatistics seq={} - stub", SERVICE_NAME, sequenceId);

@@ -54,13 +54,19 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
         TimeseriesEvent event = new TimeseriesEvent();
         event.setEventId(eventId);
         event.setEventName("anomaly event " + eventId);
-        event.setEventType("ANOMALY");
-        event.setEventSource("ANOMALY_DETECTION");
-        event.setEventLevel(result == null ? null : result.getAnomalyLevel());
+        event.setEventType(stripAnomalyPrefix(result == null ? null : result.getEventType(),
+                "ANOMALY"));
+        event.setEventSource(result != null && result.getSource() != null
+                ? result.getSource() : "ANOMALY_DETECTION");
+        event.setEventLevel(stripSeverityPrefix(result == null ? null : result.getAnomalyLevel()));
         event.setRelatedSequences(result == null || result.getSequenceId() == null
                 ? List.of()
                 : List.of(result.getSequenceId()));
-        event.setEventTime(LocalDateTime.now());
+        event.setRelatedRules(result != null ? result.getConstraintIds() : null);
+        event.setEventTime(result != null && result.getEventTime() != null
+                ? result.getEventTime() : LocalDateTime.now());
+        event.setEventDescription(result != null
+                ? buildAnomalyDescription(result) : null);
 
         eventMapper.insert(event);
         memoryCache.putEvent(event);
@@ -115,5 +121,34 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
 
     private boolean beforeOrEqual(LocalDateTime endTime, LocalDateTime actual) {
         return endTime == null || (actual != null && !actual.isAfter(endTime));
+    }
+
+    private String stripSeverityPrefix(String raw) {
+        if (raw == null) return null;
+        return raw.startsWith("SEVERITY_") ? raw.substring("SEVERITY_".length()) : raw;
+    }
+
+    private String stripAnomalyPrefix(String raw, String fallback) {
+        if (raw == null) return fallback;
+        if (raw.startsWith("ANOMALY_EVENT_TYPE_")) return raw.substring("ANOMALY_EVENT_TYPE_".length());
+        return raw;
+    }
+
+    private String buildAnomalyDescription(AnomalyResultVO result) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Anomaly detected");
+        if (result.getSequenceId() != null) {
+            sb.append(" on sequence ").append(result.getSequenceId());
+        }
+        if (result.getAnomalyLevel() != null) {
+            sb.append(" with severity ").append(stripSeverityPrefix(result.getAnomalyLevel()));
+        }
+        if (result.getValues() != null && !result.getValues().isEmpty()) {
+            sb.append(", values: ").append(result.getValues());
+        }
+        if (result.getConstraintIds() != null && !result.getConstraintIds().isEmpty()) {
+            sb.append(", triggered constraints: ").append(String.join(", ", result.getConstraintIds()));
+        }
+        return sb.toString();
     }
 }

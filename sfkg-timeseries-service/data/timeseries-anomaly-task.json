@@ -7,6 +7,7 @@
   "contextLength" : 96,
   "slideStepMs" : 60000,
   "minimumPoints" : 200,
+  "constraintIds" : null,
   "status" : "ENABLE"
 }, {
   "taskId" : "7001",
@@ -17,6 +18,7 @@
   "contextLength" : 96,
   "slideStepMs" : 60000,
   "minimumPoints" : 200,
+  "constraintIds" : null,
   "status" : "DISABLE"
 }, {
   "taskId" : "ett-anomaly-002",
@@ -27,6 +29,7 @@
   "contextLength" : 96,
   "slideStepMs" : 3600000,
   "minimumPoints" : 200,
+  "constraintIds" : null,
   "status" : "ENABLE"
 }, {
   "taskId" : "ett-anomaly-001",
@@ -37,5 +40,6 @@
   "contextLength" : 96,
   "slideStepMs" : 3600000,
   "minimumPoints" : 200,
+  "constraintIds" : [ "ett-ot-upper-limit" ],
   "status" : "ENABLE"
 } ]

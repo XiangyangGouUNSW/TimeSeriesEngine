@@ -14,6 +14,8 @@ service TimeseriesCoreService {
   rpc ingestData (IngestDataRequest) returns (IngestDataResponse);
   rpc SyncTaskStatus (SyncTaskStatusRequest) returns (SyncResponse);
   rpc QueryHistoryData (QueryHistoryDataRequest) returns (QueryHistoryDataResponse);
+  rpc queryHistoryOverview (QueryHistoryOverviewRequest) returns (QueryHistoryOverviewResponse);
+  rpc queryWindowData (QueryWindowDataRequest) returns (QueryWindowDataResponse);
 }
 
 // ── Shared enums & messages ───────────────────────────────────────
@@ -169,15 +171,69 @@ message SyncTaskStatusRequest {
 }
 
 message QueryHistoryDataRequest {
-  string sequence_id = 1;
-  string start_time = 2;
-  string end_time = 3;
-  string granularity = 4;
+  repeated string sequence_ids = 1;
+  int64 start_time = 2;
+  int64 end_time = 3;
+  optional int64 granularity = 4;
 }
 
 message QueryHistoryDataResponse {
+  OperationResult operation = 1;
+  TimeseriesBatch data = 2;
+}
+
+// ── History overview ──────────────────────────────────────────────
+
+message QueryHistoryOverviewRequest {
+  repeated string sequence_ids = 1;
+  optional int64 start_time = 2;
+  optional int64 end_time = 3;
+}
+
+message HistorySeriesSummary {
   string sequence_id = 1;
-  string payload_json = 2;
+  uint64 point_count = 2;
+  optional int64 first_time = 3;
+  optional int64 last_time = 4;
+}
+
+message QueryHistoryOverviewResponse {
+  OperationResult operation = 1;
+  uint64 total_point_count = 2;
+  uint64 sequence_count = 3;
+  repeated string column_names = 4;
+  optional int64 first_time = 5;
+  optional int64 last_time = 6;
+  repeated HistorySeriesSummary series = 7;
+}
+
+// ── Window data query ─────────────────────────────────────────────
+
+message TimeValuePoint {
+  int64 time = 1;
+  TimeseriesValue value = 2;
+}
+
+message SequenceWindow {
+  string sequence_id = 1;
+  repeated TimeValuePoint points = 2;
+}
+
+message WindowData {
+  int64 window_start_time = 1;
+  int64 window_end_time = 2;
+  repeated SequenceWindow sequences = 3;
+}
+
+message QueryWindowDataRequest {
+  repeated string sequence_ids = 1;
+  optional int64 start_time = 2;
+  optional int64 end_time = 3;
+}
+
+message QueryWindowDataResponse {
+  OperationResult operation = 1;
+  WindowData data = 2;
 }
 
 // ── Event receiver (C++ / external → Java) ────────────────────────

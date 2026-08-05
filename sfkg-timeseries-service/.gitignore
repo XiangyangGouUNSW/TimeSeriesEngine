@@ -1,6 +1,7 @@
 # Maven
 target/
 data/
+docs/
 *.class
 *.jar
 *.war

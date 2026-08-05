@@ -1,0 +1,12 @@
+{
+  "relationId": "ett-hufl-ot",
+  "relationName": "HUFL influences OT",
+  "sourceCategories": ["ETTh1_HUFL", "ETTh1_HULL"],
+  "targetCategoryId": "ETTh1_OT",
+  "relationType": "CAUSAL",
+  "lagRange": "1",
+  "confidence": 0.85,
+  "relationDescription": "High useful load affects oil temperature with 1h lag",
+  "effectiveStatus": "ENABLE",
+  "confirmStatus": "CONFIRMED"
+}

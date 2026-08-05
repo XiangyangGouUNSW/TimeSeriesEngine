@@ -6,6 +6,7 @@ import com.sfkg.timeseries.entity.TimeseriesCategory;
 import com.sfkg.timeseries.entity.TimeseriesConstraint;
 import com.sfkg.timeseries.entity.TimeseriesDataPoint;
 import com.sfkg.timeseries.entity.TimeseriesEvent;
+import com.sfkg.timeseries.entity.TimeseriesForecastResult;
 import com.sfkg.timeseries.entity.TimeseriesForecastTask;
 import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.entity.TimeseriesRelation;
@@ -16,6 +17,7 @@ import com.sfkg.timeseries.mapper.TimeseriesCategoryMapper;
 import com.sfkg.timeseries.mapper.TimeseriesConstraintMapper;
 import com.sfkg.timeseries.mapper.TimeseriesDataFileMapper;
 import com.sfkg.timeseries.mapper.TimeseriesEventMapper;
+import com.sfkg.timeseries.mapper.TimeseriesForecastResultMapper;
 import com.sfkg.timeseries.mapper.TimeseriesForecastTaskMapper;
 import com.sfkg.timeseries.mapper.TimeseriesInstanceConfigMapper;
 import com.sfkg.timeseries.mapper.TimeseriesRelationMapper;
@@ -34,6 +36,7 @@ public class TimeseriesCacheLoader {
     private final ObjectProvider<TimeseriesEventMapper> eventMapper;
     private final ObjectProvider<TimeseriesAnomalyTaskMapper> anomalyTaskMapper;
     private final ObjectProvider<TimeseriesAnomalyResultMapper> anomalyResultMapper;
+    private final ObjectProvider<TimeseriesForecastResultMapper> forecastResultMapper;
     private final ObjectProvider<TimeseriesForecastTaskMapper> forecastTaskMapper;
     private final ObjectProvider<TimeseriesSyncLogMapper> syncLogMapper;
     private final ObjectProvider<TimeseriesDataFileMapper> dataFileMapper;
@@ -46,6 +49,7 @@ public class TimeseriesCacheLoader {
             ObjectProvider<TimeseriesEventMapper> eventMapper,
             ObjectProvider<TimeseriesAnomalyTaskMapper> anomalyTaskMapper,
             ObjectProvider<TimeseriesAnomalyResultMapper> anomalyResultMapper,
+            ObjectProvider<TimeseriesForecastResultMapper> forecastResultMapper,
             ObjectProvider<TimeseriesForecastTaskMapper> forecastTaskMapper,
             ObjectProvider<TimeseriesSyncLogMapper> syncLogMapper,
             ObjectProvider<TimeseriesDataFileMapper> dataFileMapper) {
@@ -56,6 +60,7 @@ public class TimeseriesCacheLoader {
         this.eventMapper = eventMapper;
         this.anomalyTaskMapper = anomalyTaskMapper;
         this.anomalyResultMapper = anomalyResultMapper;
+        this.forecastResultMapper = forecastResultMapper;
         this.forecastTaskMapper = forecastTaskMapper;
         this.syncLogMapper = syncLogMapper;
         this.dataFileMapper = dataFileMapper;
@@ -93,6 +98,11 @@ public class TimeseriesCacheLoader {
 
     public List<TimeseriesAnomalyResult> loadAnomalyResults() {
         TimeseriesAnomalyResultMapper mapper = anomalyResultMapper.getIfAvailable();
+        return mapper == null ? List.of() : emptyIfNull(mapper.selectAll());
+    }
+
+    public List<TimeseriesForecastResult> loadForecastResults() {
+        TimeseriesForecastResultMapper mapper = forecastResultMapper.getIfAvailable();
         return mapper == null ? List.of() : emptyIfNull(mapper.selectAll());
     }
 

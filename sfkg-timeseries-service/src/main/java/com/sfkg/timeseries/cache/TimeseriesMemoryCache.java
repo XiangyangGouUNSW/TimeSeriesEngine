@@ -7,6 +7,7 @@ import com.sfkg.timeseries.entity.TimeseriesConstraint;
 import com.sfkg.timeseries.dto.HistoryDataQueryRequest;
 import com.sfkg.timeseries.entity.TimeseriesDataPoint;
 import com.sfkg.timeseries.entity.TimeseriesEvent;
+import com.sfkg.timeseries.entity.TimeseriesForecastResult;
 import com.sfkg.timeseries.entity.TimeseriesForecastTask;
 import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.entity.TimeseriesRelation;
@@ -34,6 +35,7 @@ public class TimeseriesMemoryCache {
     private final List<TimeseriesAnomalyTask> anomalyTasks = new CopyOnWriteArrayList<>();
     private final List<TimeseriesForecastTask> forecastTasks = new CopyOnWriteArrayList<>();
     private final List<TimeseriesAnomalyResult> anomalyResults = new CopyOnWriteArrayList<>();
+    private final List<TimeseriesForecastResult> forecastResults = new CopyOnWriteArrayList<>();
     private final List<TimeseriesSyncLog> syncLogs = new CopyOnWriteArrayList<>();
     private final List<TimeseriesDataPoint> dataPoints = new CopyOnWriteArrayList<>();
 
@@ -59,6 +61,7 @@ public class TimeseriesMemoryCache {
             case ANOMALY_TASK -> anomalyTasks.clear();
             case FORECAST_TASK -> forecastTasks.clear();
             case ANOMALY_RESULT -> anomalyResults.clear();
+            case FORECAST_RESULT -> forecastResults.clear();
             case SYNC_LOG -> syncLogs.clear();
             case TIMESERIES_DATA -> dataPoints.clear();
         }
@@ -233,6 +236,22 @@ public class TimeseriesMemoryCache {
 
     public List<TimeseriesAnomalyResult> listAnomalyResults() {
         return List.copyOf(anomalyResults);
+    }
+
+    public void replaceForecastResults(Collection<TimeseriesForecastResult> entities) {
+        replaceAll(forecastResults, entities);
+        markLoaded(CachedTable.FORECAST_RESULT);
+    }
+
+    public void putForecastResult(TimeseriesForecastResult entity) {
+        if (entity != null && entity.getResultId() != null) {
+            upsert(forecastResults, item -> entity.getResultId().equals(item.getResultId()), entity);
+            markLoaded(CachedTable.FORECAST_RESULT);
+        }
+    }
+
+    public List<TimeseriesForecastResult> listForecastResults() {
+        return List.copyOf(forecastResults);
     }
 
     public void replaceSyncLogs(Collection<TimeseriesSyncLog> entities) {
