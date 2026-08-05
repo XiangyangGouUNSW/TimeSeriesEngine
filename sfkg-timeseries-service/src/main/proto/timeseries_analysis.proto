@@ -5,6 +5,8 @@ package sfkg.timeseries.analysis.v1;
 option java_multiple_files = true;
 option java_package = "com.sfkg.timeseries.grpc";
 
+import "google/protobuf/empty.proto";
+
 // ── Analysis service: Java → Python analysis engine ───────────────
 
 service TimeseriesAnalysisService {
@@ -20,7 +22,7 @@ service TimeseriesAnalysisService {
 // ── Analysis result receiver: Python → Java ───────────────────────
 
 service AnalysisResultReceiverService {
-  rpc ReceiveAnomalyResult (AnomalyResultMessage) returns (ResultAck);
+  rpc ReceiveAnomalyResult (AnomalyResultMessage) returns (google.protobuf.Empty);
 }
 
 // ── Enums ─────────────────────────────────────────────────────────
@@ -85,11 +87,6 @@ message AnomalyResultMessage {
   repeated double values = 4;
   Severity severity = 5;
   AnomalySource source = 6;
-}
-
-message ResultAck {
-  bool accepted = 1;
-  string message = 2;
 }
 
 // ── Task sync messages ────────────────────────────────────────────

@@ -6,7 +6,7 @@ import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.entity.TimeseriesAnomalyResult;
 import com.sfkg.timeseries.grpc.AnalysisResultReceiverServiceGrpc;
 import com.sfkg.timeseries.grpc.AnomalyResultMessage;
-import com.sfkg.timeseries.grpc.ResultAck;
+import com.google.protobuf.Empty;
 import com.sfkg.timeseries.mapper.TimeseriesAnomalyResultMapper;
 import com.sfkg.timeseries.service.TimeseriesAnomalyResultService;
 import com.sfkg.timeseries.vo.AnomalyResultVO;
@@ -43,7 +43,7 @@ public class AnomalyResultReceiverGrpcService
 
     @Override
     public void receiveAnomalyResult(AnomalyResultMessage request,
-                                     StreamObserver<ResultAck> responseObserver) {
+                                     StreamObserver<Empty> responseObserver) {
         try {
             LOG.info("gRPC receiveAnomalyResult: eventType={}, severity={}, source={}, seqs={}",
                     request.getEventType(), request.getSeverity(), request.getSource(),
@@ -63,21 +63,12 @@ public class AnomalyResultReceiverGrpcService
             vo.setAnomalyLevel(entity.getSeverity());
             anomalyResultService.createAnomalyEvent(vo);
 
-            ResultAck ack = ResultAck.newBuilder()
-                    .setAccepted(true)
-                    .setMessage("anomaly result received and stored")
-                    .build();
-            responseObserver.onNext(ack);
+            responseObserver.onNext(Empty.getDefaultInstance());
             responseObserver.onCompleted();
             LOG.info("gRPC receiveAnomalyResult success: resultId={}", entity.getResultId());
         } catch (Exception e) {
             LOG.error("gRPC receiveAnomalyResult failed", e);
-            ResultAck ack = ResultAck.newBuilder()
-                    .setAccepted(false)
-                    .setMessage("failed: " + e.getMessage())
-                    .build();
-            responseObserver.onNext(ack);
-            responseObserver.onCompleted();
+            responseObserver.onError(e);
         }
     }
 
