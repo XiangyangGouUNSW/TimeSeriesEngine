@@ -109,6 +109,46 @@ class FakeCoreService(pb_grpc.TimeseriesCoreServiceServicer):
             data=pb.TimeseriesBatch(points=points),
         )
 
+    def queryWindowData(self, request, context):
+        """假实时窗口：返回每条序列最后 3 个点（模拟热窗口）。"""
+        names = [self._col(sid) for sid in request.sequence_ids]
+        n = len(self._timestamps_ms)
+        idx = list(range(max(0, n - 3), n))
+        sequences = []
+        for sid, name in zip(request.sequence_ids, names):
+            points = [
+                pb.TimeValuePoint(
+                    time=self._timestamps_ms[i],
+                    value=pb.TimeseriesValue(double_value=self._columns[name][i]),
+                )
+                for i in idx
+            ]
+            sequences.append(pb.SequenceWindow(sequence_id=sid, points=points))
+        return pb.QueryWindowDataResponse(
+            operation=self._ok(),
+            data=pb.WindowData(
+                window_start_time=self._timestamps_ms[idx[0]],
+                window_end_time=self._timestamps_ms[idx[-1]],
+                sequences=sequences,
+            ),
+        )
+
+    def checkConstraints(self, request, context):
+        """空壳约束检查：直接返回"违反约束"（假数据，演示通讯用）。"""
+        violation = pb.ConstraintViolation(
+            constraint_id="demo-constraint-001",
+            anchor_time=0,
+            lower_bound=0.0,
+            upper_bound=80.0,
+            evaluated_value=85.0,
+        )
+        return pb.CheckConstraintsResponse(
+            operation=self._ok(),
+            satisfied=False,
+            violations=[violation],
+            evaluated_count=1,
+        )
+
 
 def serve(csv_path: str, port: int = 50051) -> None:
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))

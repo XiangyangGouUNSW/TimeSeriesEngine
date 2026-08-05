@@ -1,9 +1,11 @@
 """GrpcCoreDataClient：通过 gRPC 访问真正的 C 端（sfkg-timeseries-core）。
 
-实现 CoreDataClient 的 3 个方法：
-  get_sequence_data_scale → queryHistoryOverview
-  get_history             → queryHistoryData + raw_points_to_aligned
-  get_aligned_window      → queryHistoryData 拉末尾拼（queryWindowData 好后再换）
+实现 CoreDataClient 的方法：
+  get_sequence_data_scale → queryHistoryOverview（数据规模）
+  get_history             → queryHistoryData + raw_points_to_aligned（历史数据）
+  get_aligned_window      → queryHistoryData 拉末尾拼（窗口）
+  get_real_time_window    → queryWindowData（实时窗口，异常检测输入）
+  check_constraints       → checkConstraints（约束检查，异常/预测共用）
 
 用法：config.yaml 的 core.provider 改成 "grpc" 后，main.py 自动用这个类。
 """
@@ -134,6 +136,42 @@ class GrpcCoreDataClient(CoreDataClient):
             sequence_ids=sequence_ids,
             values=chunk.values[-window_size:],
         )
+
+    def get_real_time_window(self, sequence_ids: list[str]):
+        """调 C 的 queryWindowData 取实时窗口（异常检测的模型输入）。
+
+        返回 C 的 WindowData（按序列组织的原始点，未对齐）。
+        """
+        resp = self._call(
+            self._stub.queryWindowData,
+            pb.QueryWindowDataRequest(sequence_ids=list(sequence_ids)),
+        )
+        return resp.data
+
+    def check_constraints(
+        self,
+        task_id: str,
+        sequence_ids: list[str] | None = None,
+        aligned_data=None,
+    ):
+        """调 C 的 checkConstraints 做约束检查。
+
+        - 异常检测：传 sequence_ids，让 C 检查它自己的实时窗口；
+        - 预测预警：传 aligned_data（把预测值包成 AlignedWindowData），
+          让 C 检查未来预测值是否会违反约束。
+        返回 (satisfied, violations)。
+        """
+        if aligned_data is not None:
+            request = pb.CheckConstraintsRequest(
+                task_id=task_id, aligned_data=aligned_data)
+        else:
+            request = pb.CheckConstraintsRequest(
+                task_id=task_id,
+                window_query=pb.QueryWindowDataRequest(
+                    sequence_ids=list(sequence_ids or [])),
+            )
+        resp = self._call(self._stub.checkConstraints, request)
+        return resp.satisfied, list(resp.violations)
 
     def _to_point(self, raw):
         """proto RawTimeseriesPoint → (time, sequence_id, value)。

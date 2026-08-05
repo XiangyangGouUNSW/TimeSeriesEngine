@@ -11,6 +11,11 @@ core:
   port: 50052               # C 端 gRPC 端口（C 端默认监听 50051）
   timeout_seconds: 30.0     # 调 C 端超时
 
+s:
+  address: "localhost"      # S 端服务地址（S 和 P 同机，用 localhost）
+  port: 9106                # S 端服务端口（analysis-receiver-port，S 敲定）
+  timeout_seconds: 10.0     # 调 S 端超时
+
 data:
   # mock 数据源：用 ETT 数据集模拟 C 端 TDengine 里的数据
   csv_path: "data/ETT-small/ETTh1.csv"   # 相对本模块目录（模块自包含）

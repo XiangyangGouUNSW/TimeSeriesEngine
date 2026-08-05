@@ -27,21 +27,32 @@ def main() -> None:
     stub = pb_grpc.TimeseriesAnalysisServiceStub(grpc.insecure_channel(ADDRESS))
 
     # 1. 同步异常任务
-    ack = stub.SyncAnomalyTask(pb.SyncAnomalyTaskRequest(
+    ack = stub.SyncAnomalyTask(pb.AnalysisSyncAnomalyTaskRequest(
         meta=_meta("r1"),
-        task=pb.AnomalyTaskConfig(task_id="task-anomaly-001", task_name="测试异常任务"),
+        task=pb.AnomalyTaskConfig(
+            task_id="task-anomaly-001",
+            task_name="测试异常任务",
+            sequence_ids=["ETTh1_OT", "ETTh1_HUFL"],
+        ),
     ))
     print("SyncAnomalyTask    ->", pb.AnalysisStatus.Name(ack.status), ack.message)
 
     # 2. 同步预测任务
-    ack = stub.SyncForecastTask(pb.SyncForecastTaskRequest(
+    ack = stub.SyncForecastTask(pb.AnalysisSyncForecastTaskRequest(
         meta=_meta("r2"),
-        task=pb.ForecastTaskConfig(task_id="task-forecast-001", task_name="测试预测任务"),
+        task=pb.ForecastTaskConfig(
+            task_id="task-forecast-001",
+            task_name="测试预测任务",
+            target_sequence_ids=["ETTh1_OT"],
+            feature_sequence_ids=["ETTh1_HUFL", "ETTh1_HULL"],
+            forecast_horizon_steps=12,
+            minimum_points=100,
+        ),
     ))
     print("SyncForecastTask   ->", pb.AnalysisStatus.Name(ack.status), ack.message)
 
     # 3. 任务状态
-    ack = stub.UpdateTaskStatus(pb.UpdateTaskStatusRequest(
+    ack = stub.UpdateTaskStatus(pb.AnalysisUpdateTaskStatusRequest(
         meta=_meta("r3"),
         task_id="task-anomaly-001",
         status=pb.TASK_STATUS_ENABLED,
@@ -59,12 +70,12 @@ def main() -> None:
     print("QueryForecastResults -> 结果数 =", len(resp.results))
 
     # 6. 异常归因（空壳）
-    dr = stub.GenerateDiagnosis(pb.DecisionRequest(
+    dr = stub.GenerateDiagnosis(pb.AnalysisDecisionRequest(
         meta=_meta("r6"), event_id="evt-001"))
     print("GenerateDiagnosis  ->", pb.AnalysisStatus.Name(dr.status), dr.message)
 
     # 7. 优化建议（空壳）
-    dr = stub.GenerateSuggestion(pb.DecisionRequest(
+    dr = stub.GenerateSuggestion(pb.AnalysisDecisionRequest(
         meta=_meta("r7"), event_id="evt-001"))
     print("GenerateSuggestion ->", pb.AnalysisStatus.Name(dr.status), dr.message)
 

@@ -2,39 +2,30 @@ syntax = "proto3";
 
 package sfkg.timeseries.analysis.v1;
 
-// ============================================================
-// P 端（时序分析模块）对外服务 —— 供 S 端（统一业务服务）调用
-// ============================================================
-// 本文件声明 P 端作为服务端提供的 7 个 RPC。
-// S 端用本 proto 生成客户端 stub 调用 P 端；P 端用本 proto 生成服务端 stub。
-//
-// 版本：v0.1 草稿（待 S 端确认字段）
-// 说明：
-//   - 训练接口本期不做（P 端只"查规模 → 训练一次 → 可推理"）。
-//   - 事件写入由 S 端提供 CreateEvent 服务（S 端自己定义 proto），
-//     P 端作为客户端调用，不放在本文件。
-// ============================================================
+option java_multiple_files = true;
+option java_package = "com.sfkg.timeseries.grpc";
+
+import "google/protobuf/empty.proto";
+
+// ── Analysis service: Java → Python analysis engine ───────────────
 
 service TimeseriesAnalysisService {
-  // ---- 任务配置同步 ----
-  rpc SyncAnomalyTask(SyncAnomalyTaskRequest) returns (TaskAck);
-  rpc SyncForecastTask(SyncForecastTaskRequest) returns (TaskAck);
-
-  // ---- 任务状态 ----
-  rpc UpdateTaskStatus(UpdateTaskStatusRequest) returns (TaskAck);
-
-  // ---- 结果查询 ----
-  rpc QueryAnomalyResults(QueryAnomalyResultsRequest)
-      returns (QueryAnomalyResultsResponse);
-  rpc QueryForecastResults(QueryForecastResultsRequest)
-      returns (QueryForecastResultsResponse);
-
-  // ---- 归因建议（空壳）----
-  rpc GenerateDiagnosis(DecisionRequest) returns (DecisionResult);
-  rpc GenerateSuggestion(DecisionRequest) returns (DecisionResult);
+  rpc SyncAnomalyTask (AnalysisSyncAnomalyTaskRequest) returns (TaskAck);
+  rpc SyncForecastTask (AnalysisSyncForecastTaskRequest) returns (TaskAck);
+  rpc UpdateTaskStatus (AnalysisUpdateTaskStatusRequest) returns (TaskAck);
+  rpc QueryAnomalyResults (QueryAnomalyResultsRequest) returns (QueryAnomalyResultsResponse);
+  rpc QueryForecastResults (QueryForecastResultsRequest) returns (QueryForecastResultsResponse);
+  rpc GenerateDiagnosis (AnalysisDecisionRequest) returns (AnalysisDecisionResult);
+  rpc GenerateSuggestion (AnalysisDecisionRequest) returns (AnalysisDecisionResult);
 }
 
-// ============ 枚举 ============
+// ── Analysis result receiver: Python → Java ───────────────────────
+
+service AnalysisResultReceiverService {
+  rpc ReceiveAnomalyResult (AnomalyResultMessage) returns (google.protobuf.Empty);
+}
+
+// ── Enums ─────────────────────────────────────────────────────────
 
 enum AnalysisStatus {
   ANALYSIS_STATUS_UNSPECIFIED = 0;
@@ -47,19 +38,39 @@ enum AnalysisStatus {
   ANALYSIS_STATUS_FAILED = 7;
 }
 
-enum TaskStatus {
+enum AnalysisTaskStatus {
   TASK_STATUS_UNSPECIFIED = 0;
   TASK_STATUS_ENABLED = 1;
   TASK_STATUS_DISABLED = 2;
   TASK_STATUS_DELETED = 3;
 }
 
-// ============ 公共消息 ============
+enum AnomalyEventType {
+  ANOMALY_EVENT_TYPE_UNSPECIFIED = 0;
+  ANOMALY_EVENT_TYPE_ANOMALY = 1;
+  ANOMALY_EVENT_TYPE_WARNING = 2;
+}
+
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_LOW = 1;
+  SEVERITY_MEDIUM = 2;
+  SEVERITY_HIGH = 3;
+}
+
+enum AnomalySource {
+  ANOMALY_SOURCE_UNSPECIFIED = 0;
+  ANOMALY_SOURCE_CONSTRAINT_CHECK = 1;
+  ANOMALY_SOURCE_MODEL_ANOMALY_DETECTION = 2;
+  ANOMALY_SOURCE_FORECAST = 3;
+}
+
+// ── Shared helpers ────────────────────────────────────────────────
 
 message RequestMeta {
-  string request_id = 1;   // 一次调用唯一
-  string trace_id = 2;     // 跨 S/P/C 链路标识
-  int64 sent_at_ms = 3;    // UTC 毫秒
+  string request_id = 1;
+  string trace_id = 2;
+  int64 sent_at_ms = 3;
 }
 
 message TimeRange {
@@ -67,12 +78,25 @@ message TimeRange {
   int64 end_time_ms = 2;
 }
 
+// ── Anomaly result receiver messages ──────────────────────────────
+
+message AnomalyResultMessage {
+  AnomalyEventType event_type = 1;
+  int64 event_time_ms = 2;
+  repeated string sequence_ids = 3;
+  repeated double values = 4;
+  Severity severity = 5;
+  AnomalySource source = 6;
+}
+
+// ── Task sync messages ────────────────────────────────────────────
+
 message SequenceMetadata {
   string sequence_id = 1;
   string sequence_name = 2;
   string unit = 3;
-  string data_type = 4;    // CONTINUOUS / DISCRETE_NUMERIC / DISCRETE_STATE
-  string role = 5;         // TARGET / FEATURE / SETPOINT / STATE
+  string data_type = 4;
+  string role = 5;
 }
 
 message SequenceRelation {
@@ -92,14 +116,12 @@ message SemanticContext {
   repeated string confirmed_historical_event_ids = 5;
 }
 
-// ============ 任务配置同步 ============
-
 message AnomalyTaskConfig {
   string task_id = 1;
   string task_name = 2;
   repeated string sequence_ids = 3;
-  repeated string methods = 4;   // DISCRETE_OUTLIER / CAUSAL_PATTERN / HISTORICAL_MATCH
-  string warning_rule = 5;       // 异常等级规则
+  repeated string methods = 4;
+  string warning_rule = 5;
   int32 context_length = 6;
   int64 slide_step_ms = 7;
   int32 minimum_points = 8;
@@ -118,13 +140,13 @@ message ForecastTaskConfig {
   SemanticContext semantic_context = 9;
 }
 
-message SyncAnomalyTaskRequest {
+message AnalysisSyncAnomalyTaskRequest {
   RequestMeta meta = 1;
-  int64 config_version = 2;      // 防止旧配置覆盖新配置
+  int64 config_version = 2;
   AnomalyTaskConfig task = 3;
 }
 
-message SyncForecastTaskRequest {
+message AnalysisSyncForecastTaskRequest {
   RequestMeta meta = 1;
   int64 config_version = 2;
   ForecastTaskConfig task = 3;
@@ -138,15 +160,13 @@ message TaskAck {
   int64 updated_at_ms = 5;
 }
 
-// ============ 任务状态 ============
-
-message UpdateTaskStatusRequest {
+message AnalysisUpdateTaskStatusRequest {
   RequestMeta meta = 1;
   string task_id = 2;
-  TaskStatus status = 3;   // ENABLED / DISABLED / DELETED
+  AnalysisTaskStatus status = 3;
 }
 
-// ============ 结果查询 ============
+// ── Query messages ────────────────────────────────────────────────
 
 message ResultQuery {
   RequestMeta meta = 1;
@@ -168,12 +188,22 @@ message AnomalyFinding {
 
 message AnomalyResult {
   string task_id = 1;
-  string run_id = 2;             // 每次运行唯一，结果去重
+  string run_id = 2;
   int64 generated_at_ms = 3;
   AnalysisStatus status = 4;
   string message = 5;
   repeated AnomalyFinding findings = 6;
   string model_version = 7;
+}
+
+message QueryAnomalyResultsRequest {
+  ResultQuery query = 1;
+}
+
+message QueryAnomalyResultsResponse {
+  string task_id = 1;
+  repeated AnomalyResult results = 2;
+  string next_page_token = 3;
 }
 
 message RiskFinding {
@@ -190,21 +220,11 @@ message ForecastResult {
   int64 generated_at_ms = 3;
   AnalysisStatus status = 4;
   string message = 5;
-  repeated int64 timestamps_ms = 6;        // 未来 H 个预测时刻
-  repeated string sequence_ids = 7;        // 预测目标序列（列顺序）
-  repeated double values = 8;              // 行优先展平：H × target_count
+  repeated int64 timestamps_ms = 6;
+  repeated string sequence_ids = 7;
+  repeated double values = 8;
   repeated RiskFinding risk_findings = 9;
   string model_version = 10;
-}
-
-message QueryAnomalyResultsRequest {
-  ResultQuery query = 1;
-}
-
-message QueryAnomalyResultsResponse {
-  string task_id = 1;
-  repeated AnomalyResult results = 2;
-  string next_page_token = 3;
 }
 
 message QueryForecastResultsRequest {
@@ -217,9 +237,9 @@ message QueryForecastResultsResponse {
   string next_page_token = 3;
 }
 
-// ============ 归因建议（空壳） ============
+// ── Decision messages ─────────────────────────────────────────────
 
-message DecisionRequest {
+message AnalysisDecisionRequest {
   RequestMeta meta = 1;
   string event_id = 2;
   string event_type = 3;
@@ -229,7 +249,7 @@ message DecisionRequest {
   map<string, string> statistics = 7;
 }
 
-message DecisionResult {
+message AnalysisDecisionResult {
   string event_id = 1;
   AnalysisStatus status = 2;
   string message = 3;
