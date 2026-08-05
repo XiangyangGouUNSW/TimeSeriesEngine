@@ -11,7 +11,7 @@ timeseries:
   grpc:
     server-port: ${TIMESERIES_GRPC_SERVER_PORT:9105}
     analysis-receiver-port: ${TIMESERIES_GRPC_ANALYSIS_RECEIVER_PORT:9106}
-    core-address: ${TIMESERIES_CORE_GRPC_ADDRESS:localhost:9101}
+    core-address: ${TIMESERIES_CORE_GRPC_ADDRESS:222.29.156.141:50051}
     anomaly-address: ${TIMESERIES_ANOMALY_GRPC_ADDRESS:localhost:50053}
     forecast-address: ${TIMESERIES_FORECAST_GRPC_ADDRESS:localhost:50053}
     decision-address: ${TIMESERIES_DECISION_GRPC_ADDRESS:localhost:50053}

@@ -121,6 +121,18 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 .orElseGet(TimeseriesConstraint::new);
         if (request != null) {
             BeanUtils.copyProperties(request, entity);
+            // BeanUtils 无法转换 List<ConstraintTermDTO> → List<ConstraintTermItem>，需手动拷贝
+            if (request.getTerms() != null) {
+                entity.setTerms(request.getTerms().stream()
+                        .map(dto -> {
+                            TimeseriesConstraint.ConstraintTermItem item = new TimeseriesConstraint.ConstraintTermItem();
+                            item.setVariable(dto.getVariable());
+                            item.setCoefficient(dto.getCoefficient());
+                            item.setSampleOffset(dto.getSampleOffset());
+                            return item;
+                        })
+                        .collect(Collectors.toList()));
+            }
         }
         entity.setConstraintId(constraintId);
 

@@ -6,4 +6,12 @@
   "applicableObjectType" : "transformer",
   "defaultUnit" : "celsius",
   "confirmStatus" : "CONFIRMED"
+}, {
+  "categoryId" : "ETTh1",
+  "categoryName" : "ETTh1 Power Transformer",
+  "dataType" : "double",
+  "categoryDescription" : null,
+  "applicableObjectType" : "TRANSFORMER",
+  "defaultUnit" : null,
+  "confirmStatus" : "CONFIRMED"
 } ]

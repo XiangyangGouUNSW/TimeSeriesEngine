@@ -18,4 +18,24 @@
   "slideStepMs" : 60000,
   "minimumPoints" : 200,
   "status" : "DISABLE"
+}, {
+  "taskId" : "ett-anomaly-002",
+  "taskName" : "ETTh1 HUFL anomaly detection",
+  "sequenceIds" : [ "ETTh1_HUFL" ],
+  "methods" : [ "DISCRETE_OUTLIER", "CONSTRAINT_CHECK" ],
+  "warningRule" : "HUFL > 9",
+  "contextLength" : 96,
+  "slideStepMs" : 3600000,
+  "minimumPoints" : 200,
+  "status" : "ENABLE"
+}, {
+  "taskId" : "ett-anomaly-001",
+  "taskName" : "ETTh1 OT anomaly detection",
+  "sequenceIds" : [ "ETTh1_OT" ],
+  "methods" : [ "DISCRETE_OUTLIER" ],
+  "warningRule" : "OT > 38",
+  "contextLength" : 96,
+  "slideStepMs" : 3600000,
+  "minimumPoints" : 200,
+  "status" : "ENABLE"
 } ]

@@ -112,8 +112,8 @@ public class TimeseriesCoreGrpcClient {
         }
         ConstraintRule.Builder ruleBuilder = ConstraintRule.newBuilder()
                 .setConstraintId(nullToEmpty(constraint.getConstraintId()))
-                .setLowerBound(constraint.getLowerBound() != null ? constraint.getLowerBound() : Double.NEGATIVE_INFINITY)
-                .setUpperBound(constraint.getUpperBound() != null ? constraint.getUpperBound() : Double.POSITIVE_INFINITY);
+                .setLowerBound(constraint.getLowerBound() != null ? constraint.getLowerBound() : 0.0)
+                .setUpperBound(constraint.getUpperBound() != null ? constraint.getUpperBound() : 0.0);
         if (constraint.getVariableMapping() != null) {
             ruleBuilder.putAllVariableMapping(constraint.getVariableMapping());
         }
@@ -341,8 +341,8 @@ public class TimeseriesCoreGrpcClient {
             OperationResult op = resp.getOperation();
             boolean success = op.getCode() == OperationCode.OPERATION_CODE_OK
                     || op.getCode() == OperationCode.OPERATION_CODE_PARTIAL_SUCCESS;
-            LOG.info("[{}] <- {} code={} success={} failed={}", SERVICE_NAME, operation,
-                    op.getCode(), op.getSuccessCount(), op.getFailedCount());
+            LOG.info("[{}] <- {} code={} success={} failed={} msg={}", SERVICE_NAME, operation,
+                    op.getCode(), op.getSuccessCount(), op.getFailedCount(), op.getMessage());
             return SyncResult.of(success, op.getMessage());
         } catch (StatusRuntimeException e) {
             LOG.warn("[{}] <- {} FAILED: {}", SERVICE_NAME, operation, e.getStatus().getDescription());
