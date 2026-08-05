@@ -11,11 +11,11 @@ import com.sfkg.timeseries.mapper.TimeseriesDataFileMapper;
 import com.sfkg.timeseries.service.TimeseriesDataService;
 import com.sfkg.timeseries.vo.HistoryDataVO;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeParseException;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -40,14 +40,20 @@ public class TimeseriesDataServiceImpl implements TimeseriesDataService {
 
     @Override
     public String saveTimeseriesData(TimeseriesDataSaveRequest request) {
-        List<TimeseriesDataPoint> points = convertSaveRequest(request);
-        dataFileMapper.appendDataPoints(points);
-        memoryCache.putTimeseriesDataPoints(points);
-        SyncResult syncResult = coreGrpcClient.syncTimeseriesData(points);
-        if (!syncResult.isSuccess()) {
-            LOGGER.warn("timeseries core grpc sync skipped or failed: {}", syncResult.getMessage());
+        if (request == null || request.getPoints() == null || request.getPoints().isEmpty()) {
+            throw new BusinessException("ingest points are required");
         }
-        return String.valueOf(points.size());
+        // Persist locally as TimeseriesDataPoint entries
+        List<TimeseriesDataPoint> localPoints = convertToDataPoints(request);
+        dataFileMapper.appendDataPoints(localPoints);
+        memoryCache.putTimeseriesDataPoints(localPoints);
+
+        // Forward to Core engine via gRPC ingestData
+        SyncResult syncResult = coreGrpcClient.ingestData(request);
+        if (!syncResult.isSuccess()) {
+            LOGGER.warn("timeseries core grpc ingest skipped or failed: {}", syncResult.getMessage());
+        }
+        return String.valueOf(request.getPoints().size());
     }
 
     @Override
@@ -91,48 +97,24 @@ public class TimeseriesDataServiceImpl implements TimeseriesDataService {
         return new HistoryDataVO();
     }
 
-    private List<TimeseriesDataPoint> convertSaveRequest(TimeseriesDataSaveRequest request) {
-        if (request == null || request.getSequenceId() == null) {
-            throw new BusinessException("sequenceId is required");
-        }
-
+    private List<TimeseriesDataPoint> convertToDataPoints(TimeseriesDataSaveRequest request) {
         List<TimeseriesDataPoint> points = new ArrayList<>();
-        if (request.getPoints() != null && !request.getPoints().isEmpty()) {
-            for (Map.Entry<String, BigDecimal> entry : request.getPoints().entrySet()) {
-                points.add(createPoint(request.getSequenceId(), parseTimestamp(entry.getKey()), entry.getValue()));
+        for (TimeseriesDataSaveRequest.IngestPointDTO p : request.getPoints()) {
+            TimeseriesDataPoint dp = new TimeseriesDataPoint();
+            dp.setSequenceId(p.getSequenceId());
+            if (p.getTime() != null) {
+                dp.setTimestamp(LocalDateTime.ofInstant(
+                        Instant.ofEpochMilli(p.getTime()), ZoneId.systemDefault()));
             }
-        }
-        if (request.getTimestamp() != null || request.getValue() != null) {
-            points.add(createPoint(request.getSequenceId(), request.getTimestamp(), request.getValue()));
-        }
-        if (points.isEmpty()) {
-            throw new BusinessException("timeseries data points are required");
+            if (p.getDoubleValue() != null) {
+                dp.setValue(BigDecimal.valueOf(p.getDoubleValue()));
+            } else if (p.getInt64Value() != null) {
+                dp.setValue(BigDecimal.valueOf(p.getInt64Value()));
+            } else {
+                dp.setValue(BigDecimal.ZERO);
+            }
+            points.add(dp);
         }
         return points;
-    }
-
-    private TimeseriesDataPoint createPoint(String sequenceId, LocalDateTime timestamp, BigDecimal value) {
-        if (timestamp == null) {
-            throw new BusinessException("timestamp is required");
-        }
-        if (value == null) {
-            throw new BusinessException("value is required");
-        }
-        TimeseriesDataPoint point = new TimeseriesDataPoint();
-        point.setSequenceId(sequenceId);
-        point.setTimestamp(timestamp);
-        point.setValue(value);
-        return point;
-    }
-
-    private LocalDateTime parseTimestamp(String timestamp) {
-        if (timestamp == null || timestamp.isBlank()) {
-            throw new BusinessException("timestamp is required");
-        }
-        try {
-            return LocalDateTime.parse(timestamp);
-        } catch (DateTimeParseException exception) {
-            throw new BusinessException("timestamp format must be yyyy-MM-ddTHH:mm:ss");
-        }
     }
 }

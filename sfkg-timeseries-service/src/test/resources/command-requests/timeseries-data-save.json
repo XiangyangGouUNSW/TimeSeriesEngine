@@ -1,8 +1,25 @@
 {
-  "sequence_id": 1002,
-  "data": {
-    "2026-08-03T10:00:00": 32.5,
-    "2026-08-03T10:01:00": 33.1,
-    "2026-08-03T10:02:00": 32.8
-  }
+  "windowSize": 3600000,
+  "returnResolvedData": false,
+  "points": [
+    {
+      "data_source_id": "source-a",
+      "external_sequence_id": "temp",
+      "time": 1722700800000,
+      "double_value": 32.5
+    },
+    {
+      "data_source_id": "source-a",
+      "external_sequence_id": "temp",
+      "time": 1722700860000,
+      "double_value": 33.1
+    },
+    {
+      "sequence_id": "temperature-1",
+      "data_source_id": "source-a",
+      "external_sequence_id": "temp",
+      "time": 1722700920000,
+      "double_value": 32.8
+    }
+  ]
 }

@@ -11,5 +11,6 @@ public class InstanceConfigSaveRequest {
     private String categoryId;
     private String deviceInstanceId;
     private String dataSourceId;
+    private String dataType;
     private String accessStatus;
 }

@@ -136,6 +136,6 @@ echo "[33] forecast result query"
 curl -X POST "$BASE_URL/api/timeseries/forecast-results/query" -H "Content-Type: application/json" --data-binary "@$REQ_DIR/forecast-result-query.json"
 echo -e "\n"
 
-echo "[34] timeseries data save"
-curl -X POST "$BASE_URL/api/timeseries/data/points" -H "Content-Type: application/json" --data-binary "@$REQ_DIR/timeseries-data-save.json"
+echo "[34] timeseries data ingest"
+curl -X POST "$BASE_URL/api/timeseries/data/ingest" -H "Content-Type: application/json" --data-binary "@$REQ_DIR/timeseries-data-save.json"
 echo -e "\n"

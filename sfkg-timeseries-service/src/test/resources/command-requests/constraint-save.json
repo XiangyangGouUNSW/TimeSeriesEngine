@@ -1,13 +1,21 @@
 {
-  "constraintId": 5001,
+  "constraintId": "constraint-5001",
   "constraintName": "temperature upper limit",
-  "categoryId": 2001,
+  "categoryId": "temperature",
   "variableMapping": {
-    "x": 1001
+    "x": "temperature-1"
   },
   "constraintDescription": "temperature should be lower than threshold",
   "constraintExpression": "x < 100",
-  "lag": "0m",
+  "lowerBound": null,
+  "upperBound": 100.0,
+  "terms": [
+    {
+      "variable": "x",
+      "coefficient": 1.0,
+      "sampleOffset": 0
+    }
+  ],
   "effectiveStatus": "ENABLE",
   "confirmStatus": "CONFIRMED"
 }

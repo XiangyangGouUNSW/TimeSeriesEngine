@@ -1,9 +1,10 @@
 {
-  "sequenceId": 1001,
+  "sequenceId": "temperature-1",
   "instanceName": "main transformer oil temperature",
-  "externalSequenceId": 9001,
-  "categoryId": 2001,
-  "deviceInstanceId": 3001,
-  "dataSourceId": 4001,
+  "externalSequenceId": "temp",
+  "categoryId": "temperature",
+  "deviceInstanceId": "device-3001",
+  "dataSourceId": "source-a",
+  "dataType": "continuous",
   "accessStatus": "ENABLE"
 }

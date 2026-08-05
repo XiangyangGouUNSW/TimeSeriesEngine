@@ -40,6 +40,15 @@ public class TimeseriesDataController {
     }
 
     @PostMapping(
+            value = "/ingest",
+            consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    public ApiResult<Void> ingestData(@RequestBody TimeseriesDataSaveRequest request) {
+        dataService.saveTimeseriesData(request);
+        return returnSuccess("timeseries data ingest success");
+    }
+
+    @PostMapping(
             value = "/history/query",
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)

@@ -1,6 +1,6 @@
 {
-  "taskId": 7002,
-  "sequenceId": 1001,
+  "taskId": "7002",
+  "sequenceId": "1001",
   "startTime": "2026-08-03T10:00:00",
   "endTime": "2026-08-03T11:00:00"
 }

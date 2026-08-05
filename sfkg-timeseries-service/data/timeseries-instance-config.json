@@ -9,5 +9,19 @@
   "deviceInstanceName" : "device-3001",
   "dataSourceId" : "4001",
   "accessStatus" : "ENABLE",
+  "dataType" : null,
+  "lastDataTime" : null
+}, {
+  "id" : "temperature-1",
+  "sequenceId" : "temperature-1",
+  "instanceName" : "main transformer oil temperature",
+  "externalSequenceId" : "temp",
+  "categoryId" : "temperature",
+  "categoryName" : null,
+  "deviceInstanceId" : "device-3001",
+  "deviceInstanceName" : "device-device-3001",
+  "dataSourceId" : "source-a",
+  "accessStatus" : "ENABLE",
+  "dataType" : "continuous",
   "lastDataTime" : null
 } ]

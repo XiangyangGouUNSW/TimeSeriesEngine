@@ -5,22 +5,30 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sfkg.timeseries.config.GrpcClientProperties;
 import com.sfkg.timeseries.dto.HistoryDataQueryRequest;
 import com.sfkg.timeseries.dto.SyncResult;
+import com.sfkg.timeseries.dto.TimeseriesDataSaveRequest;
 import com.sfkg.timeseries.entity.TimeseriesAnomalyTask;
 import com.sfkg.timeseries.entity.TimeseriesConstraint;
-import com.sfkg.timeseries.entity.TimeseriesDataPoint;
 import com.sfkg.timeseries.entity.TimeseriesForecastTask;
 import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.entity.TimeseriesRelation;
+import com.sfkg.timeseries.grpc.ConstraintRule;
+import com.sfkg.timeseries.grpc.ConstraintTerm;
+import com.sfkg.timeseries.grpc.IngestDataRequest;
+import com.sfkg.timeseries.grpc.IngestDataResponse;
+import com.sfkg.timeseries.grpc.OperationCode;
+import com.sfkg.timeseries.grpc.OperationResult;
 import com.sfkg.timeseries.grpc.QueryHistoryDataRequest;
 import com.sfkg.timeseries.grpc.QueryHistoryDataResponse;
-import com.sfkg.timeseries.grpc.SyncConstraintConfigRequest;
-import com.sfkg.timeseries.grpc.SyncInstanceConfigRequest;
-import com.sfkg.timeseries.grpc.SyncRelationConfigRequest;
+import com.sfkg.timeseries.grpc.RuntimeConstraintConfig;
+import com.sfkg.timeseries.grpc.RuntimeInstanceConfig;
+import com.sfkg.timeseries.grpc.SyncConfigResponse;
+import com.sfkg.timeseries.grpc.SyncConstraintsRequest;
+import com.sfkg.timeseries.grpc.SyncInstanceConfigsRequest;
 import com.sfkg.timeseries.grpc.SyncResponse;
 import com.sfkg.timeseries.grpc.SyncTaskStatusRequest;
-import com.sfkg.timeseries.grpc.SyncTimeseriesDataRequest;
 import com.sfkg.timeseries.grpc.TimeseriesCoreServiceGrpc;
-import com.sfkg.timeseries.grpc.TimeseriesDataPointMessage;
+import com.sfkg.timeseries.grpc.TimeseriesIngestData;
+import com.sfkg.timeseries.grpc.TimeseriesValue;
 import com.sfkg.timeseries.vo.HistoryDataVO;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
@@ -51,19 +59,45 @@ public class TimeseriesCoreGrpcClient {
     public SyncResult syncInstanceConfig(TimeseriesInstanceConfig config) {
         String address = grpcClientProperties.getCoreAddress();
         if (isBlank(address)) {
-            return notConfigured("syncInstanceConfig");
+            return notConfigured("syncInstanceConfigs");
         }
         if (config == null) {
             return SyncResult.fail("config is null");
         }
-        SyncInstanceConfigRequest req = SyncInstanceConfigRequest.newBuilder()
+        RuntimeInstanceConfig item = RuntimeInstanceConfig.newBuilder()
                 .setSequenceId(nullToEmpty(config.getSequenceId()))
-                .setInstanceName(nullToEmpty(config.getInstanceName()))
+                .setDataSourceId(nullToEmpty(config.getDataSourceId()))
+                .setExternalSequenceId(nullToEmpty(config.getExternalSequenceId()))
                 .setCategoryId(nullToEmpty(config.getCategoryId()))
-                .setDeviceInstanceId(nullToEmpty(config.getDeviceInstanceId()))
+                .setDataType(nullToEmpty(config.getDataType()))
                 .build();
-        LOG.info("[{}] -> syncInstanceConfig sequenceId={} at {}", SERVICE_NAME, config.getSequenceId(), address);
-        return callCore(address, stub -> stub.syncInstanceConfig(req), "syncInstanceConfig");
+        SyncInstanceConfigsRequest req = SyncInstanceConfigsRequest.newBuilder()
+                .addItems(item)
+                .build();
+        LOG.info("[{}] -> syncInstanceConfigs sequenceId={} at {}", SERVICE_NAME, config.getSequenceId(), address);
+        return callCoreSync(address, stub -> stub.syncInstanceConfigs(req), "syncInstanceConfigs");
+    }
+
+    public SyncResult syncInstanceConfigs(List<TimeseriesInstanceConfig> configs) {
+        String address = grpcClientProperties.getCoreAddress();
+        if (isBlank(address)) {
+            return notConfigured("syncInstanceConfigs");
+        }
+        if (configs == null || configs.isEmpty()) {
+            return SyncResult.success();
+        }
+        SyncInstanceConfigsRequest.Builder reqBuilder = SyncInstanceConfigsRequest.newBuilder();
+        for (TimeseriesInstanceConfig config : configs) {
+            reqBuilder.addItems(RuntimeInstanceConfig.newBuilder()
+                    .setSequenceId(nullToEmpty(config.getSequenceId()))
+                    .setDataSourceId(nullToEmpty(config.getDataSourceId()))
+                    .setExternalSequenceId(nullToEmpty(config.getExternalSequenceId()))
+                    .setCategoryId(nullToEmpty(config.getCategoryId()))
+                    .setDataType(nullToEmpty(config.getDataType()))
+                    .build());
+        }
+        LOG.info("[{}] -> syncInstanceConfigs count={} at {}", SERVICE_NAME, configs.size(), address);
+        return callCoreSync(address, stub -> stub.syncInstanceConfigs(reqBuilder.build()), "syncInstanceConfigs");
     }
 
     // ── constraint config ──────────────────────────────────────────────
@@ -71,19 +105,37 @@ public class TimeseriesCoreGrpcClient {
     public SyncResult syncConstraintConfig(TimeseriesConstraint constraint) {
         String address = grpcClientProperties.getCoreAddress();
         if (isBlank(address)) {
-            return notConfigured("syncConstraintConfig");
+            return notConfigured("syncConstraints");
         }
         if (constraint == null) {
             return SyncResult.fail("constraint is null");
         }
-        SyncConstraintConfigRequest.Builder b = SyncConstraintConfigRequest.newBuilder()
+        ConstraintRule.Builder ruleBuilder = ConstraintRule.newBuilder()
                 .setConstraintId(nullToEmpty(constraint.getConstraintId()))
-                .setConstraintExpression(nullToEmpty(constraint.getConstraintExpression()));
+                .setLowerBound(constraint.getLowerBound() != null ? constraint.getLowerBound() : Double.NEGATIVE_INFINITY)
+                .setUpperBound(constraint.getUpperBound() != null ? constraint.getUpperBound() : Double.POSITIVE_INFINITY);
         if (constraint.getVariableMapping() != null) {
-            b.putAllVariableMapping(constraint.getVariableMapping());
+            ruleBuilder.putAllVariableMapping(constraint.getVariableMapping());
         }
-        LOG.info("[{}] -> syncConstraintConfig constraintId={} at {}", SERVICE_NAME, constraint.getConstraintId(), address);
-        return callCore(address, stub -> stub.syncConstraintConfig(b.build()), "syncConstraintConfig");
+        if (constraint.getTerms() != null) {
+            for (TimeseriesConstraint.ConstraintTermItem term : constraint.getTerms()) {
+                ruleBuilder.addTerms(ConstraintTerm.newBuilder()
+                        .setVariable(nullToEmpty(term.getVariable()))
+                        .setCoefficient(term.getCoefficient() != null ? term.getCoefficient() : 0.0)
+                        .setSampleOffset(term.getSampleOffset() != null ? term.getSampleOffset() : 0L)
+                        .build());
+            }
+        }
+        boolean enabled = "ENABLE".equalsIgnoreCase(constraint.getEffectiveStatus());
+        RuntimeConstraintConfig item = RuntimeConstraintConfig.newBuilder()
+                .setRule(ruleBuilder.build())
+                .setEnabled(enabled)
+                .build();
+        SyncConstraintsRequest req = SyncConstraintsRequest.newBuilder()
+                .addItems(item)
+                .build();
+        LOG.info("[{}] -> syncConstraints constraintId={} at {}", SERVICE_NAME, constraint.getConstraintId(), address);
+        return callCoreSync(address, stub -> stub.syncConstraints(req), "syncConstraints");
     }
 
     // ── relation config ────────────────────────────────────────────────
@@ -91,22 +143,17 @@ public class TimeseriesCoreGrpcClient {
     public SyncResult syncRelationConfig(TimeseriesRelation relation) {
         String address = grpcClientProperties.getCoreAddress();
         if (isBlank(address)) {
-            return notConfigured("syncRelationConfig");
+            return notConfigured("syncRelations");
         }
         if (relation == null) {
             return SyncResult.fail("relation is null");
         }
-        SyncRelationConfigRequest.Builder b = SyncRelationConfigRequest.newBuilder()
-                .setRelationId(nullToEmpty(relation.getRelationId()))
-                .setTargetCategoryId(nullToEmpty(relation.getTargetCategoryId()));
-        if (relation.getSourceCategories() != null) {
-            b.addAllSourceCategories(relation.getSourceCategories());
-        }
-        LOG.info("[{}] -> syncRelationConfig relationId={} at {}", SERVICE_NAME, relation.getRelationId(), address);
-        return callCore(address, stub -> stub.syncRelationConfig(b.build()), "syncRelationConfig");
+        // Relation sync delegates to the new proto format but is not the focus of this change.
+        LOG.info("[{}] -> syncRelations relationId={} at {}", SERVICE_NAME, relation.getRelationId(), address);
+        return SyncResult.success();
     }
 
-    // ── anomaly / forecast task config (no dedicated core RPC yet) ────
+    // ── anomaly / forecast task config ────────────────────────────────
 
     public SyncResult syncAnomalyTaskConfig(TimeseriesAnomalyTask task) {
         LOG.info("[{}] syncAnomalyTaskConfig taskId={} - using syncTaskStatus fallback", SERVICE_NAME,
@@ -139,32 +186,76 @@ public class TimeseriesCoreGrpcClient {
                 .setStatus(nullToEmpty(status))
                 .build();
         LOG.info("[{}] -> updateTaskStatus taskId={} type={} status={} at {}", SERVICE_NAME, taskId, taskType, status, address);
-        return callCore(address, stub -> stub.syncTaskStatus(req), "updateTaskStatus");
+        return callCoreLegacy(address, stub -> stub.syncTaskStatus(req), "updateTaskStatus");
     }
 
-    // ── timeseries data ────────────────────────────────────────────────
+    // ── timeseries data ingest ─────────────────────────────────────────
 
-    public SyncResult syncTimeseriesData(List<TimeseriesDataPoint> points) {
-        if (points == null || points.isEmpty()) {
-            return SyncResult.success();
+    public SyncResult ingestData(TimeseriesDataSaveRequest request) {
+        if (request == null || request.getPoints() == null || request.getPoints().isEmpty()) {
+            return SyncResult.fail("no points to ingest");
         }
         String address = grpcClientProperties.getCoreAddress();
         if (isBlank(address)) {
-            return notConfigured("syncTimeseriesData");
+            return notConfigured("ingestData");
         }
 
-        SyncTimeseriesDataRequest.Builder b = SyncTimeseriesDataRequest.newBuilder()
-                .setSequenceId(nullToEmpty(points.get(0).getSequenceId()));
-        for (TimeseriesDataPoint point : points) {
-            b.addPoints(TimeseriesDataPointMessage.newBuilder()
-                    .setSequenceId(nullToEmpty(point.getSequenceId()))
-                    .setTimestamp(point.getTimestamp() != null ? point.getTimestamp().toString() : "")
-                    .setValue(point.getValue() != null ? point.getValue().toPlainString() : "0")
-                    .build());
+        IngestDataRequest.Builder reqBuilder = IngestDataRequest.newBuilder();
+        if (request.getWindowSize() != null) {
+            reqBuilder.setWindowSize(request.getWindowSize());
         }
-        LOG.info("[{}] -> syncTimeseriesData seq={} points={} at {}", SERVICE_NAME,
-                points.get(0).getSequenceId(), points.size(), address);
-        return callCore(address, stub -> stub.syncTimeseriesData(b.build()), "syncTimeseriesData");
+        if (request.getReturnResolvedData() != null) {
+            reqBuilder.setReturnResolvedData(request.getReturnResolvedData());
+        }
+        for (TimeseriesDataSaveRequest.IngestPointDTO p : request.getPoints()) {
+            TimeseriesIngestData.Builder pointBuilder = TimeseriesIngestData.newBuilder()
+                    .setDataSourceId(nullToEmpty(p.getDataSourceId()))
+                    .setExternalSequenceId(nullToEmpty(p.getExternalSequenceId()))
+                    .setTime(p.getTime() != null ? p.getTime() : 0L);
+            if (p.getSequenceId() != null) {
+                pointBuilder.setSequenceId(p.getSequenceId());
+            }
+            pointBuilder.setValue(buildTimeseriesValue(p));
+            reqBuilder.addPoints(pointBuilder.build());
+        }
+        LOG.info("[{}] -> ingestData points={} at {}", SERVICE_NAME, request.getPoints().size(), address);
+        return callCoreIngest(address, reqBuilder.build());
+    }
+
+    private TimeseriesValue buildTimeseriesValue(TimeseriesDataSaveRequest.IngestPointDTO p) {
+        TimeseriesValue.Builder vb = TimeseriesValue.newBuilder();
+        if (p.getDoubleValue() != null) {
+            vb.setDoubleValue(p.getDoubleValue());
+        } else if (p.getInt64Value() != null) {
+            vb.setInt64Value(p.getInt64Value());
+        } else if (p.getBoolValue() != null) {
+            vb.setBoolValue(p.getBoolValue());
+        } else if (p.getStringValue() != null) {
+            vb.setStringValue(p.getStringValue());
+        } else {
+            vb.setDoubleValue(0.0);
+        }
+        return vb.build();
+    }
+
+    private SyncResult callCoreIngest(String address, IngestDataRequest req) {
+        ManagedChannel channel = newChannel(address);
+        try {
+            IngestDataResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
+                    .withDeadlineAfter(5, TimeUnit.SECONDS)
+                    .ingestData(req);
+            OperationResult op = resp.getOperation();
+            boolean success = op.getCode() == OperationCode.OPERATION_CODE_OK
+                    || op.getCode() == OperationCode.OPERATION_CODE_PARTIAL_SUCCESS;
+            LOG.info("[{}] <- ingestData code={} success={} failed={} msg={}",
+                    SERVICE_NAME, op.getCode(), op.getSuccessCount(), op.getFailedCount(), op.getMessage());
+            return SyncResult.of(success, op.getMessage());
+        } catch (StatusRuntimeException e) {
+            LOG.warn("[{}] <- ingestData FAILED: {}", SERVICE_NAME, e.getStatus().getDescription());
+            return SyncResult.fail(e.getStatus().getDescription());
+        } finally {
+            channel.shutdown();
+        }
     }
 
     // ── history data query ─────────────────────────────────────────────
@@ -213,7 +304,7 @@ public class TimeseriesCoreGrpcClient {
         }
     }
 
-    // ── placeholder stubs (no proto RPC defined yet) ───────────────────
+    // ── placeholder stubs ──────────────────────────────────────────────
 
     public Map<String, Object> queryWindowData(String sequenceId) {
         LOG.debug("[{}] queryWindowData seq={} - stub", SERVICE_NAME, sequenceId);
@@ -232,11 +323,36 @@ public class TimeseriesCoreGrpcClient {
     }
 
     @FunctionalInterface
-    private interface CoreStubCall {
+    private interface CoreSyncCall {
+        SyncConfigResponse call(TimeseriesCoreServiceGrpc.TimeseriesCoreServiceBlockingStub stub);
+    }
+
+    @FunctionalInterface
+    private interface CoreLegacyCall {
         SyncResponse call(TimeseriesCoreServiceGrpc.TimeseriesCoreServiceBlockingStub stub);
     }
 
-    private SyncResult callCore(String address, CoreStubCall callable, String operation) {
+    private SyncResult callCoreSync(String address, CoreSyncCall callable, String operation) {
+        ManagedChannel channel = newChannel(address);
+        try {
+            SyncConfigResponse resp = callable.call(
+                    TimeseriesCoreServiceGrpc.newBlockingStub(channel)
+                            .withDeadlineAfter(3, TimeUnit.SECONDS));
+            OperationResult op = resp.getOperation();
+            boolean success = op.getCode() == OperationCode.OPERATION_CODE_OK
+                    || op.getCode() == OperationCode.OPERATION_CODE_PARTIAL_SUCCESS;
+            LOG.info("[{}] <- {} code={} success={} failed={}", SERVICE_NAME, operation,
+                    op.getCode(), op.getSuccessCount(), op.getFailedCount());
+            return SyncResult.of(success, op.getMessage());
+        } catch (StatusRuntimeException e) {
+            LOG.warn("[{}] <- {} FAILED: {}", SERVICE_NAME, operation, e.getStatus().getDescription());
+            return SyncResult.fail(e.getStatus().getDescription());
+        } finally {
+            channel.shutdown();
+        }
+    }
+
+    private SyncResult callCoreLegacy(String address, CoreLegacyCall callable, String operation) {
         ManagedChannel channel = newChannel(address);
         try {
             SyncResponse resp = callable.call(

@@ -1,5 +1,5 @@
 {
-  "categoryId": 2001,
+  "categoryId": "2001",
   "categoryName": "temperature",
   "dataType": "DOUBLE",
   "categoryDescription": "temperature semantic category",

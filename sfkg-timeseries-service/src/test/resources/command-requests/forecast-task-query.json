@@ -1,5 +1,5 @@
 {
-  "taskId": 7002,
+  "taskId": "7002",
   "taskName": "temperature",
   "status": "ENABLE",
   "keyword": "temperature"

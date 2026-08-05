@@ -1,16 +1,147 @@
 syntax = "proto3";
 
+package sfkg.timeseries.core.v1;
+
 option java_multiple_files = true;
 option java_package = "com.sfkg.timeseries.grpc";
 option java_outer_classname = "TimeseriesInternalProto";
 
 service TimeseriesCoreService {
-  rpc SyncInstanceConfig (SyncInstanceConfigRequest) returns (SyncResponse);
-  rpc SyncConstraintConfig (SyncConstraintConfigRequest) returns (SyncResponse);
-  rpc SyncRelationConfig (SyncRelationConfigRequest) returns (SyncResponse);
-  rpc SyncTimeseriesData (SyncTimeseriesDataRequest) returns (SyncResponse);
+  rpc syncInstanceConfigs (SyncInstanceConfigsRequest) returns (SyncConfigResponse);
+  rpc syncConstraints (SyncConstraintsRequest) returns (SyncConfigResponse);
+  rpc syncRelations (SyncRelationsRequest) returns (SyncConfigResponse);
+  rpc ingestData (IngestDataRequest) returns (IngestDataResponse);
   rpc SyncTaskStatus (SyncTaskStatusRequest) returns (SyncResponse);
   rpc QueryHistoryData (QueryHistoryDataRequest) returns (QueryHistoryDataResponse);
+}
+
+// ── Core messages (aligned with timeseries_core.proto) ─────────────
+
+enum OperationCode {
+  OPERATION_CODE_OK = 0;
+  OPERATION_CODE_PARTIAL_SUCCESS = 1;
+  OPERATION_CODE_INVALID_ARGUMENT = 2;
+  OPERATION_CODE_NOT_FOUND = 3;
+  OPERATION_CODE_FAILED_PRECONDITION = 4;
+  OPERATION_CODE_UNAVAILABLE = 5;
+  OPERATION_CODE_INTERNAL_ERROR = 6;
+  OPERATION_CODE_NOT_IMPLEMENTED = 7;
+}
+
+message OperationResult {
+  OperationCode code = 1;
+  uint64 success_count = 2;
+  uint64 failed_count = 3;
+  string message = 4;
+}
+
+message TimeseriesValue {
+  oneof kind {
+    double double_value = 1;
+    int64 int64_value = 2;
+    bool bool_value = 3;
+    string string_value = 4;
+  }
+}
+
+message RuntimeInstanceConfig {
+  string sequence_id = 1;
+  string data_source_id = 2;
+  string external_sequence_id = 3;
+  string category_id = 4;
+  string data_type = 5;
+}
+
+message SyncInstanceConfigsRequest {
+  repeated RuntimeInstanceConfig items = 1;
+}
+
+message ConstraintTerm {
+  string variable = 1;
+  double coefficient = 2;
+  uint64 sample_offset = 3;
+}
+
+message ConstraintRule {
+  string constraint_id = 1;
+  map<string, string> variable_mapping = 2;
+  double lower_bound = 3;
+  double upper_bound = 4;
+  repeated ConstraintTerm terms = 5;
+}
+
+message RuntimeConstraintConfig {
+  ConstraintRule rule = 1;
+  bool enabled = 2;
+}
+
+message SyncConstraintsRequest {
+  repeated RuntimeConstraintConfig items = 1;
+}
+
+message RuntimeRelationSource {
+  string source_category_id = 1;
+  double weight = 2;
+  oneof lag_spec {
+    int64 fixed_lag = 3;
+    RelationLagRange lag_range = 4;
+  }
+}
+
+message RelationLagRange {
+  int64 min = 1;
+  int64 max = 2;
+}
+
+message RuntimeRelationConfig {
+  string relation_id = 1;
+  reserved 2;
+  string target_category_id = 3;
+  string relation_type = 4;
+  reserved 5, 6;
+  double confidence = 7;
+  bool enabled = 8;
+  repeated RuntimeRelationSource sources = 9;
+}
+
+message SyncRelationsRequest {
+  repeated RuntimeRelationConfig items = 1;
+}
+
+message SyncConfigResponse {
+  OperationResult operation = 1;
+}
+
+message TimeseriesIngestData {
+  optional string sequence_id = 1;
+  string data_source_id = 2;
+  string external_sequence_id = 3;
+  int64 time = 4;
+  TimeseriesValue value = 5;
+}
+
+message RawTimeseriesPoint {
+  int64 time = 1;
+  string sequence_id = 2;
+  TimeseriesValue value = 3;
+}
+
+message TimeseriesBatch {
+  repeated RawTimeseriesPoint points = 1;
+}
+
+message IngestDataRequest {
+  repeated TimeseriesIngestData points = 1;
+  int64 window_size = 2;
+  bool return_resolved_data = 3;
+}
+
+message IngestDataResponse {
+  OperationResult operation = 1;
+  OperationResult resolve_result = 2;
+  OperationResult storage_result = 3;
+  OperationResult window_result = 4;
+  TimeseriesBatch resolved_data = 5;
 }
 
 service TimeseriesAnomalyService {
@@ -39,35 +170,7 @@ message SyncResponse {
   string message = 2;
 }
 
-message SyncInstanceConfigRequest {
-  string sequence_id = 1;
-  string instance_name = 2;
-  string category_id = 3;
-  string device_instance_id = 4;
-}
 
-message SyncConstraintConfigRequest {
-  string constraint_id = 1;
-  string constraint_expression = 2;
-  map<string, string> variable_mapping = 3;
-}
-
-message SyncRelationConfigRequest {
-  string relation_id = 1;
-  repeated string source_categories = 2;
-  string target_category_id = 3;
-}
-
-message TimeseriesDataPointMessage {
-  string sequence_id = 1;
-  string timestamp = 2;
-  string value = 3;
-}
-
-message SyncTimeseriesDataRequest {
-  string sequence_id = 1;
-  repeated TimeseriesDataPointMessage points = 2;
-}
 
 message SyncTaskStatusRequest {
   string task_id = 1;

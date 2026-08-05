@@ -1,6 +1,6 @@
 {
-  "sequenceId": 1001,
-  "categoryId": 2001,
-  "deviceInstanceId": 3001,
+  "sequenceId": "1001",
+  "categoryId": "2001",
+  "deviceInstanceId": "3001",
   "accessStatus": "ENABLE"
 }
