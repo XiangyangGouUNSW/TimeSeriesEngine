@@ -150,7 +150,7 @@ class GrpcCoreDataClient(CoreDataClient):
 
     def check_constraints(
         self,
-        task_id: str,
+        constraint_ids: list[str],
         sequence_ids: list[str] | None = None,
         aligned_data=None,
     ):
@@ -159,14 +159,15 @@ class GrpcCoreDataClient(CoreDataClient):
         - 异常检测：传 sequence_ids，让 C 检查它自己的实时窗口；
         - 预测预警：传 aligned_data（把预测值包成 AlignedWindowData），
           让 C 检查未来预测值是否会违反约束。
+        constraint_ids: 本次要检查的约束 ID 列表（来自任务配置的 semantic_context）。
         返回 (satisfied, violations)。
         """
         if aligned_data is not None:
             request = pb.CheckConstraintsRequest(
-                task_id=task_id, aligned_data=aligned_data)
+                constraint_ids=list(constraint_ids), aligned_data=aligned_data)
         else:
             request = pb.CheckConstraintsRequest(
-                task_id=task_id,
+                constraint_ids=list(constraint_ids),
                 window_query=pb.QueryWindowDataRequest(
                     sequence_ids=list(sequence_ids or [])),
             )

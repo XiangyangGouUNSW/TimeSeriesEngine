@@ -74,9 +74,10 @@ class AnalysisEngine:
             logger.info(f"[engine] ③预测 {target} 未来 {horizon} 步，前 3 个值 {[round(v,2) for v in preds[:3]]}")
 
             # ④ 调 C 约束检查（把预测值包成 AlignedWindowData 传给 C）
+            constraint_ids = list(task.semantic_context.constraint_ids)
             aligned = self._build_aligned(target, out_ts, preds)
             satisfied, violations = self.core.check_constraints(
-                task.task_id, aligned_data=aligned)
+                constraint_ids, aligned_data=aligned)
             logger.info(f"[engine] ④调 C 约束检查：satisfied={satisfied}，违规 {len(violations)} 条")
 
             # ⑤ 有风险 → 调 S 写预警
@@ -108,8 +109,9 @@ class AnalysisEngine:
             logger.info(f"[engine] ①取实时窗口：{len(window.sequences)} 条序列")
 
             # ② 调 C 约束检查
+            constraint_ids = list(task.semantic_context.constraint_ids)
             satisfied, violations = self.core.check_constraints(
-                task.task_id, sequence_ids=list(task.sequence_ids))
+                constraint_ids, sequence_ids=list(task.sequence_ids))
             logger.info(f"[engine] ②调 C 约束检查：satisfied={satisfied}，违规 {len(violations)} 条")
 
             # ③ 有异常 → 调 S 写异常

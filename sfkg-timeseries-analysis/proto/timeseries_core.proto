@@ -11,10 +11,6 @@ service TimeseriesCoreService {
       returns (SyncConfigResponse);
   rpc syncRelations(SyncRelationsRequest)
       returns (SyncConfigResponse);
-  rpc syncTaskConfigs(SyncTaskConfigsRequest)
-      returns (SyncConfigResponse);
-  rpc syncTaskStatuses(SyncTaskStatusesRequest)
-      returns (SyncConfigResponse);
 
   // Production ingest entry: resolve once, then persist and update the hot
   // window in parallel inside Core.
@@ -200,33 +196,29 @@ message RuntimeConstraintConfig {
   bool enabled = 2;
 }
 
+message RelationLagRange {
+  int64 min = 1;
+  int64 max = 2;
+}
+
+message RuntimeRelationSource {
+  string source_category_id = 1;
+  double weight = 2;
+  oneof lag_spec {
+    int64 fixed_lag = 3;
+    RelationLagRange lag_range = 4;
+  }
+}
+
 message RuntimeRelationConfig {
   string relation_id = 1;
-  map<string, double> source_category_weights = 2;
+  reserved 2;
   string target_category_id = 3;
   string relation_type = 4;
-  int64 lag_min = 5;
-  int64 lag_max = 6;
+  reserved 5, 6;
   double confidence = 7;
   bool enabled = 8;
-}
-
-message RuntimeTaskConfig {
-  string task_id = 1;
-  string task_type = 2;
-  repeated string sequence_ids = 3;
-  repeated string constraint_ids = 4;
-}
-
-enum RuntimeTaskStatus {
-  RUNTIME_TASK_STATUS_DISABLED = 0;
-  RUNTIME_TASK_STATUS_ENABLED = 1;
-  RUNTIME_TASK_STATUS_ABNORMAL = 2;
-}
-
-message RuntimeTaskStatusItem {
-  string task_id = 1;
-  RuntimeTaskStatus status = 2;
+  repeated RuntimeRelationSource sources = 9;
 }
 
 message SyncInstanceConfigsRequest {
@@ -239,14 +231,6 @@ message SyncConstraintsRequest {
 
 message SyncRelationsRequest {
   repeated RuntimeRelationConfig items = 1;
-}
-
-message SyncTaskConfigsRequest {
-  repeated RuntimeTaskConfig items = 1;
-}
-
-message SyncTaskStatusesRequest {
-  repeated RuntimeTaskStatusItem items = 1;
 }
 
 message SyncConfigResponse {
@@ -358,7 +342,9 @@ message ComputeStatisticsResponse {
 }
 
 message CheckConstraintsRequest {
-  string task_id = 1;
+  // The unified service owns task configuration and supplies the constraints
+  // selected for this check. Core does not cache task configuration or status.
+  repeated string constraint_ids = 1;
   // window_query avoids returning a window and sending it back to Core.
   oneof source {
     WindowData window_data = 2;
@@ -384,8 +370,8 @@ message QueryHistoryDataRequest {
 
 message QueryHistoryDataResponse {
   OperationResult operation = 1;
-  // Points are ordered by time ascending. Sequence order at equal timestamps
-  // is not guaranteed.
+  // Points are ordered by time ascending. At equal timestamps, sequence order
+  // follows the request's sequence_ids order.
   TimeseriesBatch data = 2;
 }
 
@@ -407,7 +393,7 @@ message HistoryOverview {
   uint64 total_point_count = 1;
   uint64 sequence_count = 2;
   // Current sequence_ids with data; usable as logical table header names.
-  // The current implementation returns these in stable sequence_id order.
+  // When sequence_ids are provided, the request order is preserved.
   repeated string column_names = 3;
   optional int64 first_time = 4;
   optional int64 last_time = 5;

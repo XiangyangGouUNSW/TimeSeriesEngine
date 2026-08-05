@@ -8,7 +8,7 @@ core:
   provider: "mock"          # mock = 本地 ETT 假装 C 端；grpc = 连真的 C 端
                             # 联调预演：python main.py --provider grpc
   address: "222.29.156.141"      # C 端 gRPC 地址
-  port: 50052               # C 端 gRPC 端口（C 端默认监听 50051）
+  port: 50051               # C 端 gRPC 端口（C 端默认监听 50051）
   timeout_seconds: 30.0     # 调 C 端超时
 
 s:
