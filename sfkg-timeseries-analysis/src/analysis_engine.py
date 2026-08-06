@@ -13,10 +13,13 @@ from pathlib import Path
 
 # 让生成的 stub 可以直接 import
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "generated"))
+import numpy as np
+
 import timeseries_analysis_pb2 as pb        # P↔S 的消息（ForecastResult/AnomalyResult）
 import timeseries_core_pb2 as cpb           # P↔C 的消息（AlignedWindowData）
 
 from ar_model import AutoregressiveModel
+from anomaly_models import build_anomaly_model
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +78,8 @@ class AnalysisEngine:
 
             # ④ 调 C 约束检查（把预测值包成 AlignedWindowData 传给 C）
             constraint_ids = list(task.semantic_context.constraint_ids)
+            logger.info("[engine] 任务 %s 收到的 constraint_ids = %s",
+                        task.task_id, constraint_ids)
             aligned = self._build_aligned(target, out_ts, preds)
             satisfied, violations = self.core.check_constraints(
                 constraint_ids, aligned_data=aligned)
@@ -103,6 +108,7 @@ class AnalysisEngine:
 
     def run_anomaly(self, task) -> pb.AnomalyResult:
         now = int(time.time() * 1000)
+        findings = []   # 收集所有异常（约束 + 模式偏离）
         try:
             # ① 取 C 实时窗口
             window = self.core.get_real_time_window(list(task.sequence_ids))
@@ -110,33 +116,83 @@ class AnalysisEngine:
 
             # ② 调 C 约束检查
             constraint_ids = list(task.semantic_context.constraint_ids)
+            logger.info("[engine] 任务 %s 收到的 constraint_ids = %s",
+                        task.task_id, constraint_ids)
             satisfied, violations = self.core.check_constraints(
                 constraint_ids, sequence_ids=list(task.sequence_ids))
             logger.info(f"[engine] ②调 C 约束检查：satisfied={satisfied}，违规 {len(violations)} 条")
+            for v in violations:
+                findings.append(pb.AnomalyFinding(
+                    anomaly_type="CONSTRAINT_CHECK", severity="HIGH",
+                    description=f"违反约束 {v.constraint_id}，实际值 {v.evaluated_value}",
+                    score=v.evaluated_value))
 
-            # ③ 有异常 → 调 S 写异常
-            if not satisfied and violations:
+            # ③ 模型检测（模式偏离异常）
+            for f in self._run_anomaly_models(task):
+                finding = pb.AnomalyFinding(
+                    anomaly_type=f["anomaly_type"], severity=f["severity"],
+                    description=f["description"])
+                if f.get("score") is not None:
+                    finding.score = f["score"]
+                findings.append(finding)
+
+            # ④ 有异常 → 调 S 写异常
+            if findings:
                 ok = self.sender.send_event(
                     event_type=pb.ANOMALY_EVENT_TYPE_ANOMALY,
                     event_time_ms=now,
                     sequence_ids=list(task.sequence_ids),
-                    values=[],
+                    values=[f.score for f in findings if f.score is not None],
                     severity=pb.SEVERITY_HIGH,
                     source=pb.ANOMALY_SOURCE_CONSTRAINT_CHECK,
                 )
-                logger.info(f"[engine] ③调 S 写异常：{'成功' if ok else '失败（S 未起/连不上）'}")
+                logger.info(f"[engine] ④调 S 写异常：{'成功' if ok else '失败（S 未起/连不上）'}")
 
             return pb.AnomalyResult(
                 task_id=task.task_id, run_id=f"run-{now}",
                 generated_at_ms=now, status=pb.ANALYSIS_STATUS_SUCCESS,
-                message=f"异常检测完成，违规 {len(violations)} 条",
-                findings=[], model_version="shell-v1")
+                message=f"异常检测完成，发现 {len(findings)} 条",
+                findings=findings, model_version="shell-v1")
         except Exception as e:
             logger.info(f"[engine] 异常链路异常：{e}")
             return pb.AnomalyResult(
                 task_id=task.task_id, run_id=f"run-{now}",
                 generated_at_ms=now, status=pb.ANALYSIS_STATUS_FAILED,
                 message=f"异常检测失败：{e}", findings=[], model_version="")
+
+    def _run_anomaly_models(self, task) -> list[dict]:
+        """根据任务 methods 训练/使用异常模型，检测模式偏离。"""
+        seq_ids = list(task.sequence_ids)
+        if not seq_ids:
+            return []
+        methods = list(task.methods) or ["CAUSAL_PATTERN"]   # 默认连续模式检测
+        findings = []
+        try:
+            history = self._get_history_matrix(seq_ids)
+            window = self._get_window_matrix(seq_ids)
+            for method in methods:
+                model = build_anomaly_model(method)
+                if model is None:
+                    continue
+                model.fit(history)
+                detected = model.detect(window)
+                if detected:
+                    logger.info(f"[engine] 模型 {method} 检出 {len(detected)} 条模式偏离")
+                findings += detected
+        except Exception as e:
+            logger.info(f"[engine] 模型检测异常：{e}")
+        return findings
+
+    def _get_history_matrix(self, seq_ids) -> np.ndarray:
+        """从 C 拉历史数据，转成 [time, seq_count] 矩阵。"""
+        chunk = self.core.get_history(seq_ids)
+        return np.array(chunk.values, dtype=float)
+
+    def _get_window_matrix(self, seq_ids) -> np.ndarray:
+        """取最近窗口，转成 [time, seq_count] 矩阵。"""
+        window = self.core.get_aligned_window(
+            seq_ids, self.cfg["inference"]["window_size"])
+        return np.array(window.values, dtype=float)
 
     # ================= 工具 =================
 
