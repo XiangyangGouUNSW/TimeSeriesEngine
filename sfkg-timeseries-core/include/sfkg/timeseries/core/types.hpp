@@ -188,7 +188,7 @@ using RelationLagSpec = std::variant<
     RelationLagRange>;
 
 struct RuntimeRelationSource {
-    std::string source_category_id;
+    SequenceId source_sequence_id;
     double weight{};
     RelationLagSpec lag;
 };
@@ -196,7 +196,7 @@ struct RuntimeRelationSource {
 struct RuntimeRelationConfig {
     std::string relation_id;
     std::vector<RuntimeRelationSource> sources;
-    std::string target_category_id;
+    SequenceId target_sequence_id;
     std::string relation_type;
     double confidence{};
     bool enabled{false};

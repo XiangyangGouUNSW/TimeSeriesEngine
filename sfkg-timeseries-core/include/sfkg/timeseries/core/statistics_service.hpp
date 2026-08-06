@@ -10,7 +10,7 @@ public:
         const WindowData& data) const;
     StatisticsResult computeBasicStatistics(
         const AlignedWindowData& data,
-        const AlignmentConfig& config) const;
+        const RuntimeRelationConfig& relation) const;
 };
 
 }  // namespace sfkg::timeseries::core

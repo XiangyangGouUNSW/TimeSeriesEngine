@@ -427,7 +427,39 @@ bool validTimeRange(
             return ::grpc::Status::OK;
         }
 
-        const auto result = alignment_service_.alignWindowData(data, config);
+        std::vector<RuntimeRelationConfig> relations;
+        relations.reserve(request->relation_ids_size());
+        for (const auto& relation_id : request->relation_ids()) {
+            if (relation_id.empty()) {
+                conversion::toProto(
+                    internal::invalidArgument(
+                        "alignment relation_id must not be empty"),
+                    response->mutable_operation());
+                return ::grpc::Status::OK;
+            }
+            const auto relation = config_registry_.findRelation(relation_id);
+            if (!relation) {
+                conversion::toProto(
+                    internal::makeOperationResult(
+                        OperationCode::NotFound,
+                        0,
+                        0,
+                        "relation is not registered: " + relation_id),
+                    response->mutable_operation());
+                return ::grpc::Status::OK;
+            }
+            if (!relation->enabled) {
+                conversion::toProto(
+                    failedPrecondition(
+                        "relation is not enabled: " + relation_id),
+                    response->mutable_operation());
+                return ::grpc::Status::OK;
+            }
+            relations.push_back(*relation);
+        }
+
+        const auto result = alignment_service_.alignWindowData(
+            data, config, relations);
         conversion::toProto(result.operation, response->mutable_operation());
         conversion::toProto(
             result.aligned_data, response->mutable_aligned_data());
@@ -444,6 +476,13 @@ bool validTimeRange(
         std::string error;
         if (request->source_case() ==
             pb::ComputeStatisticsRequest::kWindowData) {
+            if (!request->relation_id().empty()) {
+                conversion::toProto(
+                    internal::invalidArgument(
+                        "relation_id requires aligned_data as the statistics source"),
+                    response->mutable_operation());
+                return ::grpc::Status::OK;
+            }
             WindowData data;
             if (!conversion::fromProto(request->window_data(), &data, &error)) {
                 conversion::toProto(
@@ -459,26 +498,56 @@ bool validTimeRange(
         if (request->source_case() ==
             pb::ComputeStatisticsRequest::kAlignedData) {
             AlignedWindowData data;
-            AlignmentConfig config;
             if (!conversion::fromProto(
-                    request->aligned_data(), &data, &error) ||
-                !request->has_alignment_config() ||
-                !conversion::fromProto(
-                    request->alignment_config(), &config, &error)) {
+                    request->aligned_data(), &data, &error)) {
                 conversion::toProto(
                     internal::invalidArgument(
-                        error.empty() ? "alignment config is required" : error),
+                        error.empty() ? "aligned data is required" : error),
+                    response->mutable_operation());
+                return ::grpc::Status::OK;
+            }
+
+            if (request->relation_id().empty()) {
+                conversion::toProto(
+                    internal::invalidArgument(
+                        "relation_id is required for aligned statistics"),
+                    response->mutable_operation());
+                return ::grpc::Status::OK;
+            }
+            const auto relation =
+                config_registry_.findRelation(request->relation_id());
+            if (!relation) {
+                conversion::toProto(
+                    internal::makeOperationResult(
+                        OperationCode::NotFound,
+                        0,
+                        0,
+                        "relation is not registered: " + request->relation_id()),
+                    response->mutable_operation());
+                return ::grpc::Status::OK;
+            }
+            if (!relation->enabled) {
+                conversion::toProto(
+                    failedPrecondition(
+                        "relation is not enabled: " + request->relation_id()),
                     response->mutable_operation());
                 return ::grpc::Status::OK;
             }
             conversion::toProto(
-                statistics_service_.computeBasicStatistics(data, config),
+                statistics_service_.computeBasicStatistics(data, *relation),
                 response);
             return ::grpc::Status::OK;
         }
 
         if (request->source_case() ==
             pb::ComputeStatisticsRequest::kWindowQuery) {
+            if (!request->relation_id().empty()) {
+                conversion::toProto(
+                    internal::invalidArgument(
+                        "relation_id requires aligned_data as the statistics source"),
+                    response->mutable_operation());
+                return ::grpc::Status::OK;
+            }
             const auto window_result = window_service_.queryWindowData(
                 conversion::fromProto(request->window_query()));
             if (!isSuccessful(window_result.operation.code)) {

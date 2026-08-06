@@ -8,7 +8,8 @@ class AlignmentService {
 public:
     AlignmentResult alignWindowData(
         const WindowData& window_data,
-        const AlignmentConfig& config) const;
+        const AlignmentConfig& config,
+        const std::vector<RuntimeRelationConfig>& relations) const;
 };
 
 }  // namespace sfkg::timeseries::core

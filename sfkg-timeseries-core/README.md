@@ -10,7 +10,10 @@
 - `IngestData` 已完成识别、标准化、冷数据写入和热窗口更新的控制流程；
 - TDengine 原始数据写入、历史数据查询和历史概览查询可运行；
 - `ConstraintCheckEngine` 支持单序列 `WindowData`、多序列 `AlignedWindowData`、固定采样偏移和约束违反明细；
-- `AlignmentService` 和 `StatisticsService` 仍按接口返回未实现状态，后续单独完善；
+- `AlignmentService` 已支持普通分桶对齐和固定 lag 的具体序列关系对齐；
+- `StatisticsService` 已支持 WindowData 基本统计，以及
+  AlignedWindowData 的总体统计和基于 Relation 的 Pearson 相关系数；
+- 对齐中的 lag range 和未设置 lag 仍明确返回不支持状态；
 - Core 不负责启动 TDengine，也不保存统一服务的业务配置；Core 启动后由统一服务通过同步 RPC 写入运行时配置。
 
 ## 构建

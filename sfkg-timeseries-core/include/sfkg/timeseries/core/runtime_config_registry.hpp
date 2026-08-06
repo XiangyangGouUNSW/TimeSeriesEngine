@@ -45,6 +45,8 @@ public:
     std::optional<SequenceId> resolveSequenceId(
         const std::string& data_source_id,
         const std::string& external_sequence_id) const;
+    std::optional<RuntimeRelationConfig> findRelation(
+        const std::string& relation_id) const;
     ConstraintLookupResult lookupConstraints(
         const std::vector<std::string>& constraint_ids) const;
     std::vector<ConstraintRule> enabledConstraints(

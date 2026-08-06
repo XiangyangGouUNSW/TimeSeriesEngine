@@ -156,6 +156,20 @@ if(SFKG_BUILD_TESTS)
     add_test(NAME constraint_check_engine_test
         COMMAND constraint_check_engine_test)
 
+    add_executable(alignment_service_test
+        tests/alignment_service_test.cpp)
+    target_link_libraries(alignment_service_test
+        PRIVATE sfkg_timeseries_domain)
+    add_test(NAME alignment_service_test
+        COMMAND alignment_service_test)
+
+    add_executable(statistics_service_test
+        tests/statistics_service_test.cpp)
+    target_link_libraries(statistics_service_test
+        PRIVATE sfkg_timeseries_domain)
+    add_test(NAME statistics_service_test
+        COMMAND statistics_service_test)
+
     if(SFKG_WITH_TAOS)
         add_executable(taos_client_smoke tests/taos_client_smoke.cpp)
         target_link_libraries(taos_client_smoke

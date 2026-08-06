@@ -382,8 +382,8 @@ bool fromProto(
     const pb::RuntimeRelationSource& source,
     RuntimeRelationSource* target,
     std::string* error) {
-    if (source.source_category_id().empty()) {
-        *error = "relation source_category_id must not be empty";
+    if (source.source_sequence_id().empty()) {
+        *error = "relation source_sequence_id must not be empty";
         return false;
     }
     if (!std::isfinite(source.weight())) {
@@ -391,7 +391,7 @@ bool fromProto(
         return false;
     }
 
-    target->source_category_id = source.source_category_id();
+    target->source_sequence_id = source.source_sequence_id();
     target->weight = source.weight();
     switch (source.lag_spec_case()) {
         case pb::RuntimeRelationSource::kFixedLag:
@@ -423,7 +423,7 @@ bool fromProto(
         }
         target->sources.push_back(std::move(converted));
     }
-    target->target_category_id = source.target_category_id();
+    target->target_sequence_id = source.target_sequence_id();
     target->relation_type = source.relation_type();
     target->confidence = source.confidence();
     target->enabled = source.enabled();

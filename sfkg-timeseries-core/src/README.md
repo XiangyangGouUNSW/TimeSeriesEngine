@@ -5,7 +5,9 @@
 
 当前 `storage_service.cpp`、`taos_client.cpp` 和
 `history_query_service.cpp` 已支持原始数据写入、历史点查询和历史总体信息
-查询；窗口、对齐、统计、约束等部分仍保留占位实现。
+查询；`WindowService`、`AlignmentService`、`StatisticsService` 和
+`ConstraintCheckEngine` 已支持基础窗口、固定 lag 对齐、统计和约束检查。
+对齐中的 lag range 和未设置 lag 仍保留明确的不支持分支。
 
 对外接口请查看 `include/` 和 `proto/`，不要直接依赖 `src/grpc/internal/`
 中的内部转换头文件。

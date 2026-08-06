@@ -115,23 +115,14 @@ int main() {
 
     RuntimeRelationConfig relation;
     relation.relation_id = "temperature-pressure";
-    relation.target_category_id = "pressure";
+    relation.target_sequence_id = "pressure-1";
     relation.relation_type = "correlation";
     relation.confidence = 0.8;
     RuntimeRelationSource fixed_source;
-    fixed_source.source_category_id = "temperature";
+    fixed_source.source_sequence_id = "temperature-1";
     fixed_source.weight = 1.0;
     fixed_source.lag = std::int64_t{2};
     relation.sources.push_back(fixed_source);
-    RuntimeRelationSource ranged_source;
-    ranged_source.source_category_id = "humidity";
-    ranged_source.weight = 0.5;
-    ranged_source.lag = RelationLagRange{0, 10};
-    relation.sources.push_back(ranged_source);
-    RuntimeRelationSource unbounded_source;
-    unbounded_source.source_category_id = "calendar";
-    unbounded_source.weight = 0.2;
-    relation.sources.push_back(unbounded_source);
     result = registry.replaceRelations({{relation}});
     assert(result.code == OperationCode::Ok);
 

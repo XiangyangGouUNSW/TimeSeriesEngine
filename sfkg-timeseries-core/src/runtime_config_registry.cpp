@@ -239,28 +239,28 @@ OperationResult RuntimeConfigRegistry::replaceRelations(
     const RuntimeConfigSnapshot<RuntimeRelationConfig>& snapshot) {
     std::unordered_map<std::string, RuntimeRelationConfig> relations;
     for (const auto& item : snapshot.items) {
-        if (isBlank(item.relation_id) || isBlank(item.target_category_id) ||
+        if (isBlank(item.relation_id) || isBlank(item.target_sequence_id) ||
             item.sources.empty()) {
             return internal::invalidArgument(
-                "relation_id and target_category_id must not be empty, "
+                "relation_id and target_sequence_id must not be empty, "
                 "and relation sources must not be empty");
         }
         if (!std::isfinite(item.confidence)) {
             return internal::invalidArgument(
                 "relation confidence is invalid");
         }
-        std::unordered_map<std::string, bool> source_categories;
+        std::unordered_map<std::string, bool> source_sequences;
         for (const auto& source : item.sources) {
-            if (isBlank(source.source_category_id) ||
+            if (isBlank(source.source_sequence_id) ||
                 !std::isfinite(source.weight)) {
                 return internal::invalidArgument(
-                    "relation source category and weight must be valid");
+                    "relation source sequence and weight must be valid");
             }
-            if (!source_categories.emplace(
-                    source.source_category_id, true).second) {
+            if (!source_sequences.emplace(
+                    source.source_sequence_id, true).second) {
                 return internal::invalidArgument(
-                    "duplicate relation source category: " +
-                    source.source_category_id);
+                    "duplicate relation source sequence: " +
+                    source.source_sequence_id);
             }
             if (const auto* range = std::get_if<RelationLagRange>(
                     &source.lag);
@@ -291,10 +291,10 @@ OperationResult RuntimeConfigRegistry::upsertRelations(
     std::unordered_set<std::string> seen_relation_ids;
 
     for (const auto& item : snapshot.items) {
-        if (isBlank(item.relation_id) || isBlank(item.target_category_id) ||
+        if (isBlank(item.relation_id) || isBlank(item.target_sequence_id) ||
             item.sources.empty()) {
             return internal::invalidArgument(
-                "relation_id and target_category_id must not be empty, "
+                "relation_id and target_sequence_id must not be empty, "
                 "and relation sources must not be empty");
         }
         if (!seen_relation_ids.emplace(item.relation_id).second) {
@@ -306,18 +306,18 @@ OperationResult RuntimeConfigRegistry::upsertRelations(
             return internal::invalidArgument("relation confidence is invalid");
         }
 
-        std::unordered_map<std::string, bool> source_categories;
+        std::unordered_map<std::string, bool> source_sequences;
         for (const auto& source : item.sources) {
-            if (isBlank(source.source_category_id) ||
+            if (isBlank(source.source_sequence_id) ||
                 !std::isfinite(source.weight)) {
                 return internal::invalidArgument(
-                    "relation source category and weight must be valid");
+                    "relation source sequence and weight must be valid");
             }
-            if (!source_categories.emplace(
-                    source.source_category_id, true).second) {
+            if (!source_sequences.emplace(
+                    source.source_sequence_id, true).second) {
                 return internal::invalidArgument(
-                    "duplicate relation source category: " +
-                    source.source_category_id);
+                    "duplicate relation source sequence: " +
+                    source.source_sequence_id);
             }
             if (const auto* range = std::get_if<RelationLagRange>(
                     &source.lag);
@@ -355,6 +355,16 @@ std::optional<SequenceId> RuntimeConfigRegistry::resolveSequenceId(
     const auto found = external_sequence_index_.find(
         externalKey(data_source_id, external_sequence_id));
     if (found == external_sequence_index_.end()) {
+        return std::nullopt;
+    }
+    return found->second;
+}
+
+std::optional<RuntimeRelationConfig> RuntimeConfigRegistry::findRelation(
+    const std::string& relation_id) const {
+    std::shared_lock lock(mutex_);
+    const auto found = relations_.find(relation_id);
+    if (found == relations_.end()) {
         return std::nullopt;
     }
     return found->second;

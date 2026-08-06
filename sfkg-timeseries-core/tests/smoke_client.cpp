@@ -146,18 +146,10 @@ int run(int argc, char* argv[]) {
         auto* item = request.add_items();
         item->set_relation_id("temperature-to-pressure");
         auto* temperature = item->add_sources();
-        temperature->set_source_category_id("temperature");
+        temperature->set_source_sequence_id("temperature-1");
         temperature->set_weight(1.0);
         temperature->set_fixed_lag(2);
-        auto* humidity = item->add_sources();
-        humidity->set_source_category_id("humidity");
-        humidity->set_weight(0.5);
-        humidity->mutable_lag_range()->set_min(0);
-        humidity->mutable_lag_range()->set_max(10);
-        auto* calendar = item->add_sources();
-        calendar->set_source_category_id("calendar");
-        calendar->set_weight(0.2);
-        item->set_target_category_id("pressure");
+        item->set_target_sequence_id("pressure-1");
         item->set_relation_type("correlation");
         item->set_confidence(0.8);
         item->set_enabled(true);
@@ -255,7 +247,7 @@ int run(int argc, char* argv[]) {
             &context, request, &response);
         passed &= check(
             "alignWindowData", status, response.operation(),
-            pb::OPERATION_CODE_NOT_IMPLEMENTED);
+            pb::OPERATION_CODE_OK);
     }
 
     {
@@ -267,7 +259,7 @@ int run(int argc, char* argv[]) {
             &context, request, &response);
         passed &= check(
             "computeBasicStatistics", status, response.operation(),
-            pb::OPERATION_CODE_NOT_IMPLEMENTED);
+            pb::OPERATION_CODE_OK);
     }
 
     {
@@ -280,7 +272,7 @@ int run(int argc, char* argv[]) {
             &context, request, &response);
         passed &= check(
             "checkConstraints", status, response.operation(),
-            pb::OPERATION_CODE_NOT_IMPLEMENTED);
+            pb::OPERATION_CODE_OK);
     }
 
     {
