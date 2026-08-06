@@ -5,6 +5,7 @@ import static com.sfkg.timeseries.common.JsonSuccessResponse.returnSuccess;
 import com.sfkg.timeseries.common.ApiResult;
 import com.sfkg.timeseries.dto.ForecastResultQueryRequest;
 import com.sfkg.timeseries.service.TimeseriesForecastResultService;
+import com.sfkg.timeseries.vo.ForecastResultVO;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -23,14 +24,14 @@ public class TimeseriesForecastResultController {
     }
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> queryForecastResults() {
-        forecastResultService.queryForecastResults(null);
-        return returnSuccess("forecast result query success");
+    public ApiResult<ForecastResultVO> queryForecastResults() {
+        ForecastResultVO data = forecastResultService.queryForecastResults(null);
+        return returnSuccess("forecast result query success", data);
     }
 
     @PostMapping(value = "/query", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> queryForecastResultsByJson(@RequestBody ForecastResultQueryRequest request) {
-        forecastResultService.queryForecastResults(request);
-        return returnSuccess("forecast result query success");
+    public ApiResult<ForecastResultVO> queryForecastResultsByJson(@RequestBody ForecastResultQueryRequest request) {
+        ForecastResultVO data = forecastResultService.queryForecastResults(request);
+        return returnSuccess("forecast result query success", data);
     }
 }

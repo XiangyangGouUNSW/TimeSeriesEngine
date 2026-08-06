@@ -13,6 +13,10 @@ import com.sfkg.timeseries.dto.RelationQueryRequest;
 import com.sfkg.timeseries.dto.RelationSaveRequest;
 import com.sfkg.timeseries.dto.RelationStatusUpdateRequest;
 import com.sfkg.timeseries.service.TimeseriesSemanticService;
+import com.sfkg.timeseries.vo.CategoryVO;
+import com.sfkg.timeseries.vo.ConstraintVO;
+import com.sfkg.timeseries.vo.RelationVO;
+import java.util.List;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -33,15 +37,15 @@ public class TimeseriesSemanticController {
     }
 
     @GetMapping(value = "/categories", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> listCategories() {
-        semanticService.listCategories(null);
-        return returnSuccess("semantic category query success");
+    public ApiResult<List<CategoryVO>> listCategories() {
+        List<CategoryVO> data = semanticService.listCategories(null);
+        return returnSuccess("semantic category query success", data);
     }
 
     @PostMapping(value = "/categories/query", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> listCategoriesByJson(@RequestBody CategoryQueryRequest request) {
-        semanticService.listCategories(request);
-        return returnSuccess("semantic category query success");
+    public ApiResult<List<CategoryVO>> listCategoriesByJson(@RequestBody CategoryQueryRequest request) {
+        List<CategoryVO> data = semanticService.listCategories(request);
+        return returnSuccess("semantic category query success", data);
     }
 
     @PostMapping(value = "/categories", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
@@ -63,15 +67,15 @@ public class TimeseriesSemanticController {
     }
 
     @GetMapping(value = "/constraints", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> listConstraints() {
-        semanticService.listConstraints(null);
-        return returnSuccess("semantic constraint query success");
+    public ApiResult<List<ConstraintVO>> listConstraints() {
+        List<ConstraintVO> data = semanticService.listConstraints(null);
+        return returnSuccess("semantic constraint query success", data);
     }
 
     @PostMapping(value = "/constraints/query", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> listConstraintsByJson(@RequestBody ConstraintQueryRequest request) {
-        semanticService.listConstraints(request);
-        return returnSuccess("semantic constraint query success");
+    public ApiResult<List<ConstraintVO>> listConstraintsByJson(@RequestBody ConstraintQueryRequest request) {
+        List<ConstraintVO> data = semanticService.listConstraints(request);
+        return returnSuccess("semantic constraint query success", data);
     }
 
     @PostMapping(value = "/constraints", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
@@ -93,15 +97,15 @@ public class TimeseriesSemanticController {
     }
 
     @GetMapping(value = "/relations", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> listRelations() {
-        semanticService.listRelations(null);
-        return returnSuccess("semantic relation query success");
+    public ApiResult<List<RelationVO>> listRelations() {
+        List<RelationVO> data = semanticService.listRelations(null);
+        return returnSuccess("semantic relation query success", data);
     }
 
     @PostMapping(value = "/relations/query", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> listRelationsByJson(@RequestBody RelationQueryRequest request) {
-        semanticService.listRelations(request);
-        return returnSuccess("semantic relation query success");
+    public ApiResult<List<RelationVO>> listRelationsByJson(@RequestBody RelationQueryRequest request) {
+        List<RelationVO> data = semanticService.listRelations(request);
+        return returnSuccess("semantic relation query success", data);
     }
 
     @PostMapping(value = "/relations", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)

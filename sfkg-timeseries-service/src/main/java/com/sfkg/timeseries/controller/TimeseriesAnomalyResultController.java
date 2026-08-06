@@ -5,6 +5,7 @@ import static com.sfkg.timeseries.common.JsonSuccessResponse.returnSuccess;
 import com.sfkg.timeseries.common.ApiResult;
 import com.sfkg.timeseries.dto.AnomalyResultQueryRequest;
 import com.sfkg.timeseries.service.TimeseriesAnomalyResultService;
+import com.sfkg.timeseries.vo.AnomalyResultVO;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -23,14 +24,14 @@ public class TimeseriesAnomalyResultController {
     }
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> queryAnomalyResults() {
-        anomalyResultService.queryAnomalyResults(null);
-        return returnSuccess("anomaly result query success");
+    public ApiResult<AnomalyResultVO> queryAnomalyResults() {
+        AnomalyResultVO data = anomalyResultService.queryAnomalyResults(null);
+        return returnSuccess("anomaly result query success", data);
     }
 
     @PostMapping(value = "/query", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> queryAnomalyResultsByJson(@RequestBody AnomalyResultQueryRequest request) {
-        anomalyResultService.queryAnomalyResults(request);
-        return returnSuccess("anomaly result query success");
+    public ApiResult<AnomalyResultVO> queryAnomalyResultsByJson(@RequestBody AnomalyResultQueryRequest request) {
+        AnomalyResultVO data = anomalyResultService.queryAnomalyResults(request);
+        return returnSuccess("anomaly result query success", data);
     }
 }

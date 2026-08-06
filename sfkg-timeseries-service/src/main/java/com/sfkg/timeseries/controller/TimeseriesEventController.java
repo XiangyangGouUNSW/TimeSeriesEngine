@@ -7,6 +7,9 @@ import com.sfkg.timeseries.dto.EventDetailQueryRequest;
 import com.sfkg.timeseries.dto.EventQueryRequest;
 import com.sfkg.timeseries.dto.EventSaveRequest;
 import com.sfkg.timeseries.service.TimeseriesEventService;
+import com.sfkg.timeseries.vo.EventDetailVO;
+import com.sfkg.timeseries.vo.EventListVO;
+import java.util.List;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -27,27 +30,27 @@ public class TimeseriesEventController {
     }
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> listEvents() {
-        eventService.listEvents(null);
-        return returnSuccess("event list query success");
+    public ApiResult<List<EventListVO>> listEvents() {
+        List<EventListVO> data = eventService.listEvents(null);
+        return returnSuccess("event list query success", data);
     }
 
     @PostMapping(value = "/query", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> listEventsByJson(@RequestBody EventQueryRequest request) {
-        eventService.listEvents(request);
-        return returnSuccess("event list query success");
+    public ApiResult<List<EventListVO>> listEventsByJson(@RequestBody EventQueryRequest request) {
+        List<EventListVO> data = eventService.listEvents(request);
+        return returnSuccess("event list query success", data);
     }
 
     @GetMapping(value = "/{eventId}", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> getEventDetail(@PathVariable String eventId) {
-        eventService.getEventDetail(eventId);
-        return returnSuccess("event detail query success");
+    public ApiResult<EventDetailVO> getEventDetail(@PathVariable String eventId) {
+        EventDetailVO data = eventService.getEventDetail(eventId);
+        return returnSuccess("event detail query success", data);
     }
 
     @PostMapping(value = "/detail", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> getEventDetailByJson(@RequestBody EventDetailQueryRequest request) {
-        eventService.getEventDetail(request.getEventId());
-        return returnSuccess("event detail query success");
+    public ApiResult<EventDetailVO> getEventDetailByJson(@RequestBody EventDetailQueryRequest request) {
+        EventDetailVO data = eventService.getEventDetail(request.getEventId());
+        return returnSuccess("event detail query success", data);
     }
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)

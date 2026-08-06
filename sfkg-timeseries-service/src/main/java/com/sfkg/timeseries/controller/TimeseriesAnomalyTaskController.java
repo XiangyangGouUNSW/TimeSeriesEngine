@@ -7,6 +7,8 @@ import com.sfkg.timeseries.dto.AnomalyTaskSaveRequest;
 import com.sfkg.timeseries.dto.TaskQueryRequest;
 import com.sfkg.timeseries.dto.TaskStatusUpdateRequest;
 import com.sfkg.timeseries.service.TimeseriesAnomalyTaskService;
+import com.sfkg.timeseries.vo.AnomalyTaskVO;
+import java.util.List;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -45,14 +47,14 @@ public class TimeseriesAnomalyTaskController {
     }
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> listAnomalyTasks() {
-        anomalyTaskService.listAnomalyTasks();
-        return returnSuccess("anomaly task list query success");
+    public ApiResult<List<AnomalyTaskVO>> listAnomalyTasks() {
+        List<AnomalyTaskVO> data = anomalyTaskService.listAnomalyTasks();
+        return returnSuccess("anomaly task list query success", data);
     }
 
     @PostMapping(value = "/query", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> listAnomalyTasksByJson(@RequestBody TaskQueryRequest request) {
-        anomalyTaskService.listAnomalyTasks(request);
-        return returnSuccess("anomaly task list query success");
+    public ApiResult<List<AnomalyTaskVO>> listAnomalyTasksByJson(@RequestBody TaskQueryRequest request) {
+        List<AnomalyTaskVO> data = anomalyTaskService.listAnomalyTasks(request);
+        return returnSuccess("anomaly task list query success", data);
     }
 }

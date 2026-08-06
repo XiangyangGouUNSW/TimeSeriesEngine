@@ -7,6 +7,8 @@ import com.sfkg.timeseries.dto.ForecastTaskSaveRequest;
 import com.sfkg.timeseries.dto.TaskQueryRequest;
 import com.sfkg.timeseries.dto.TaskStatusUpdateRequest;
 import com.sfkg.timeseries.service.TimeseriesForecastTaskService;
+import com.sfkg.timeseries.vo.ForecastTaskVO;
+import java.util.List;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -45,14 +47,14 @@ public class TimeseriesForecastTaskController {
     }
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> listForecastTasks() {
-        forecastTaskService.listForecastTasks();
-        return returnSuccess("forecast task list query success");
+    public ApiResult<List<ForecastTaskVO>> listForecastTasks() {
+        List<ForecastTaskVO> data = forecastTaskService.listForecastTasks();
+        return returnSuccess("forecast task list query success", data);
     }
 
     @PostMapping(value = "/query", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> listForecastTasksByJson(@RequestBody TaskQueryRequest request) {
-        forecastTaskService.listForecastTasks(request);
-        return returnSuccess("forecast task list query success");
+    public ApiResult<List<ForecastTaskVO>> listForecastTasksByJson(@RequestBody TaskQueryRequest request) {
+        List<ForecastTaskVO> data = forecastTaskService.listForecastTasks(request);
+        return returnSuccess("forecast task list query success", data);
     }
 }
