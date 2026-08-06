@@ -187,12 +187,15 @@ class AnalysisEngine:
                     corr_prior = self._get_correlation_prior(target_id, source_ids, seq_ids)
                 except Exception as e:
                     logger.info(f"[engine] 拿相关性先验失败，降级为不用先验：{e}")
+            # 互耦对：从语义上下文 relations 识别（MUTUAL_COUPLING 方法用）
+            coupled_pairs = self._extract_coupled_pairs(task, seq_ids)
             for method in methods:
                 model = build_anomaly_model(
                     method,
                     target_index=target_index,
                     source_indices=source_indices,
                     correlation_prior=corr_prior,
+                    coupled_pairs=coupled_pairs,
                 )
                 if model is None:
                     continue
@@ -227,6 +230,37 @@ class AnalysisEngine:
         if not source_ids:
             source_ids = [sid for sid in seq_ids if sid != target_id]
         return target_id, source_ids
+
+    def _extract_coupled_pairs(self, task, seq_ids) -> list[tuple[int, int]]:
+        """从 semantic_context.relations 提取互耦对（列索引）。
+
+        互耦识别两种方式（S 端互耦取值对齐前先都支持）：
+          1. relation_type 带互耦标记（MUTUAL/COUPLING/BIDIRECTIONAL/COUPLED 关键词）；
+          2. 成对反向 relation（A→B 和 B→A 同时存在）→ 推断互耦。
+        返回按列索引排序的 [(a_idx, b_idx), ...]，序列不在任务里的跳过。
+        """
+        seq_index = {sid: i for i, sid in enumerate(seq_ids)}
+        relations = list(getattr(task.semantic_context, "relations", []))
+        marked = set()
+        reverse_pairs = set()
+        for r in relations:
+            src = getattr(r, "source_sequence_id", "")
+            tgt = getattr(r, "target_sequence_id", "")
+            if not src or not tgt or src == tgt:
+                continue
+            rtype = (getattr(r, "relation_type", "") or "").upper()
+            if any(k in rtype for k in ("MUTUAL", "COUPLING", "BIDIRECTIONAL", "COUPLED")):
+                marked.add((src, tgt))
+                marked.add((tgt, src))
+            reverse_pairs.add((src, tgt))
+        pairs = set()
+        for src, tgt in marked:
+            if src in seq_index and tgt in seq_index:
+                pairs.add(tuple(sorted((seq_index[src], seq_index[tgt]))))
+        for src, tgt in reverse_pairs:
+            if (tgt, src) in reverse_pairs and src in seq_index and tgt in seq_index:
+                pairs.add(tuple(sorted((seq_index[src], seq_index[tgt]))))
+        return sorted(pairs)
 
     def _get_correlation_prior(self, target_id, source_ids, seq_ids) -> dict[int, float] | None:
         """调 C computeBasicStatistics 拿相关性先验，转成 {列索引: 系数}。"""

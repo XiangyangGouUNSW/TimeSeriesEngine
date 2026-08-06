@@ -53,16 +53,25 @@ def main() -> None:
         task_id="task-gcad-mv-001",
         task_name="GCAD 多变量集成验证",
         sequence_ids=seq_ids,
-        methods=["CAUSAL_PATTERN", "TREND_SHIFT"],
+        methods=["CAUSAL_PATTERN", "TREND_SHIFT", "MUTUAL_COUPLING"],
         semantic_context=pb.SemanticContext(
             sequences=(
                 [pb.SequenceMetadata(sequence_id=sid, role="FEATURE") for sid in FEATURES]
                 + [pb.SequenceMetadata(sequence_id=TARGET, role="TARGET")]
             ),
-            relations=[pb.SequenceRelation(
-                relation_id="rel-ett-ot", target_sequence_id=TARGET,
-                source_sequence_id=FEATURES[0], relation_type="CAUSE",
-                lag_steps=1, confidence=0.9)],
+            # 互耦对：HUFL↔HULL（relation_type 带 COUPLING 标记 + 成对反向，两种识别方式都覆盖）
+            relations=[
+                pb.SequenceRelation(
+                    relation_id="rel-ett-ot", target_sequence_id=TARGET,
+                    source_sequence_id=FEATURES[0], relation_type="CAUSE",
+                    lag_steps=1, confidence=0.9),
+                pb.SequenceRelation(
+                    relation_id="rel-cpl-01", target_sequence_id=FEATURES[1],
+                    source_sequence_id=FEATURES[0], relation_type="COUPLING"),
+                pb.SequenceRelation(
+                    relation_id="rel-cpl-02", target_sequence_id=FEATURES[0],
+                    source_sequence_id=FEATURES[1], relation_type="COUPLING"),
+            ],
         ),
     )
 
@@ -73,7 +82,11 @@ def main() -> None:
     prior = engine._get_correlation_prior(target_id, source_ids, seq_ids)
     print(f"[3] _get_correlation_prior → 列索引先验 {prior}")
 
-    # 4. 跑模型检测（CAUSAL_PATTERN + TREND_SHIFT 两条腿）
+    # 4. 互耦对识别（MUTUAL_COUPLING 用）
+    pairs = engine._extract_coupled_pairs(task, seq_ids)
+    print(f"[3b] _extract_coupled_pairs → 互耦对列索引 {pairs}")
+
+    # 5. 跑模型检测（CAUSAL_PATTERN + TREND_SHIFT + MUTUAL_COUPLING）
     findings = engine._run_anomaly_models(task)
     print(f"[4] _run_anomaly_models 检出 {len(findings)} 条模式偏离")
     for f in findings[:8]:

@@ -27,6 +27,7 @@ sys.path.insert(0, str(ROOT / "generated"))
 from anomaly_models import (
     DbscanAnomalyModel,
     GcadAnomalyModel,
+    MutualCouplingModel,
     TrendShiftAnomalyModel,
 )
 
@@ -176,6 +177,73 @@ def eval_gcad_multivariate(data: np.ndarray):
     return rows, sel_info, kept, dropped
 
 
+# ---------------- MUTUAL_COUPLING 双变量互耦 ----------------
+
+COUPLING_KINDS = {"oneway_break": "单向断裂", "both_break": "双向解耦",
+                  "coef_change": "系数变化"}
+
+
+def build_coupled_data(data: np.ndarray, seed: int = 3):
+    """双变量互耦（惯性 + 交叉耦合）：
+    A[t] = c·A[t-1] + d·B[t-1] + ε₁，B[t] = c·B[t-1] + d·A[t-1] + ε₂。
+    含自回归惯性，更接近真实反馈回路（如温度↔压力）的平滑耦合。
+    """
+    rng = np.random.RandomState(seed)
+    n = data.shape[0]
+    c, d = 0.4, 0.4
+    A = np.empty(n)
+    B = np.empty(n)
+    epsA = rng.normal(0, 0.2, n)
+    epsB = rng.normal(0, 0.2, n)
+    A[0], B[0] = epsA[0], epsB[0]
+    for t in range(1, n):
+        A[t] = c * A[t - 1] + d * B[t - 1] + epsA[t]
+        B[t] = c * B[t - 1] + d * A[t - 1] + epsB[t]
+    return np.column_stack([A, B]), (c, d)
+
+
+def eval_coupling(data: np.ndarray):
+    """MUTUAL_COUPLING：双变量互耦，注入单向断裂/双向解耦/系数变化。
+
+    返回每场景 (召回, 精确, 准确, 正常误报, A→B方向检出数, B→A方向检出数)。
+    方向分布验证"可解释"：单向断裂应主要是对应方向检出。
+    """
+    M, (c, d) = build_coupled_data(data)
+    train = M[:1000]
+    win_normal = M[1500:1550]
+    true_anomalous = set(range(25, 50))
+    a_std, b_std = float(M[:, 0].std()), float(M[:, 1].std())
+
+    def inject(kind):
+        win = win_normal.copy()
+        rng = np.random.RandomState(7)
+        if kind == "oneway_break":      # A→B 断裂：B 不再依赖 A（只留自回归惯性）
+            for t in range(25, 50):
+                win[t, 1] = c * win[t - 1, 1] + rng.normal(0, b_std)
+        elif kind == "both_break":      # 双向解耦：A、B 都只剩自回归惯性
+            for t in range(25, 50):
+                win[t, 0] = c * win[t - 1, 0] + rng.normal(0, a_std)
+                win[t, 1] = c * win[t - 1, 1] + rng.normal(0, b_std)
+        elif kind == "coef_change":     # 耦合系数变化：A 的耦合系数 d→2d
+            for t in range(25, 50):
+                win[t, 0] = c * win[t - 1, 0] + 2 * d * win[t - 1, 1] + rng.normal(0, a_std)
+        return win
+
+    model = MutualCouplingModel(coupled_pairs=[(0, 1)])
+    model.fit(train)
+    results = []
+    for kind in COUPLING_KINDS:
+        findings = model.detect(inject(kind))
+        detected = {f["index"] for f in findings}
+        r, p, acc = point_metrics(detected, true_anomalous, len(win_normal))
+        fwd = sum(1 for f in findings if "列0→列1" in f["description"])
+        bwd = sum(1 for f in findings if "列1→列0" in f["description"])
+        fp = len(model.detect(win_normal))
+        hit = len(detected & true_anomalous)
+        results.append((kind, r, p, acc, fp, fwd, bwd, hit > 0))
+    return results
+
+
 # ---------------- TREND_SHIFT 单变量趋势异常 ----------------
 
 TREND_KINDS = {"ramp": "缓慢漂移", "step": "阶跃", "reversal": "斜率突变"}
@@ -275,6 +343,13 @@ def main() -> None:
     print(f"  {'场景':<10}{'召回':>6}{'精确':>6}{'准确':>6}{'正常误报':>8}")
     for kind, r, p, acc, fp in detail:
         print(f"  {TREND_KINDS[kind]:<10}{r:>6.2f}{p:>6.2f}{acc:>6.2f}{fp:>8}")
+
+    # MUTUAL_COUPLING 双变量互耦
+    coupling = eval_coupling(data)
+    print("\n[MUTUAL_COUPLING] 双变量互耦（A↔B 惯性+交叉耦合，滑动因果系数+双向 GCAD）")
+    print(f"  {'场景':<10}{'窗口级检出':>10}{'逐点召回':>8}{'精确':>6}{'准确':>6}{'误报':>6}  方向(A→B/B→A)")
+    for kind, r, p, acc, fp, fwd, bwd, win_det in coupling:
+        print(f"  {COUPLING_KINDS[kind]:<10}{str(win_det):>10}{r:>8.2f}{p:>6.2f}{acc:>6.2f}{fp:>6}  {fwd}/{bwd}")
     print("=" * 60)
     print("说明：三种模式偏移 = 破坏因变量与自变量的因果关系（模式偏移/趋势异常）。")
     print("quantile 是训练残差的分位数阈值：越高越严格（误报低但可能漏检），")

@@ -277,6 +277,115 @@ class TrendShiftAnomalyModel(AnomalyModel):
         return findings
 
 
+class MutualCouplingModel(AnomalyModel):
+    """双变量互耦异常：滑动因果系数 + 双向 GCAD 组合。
+
+    互耦 = 两变量互相影响（A 的过去→B 当前，B 的过去→A 当前，如温度↔压力反馈）。
+    检测互耦关系被破坏（单向断裂 / 双向解耦 / 耦合系数变化）：
+      ① 滑动因果系数：窗口内滞后回归系数 β(A→B)、β(B→A)，相对历史正常分布
+         偏离超阈值 → 耦合强度变化 / 断裂（方向可辨）；
+      ② 双向 GCAD：每个方向的因果预测残差超阈值 → 模式偏移（方向可辨）。
+    任一超限 → MUTUAL_COUPLING 异常，标注耦合方向（服务归因诊断：
+    单向断裂时只有对应方向检出，能区分"A 不再驱动 B"还是"B 不再驱动 A"）。
+    """
+
+    def __init__(self, coupled_pairs: list[tuple[int, int]] | None = None,
+                 window: int = 10, beta_std_mult: float = 2.5,
+                 lag: int = 3, residual_quantile: float = 0.95,
+                 alpha: float = 0.01):
+        self.pairs = [tuple(sorted((a, b))) for a, b in (coupled_pairs or [])]
+        self.window = window              # 因果系数估计的滑动窗口
+        self.beta_std_mult = beta_std_mult    # 系数偏离阈值（历史标准差倍数）
+        self.lag = lag
+        self.residual_quantile = residual_quantile
+        self.alpha = alpha
+        self._w: int = 2
+        self._models: dict[tuple[int, int], tuple] = {}
+        self._beta: dict[tuple[int, int], tuple] = {}
+
+    @staticmethod
+    def _slide_lag(src: np.ndarray, tgt: np.ndarray, w: int) -> np.ndarray:
+        """滑动滞后回归系数：tgt[t] 对 src[t-1] 的回归系数（窗口 w）。"""
+        n = len(src)
+        out = np.full(n, np.nan)
+        for t in range(w, n):
+            xw = src[t - w:t]
+            tx = xw - xw.mean()
+            den = float(np.dot(tx, tx))
+            if den > 1e-12:
+                out[t] = float(np.dot(tx, tgt[t - w:t] - tgt[t - w:t].mean()) / den)
+            else:
+                out[t] = 0.0
+        return out
+
+    def _fit_pair(self, history: np.ndarray, a: int, b: int) -> None:
+        # 双向 GCAD
+        fwd = GcadAnomalyModel(lag=self.lag, residual_quantile=self.residual_quantile,
+                               alpha=self.alpha, target_index=b, source_indices=[a])
+        bwd = GcadAnomalyModel(lag=self.lag, residual_quantile=self.residual_quantile,
+                               alpha=self.alpha, target_index=a, source_indices=[b])
+        fwd.fit(history)
+        bwd.fit(history)
+        # 正常因果系数分布（A 过去→B 当前、B 过去→A 当前）
+        ba = self._slide_lag(history[:, a], history[:, b], self._w)
+        bb = self._slide_lag(history[:, b], history[:, a], self._w)
+        valid = ~np.isnan(ba)
+        if valid.sum() > 2:
+            m_ab, s_ab = float(np.nanmean(ba)), float(np.nanstd(ba) + 1e-8)
+            m_ba, s_ba = float(np.nanmean(bb)), float(np.nanstd(bb) + 1e-8)
+        else:
+            m_ab, s_ab, m_ba, s_ba = 0.0, 1e-8, 0.0, 1e-8
+        self._models[(a, b)] = (fwd, bwd)
+        self._beta[(a, b)] = (m_ab, s_ab, m_ba, s_ba)
+
+    def fit(self, history: np.ndarray) -> None:
+        history = np.asarray(history, dtype=float)
+        self._w = max(2, min(self.window, len(history) - 1))
+        self._models = {}
+        self._beta = {}
+        for a, b in self.pairs:
+            if a < history.shape[1] and b < history.shape[1]:
+                self._fit_pair(history, a, b)
+
+    def detect(self, window: np.ndarray) -> list[dict]:
+        window = np.asarray(window, dtype=float)
+        findings = []
+        n_time, n_seq = window.shape
+        w = self._w
+        for (a, b), (fwd, bwd) in self._models.items():
+            # ① 双向 GCAD：逐点因果预测残差
+            for f in fwd.detect(window):
+                item = dict(f)
+                item["anomaly_type"] = "MUTUAL_COUPLING"
+                item["description"] = f"耦合 列{a}→列{b} 被破坏：" + f["description"]
+                findings.append(item)
+            for f in bwd.detect(window):
+                item = dict(f)
+                item["anomaly_type"] = "MUTUAL_COUPLING"
+                item["description"] = f"耦合 列{b}→列{a} 被破坏：" + f["description"]
+                findings.append(item)
+            # ② 滑动因果系数：耦合强度/方向变化
+            m_ab, s_ab, m_ba, s_ba = self._beta[(a, b)]
+            beta_ab = self._slide_lag(window[:, a], window[:, b], w)
+            beta_ba = self._slide_lag(window[:, b], window[:, a], w)
+            for t in range(w, n_time):
+                if not np.isnan(beta_ab[t]) and abs(beta_ab[t] - m_ab) / s_ab > self.beta_std_mult:
+                    findings.append({
+                        "anomaly_type": "MUTUAL_COUPLING", "severity": "MEDIUM",
+                        "description": (f"耦合 列{a}→列{b} 因果系数变化 "
+                                        f"β={beta_ab[t]:.3f}（正常 {m_ab:.2f}±{s_ab:.2f}）"),
+                        "score": float(abs(beta_ab[t] - m_ab) / s_ab), "index": t,
+                    })
+                if not np.isnan(beta_ba[t]) and abs(beta_ba[t] - m_ba) / s_ba > self.beta_std_mult:
+                    findings.append({
+                        "anomaly_type": "MUTUAL_COUPLING", "severity": "MEDIUM",
+                        "description": (f"耦合 列{b}→列{a} 因果系数变化 "
+                                        f"β={beta_ba[t]:.3f}（正常 {m_ba:.2f}±{s_ba:.2f}）"),
+                        "score": float(abs(beta_ba[t] - m_ba) / s_ba), "index": t,
+                    })
+        return findings
+
+
 # 模型工厂：按方法名创建模型（便于后续替换/扩展）
 def build_anomaly_model(method: str, **kwargs) -> AnomalyModel | None:
     """根据方法名返回模型实例；未知方法返回 None。"""
@@ -300,5 +409,14 @@ def build_anomaly_model(method: str, **kwargs) -> AnomalyModel | None:
             slope_std_mult=kwargs.get("slope_std_mult", 3.0),
             diff_std_mult=kwargs.get("diff_std_mult", 4.0),
             target_index=kwargs.get("target_index"),
+        )
+    if method == "MUTUAL_COUPLING":
+        return MutualCouplingModel(
+            coupled_pairs=kwargs.get("coupled_pairs"),
+            window=kwargs.get("window", 10),
+            beta_std_mult=kwargs.get("beta_std_mult", 2.5),
+            lag=kwargs.get("lag", 3),
+            residual_quantile=kwargs.get("residual_quantile", 0.95),
+            alpha=kwargs.get("alpha", 0.01),
         )
     return None
