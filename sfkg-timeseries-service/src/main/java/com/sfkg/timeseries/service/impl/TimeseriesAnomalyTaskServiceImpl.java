@@ -5,15 +5,21 @@ import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.AnomalyGrpcClient;
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
+import com.sfkg.timeseries.common.BusinessException;
 import com.sfkg.timeseries.dto.AnomalyTaskSaveRequest;
 import com.sfkg.timeseries.dto.TaskQueryRequest;
 import com.sfkg.timeseries.dto.TaskStatusUpdateRequest;
 import com.sfkg.timeseries.entity.TimeseriesAnomalyTask;
+import com.sfkg.timeseries.entity.TimeseriesConstraint;
+import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.mapper.TimeseriesAnomalyTaskMapper;
 import com.sfkg.timeseries.service.TimeseriesAnomalyTaskService;
 import com.sfkg.timeseries.vo.AnomalyTaskVO;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.beans.BeanUtils;
@@ -43,6 +49,12 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
 
     @Override
     public String saveAnomalyTask(AnomalyTaskSaveRequest request) {
+        validateDetectObjects(request);
+        if (request.getMethods() != null) {
+            for (String method : request.getMethods()) {
+                validateDetectMethod(method);
+            }
+        }
         cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
         String taskId = request == null || request.getTaskId() == null
                 ? generateTaskId()
@@ -93,14 +105,69 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
         syncAnomalyTaskToAnomalyService(request.getTaskId());
     }
 
+    private static final Set<String> VALID_DETECT_METHODS = Set.of(
+            "CONSTRAINT_CHECK", "MODEL_ANOMALY_DETECTION", "HYBRID");
+
     @Override
     public void validateDetectObjects(AnomalyTaskSaveRequest request) {
-        // TODO: Restore detection object validation here.
+        if (request == null || request.getSequenceIds() == null || request.getSequenceIds().isEmpty()) {
+            throw new BusinessException("sequenceIds must not be empty");
+        }
+        cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
+        for (String sequenceId : request.getSequenceIds()) {
+            TimeseriesInstanceConfig instance = memoryCache.getInstanceBySequenceId(sequenceId);
+            if (instance == null) {
+                throw new BusinessException("sequence not found: " + sequenceId);
+            }
+            if (instance.getCategoryId() == null) {
+                throw new BusinessException("sequence has no category: " + sequenceId);
+            }
+        }
+        if (request.getConstraintIds() != null && !request.getConstraintIds().isEmpty()) {
+            cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
+            for (String constraintId : request.getConstraintIds()) {
+                TimeseriesConstraint constraint = memoryCache.getConstraint(constraintId).orElse(null);
+                if (constraint == null) {
+                    throw new BusinessException("constraint not found: " + constraintId);
+                }
+                if (!"ENABLE".equalsIgnoreCase(constraint.getEffectiveStatus())
+                        || !"CONFIRMED".equalsIgnoreCase(constraint.getConfirmStatus())) {
+                    throw new BusinessException("constraint not active: " + constraintId
+                            + " effective=" + constraint.getEffectiveStatus()
+                            + " confirmed=" + constraint.getConfirmStatus());
+                }
+            }
+        }
+        if (request.getContextLength() != null && request.getContextLength() <= 0) {
+            throw new BusinessException("contextLength must be positive");
+        }
+        if (request.getSlideStepMs() != null && request.getSlideStepMs() <= 0) {
+            throw new BusinessException("slideStepMs must be positive");
+        }
+        if (request.getMinimumPoints() != null && request.getMinimumPoints() <= 0) {
+            throw new BusinessException("minimumPoints must be positive");
+        }
     }
 
     @Override
     public void validateDetectMethod(String detectMethod) {
-        // TODO: Restore detection method validation here.
+        if (detectMethod == null || detectMethod.isBlank()) {
+            throw new BusinessException("detectMethod must not be empty");
+        }
+        List<String> methods = Arrays.stream(detectMethod.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .distinct()
+                .toList();
+        if (methods.isEmpty()) {
+            throw new BusinessException("detectMethod must not be empty");
+        }
+        for (String method : methods) {
+            if (!VALID_DETECT_METHODS.contains(method.toUpperCase())) {
+                throw new BusinessException("unsupported detectMethod: " + method
+                        + ". Supported: " + VALID_DETECT_METHODS);
+            }
+        }
     }
 
     @Override

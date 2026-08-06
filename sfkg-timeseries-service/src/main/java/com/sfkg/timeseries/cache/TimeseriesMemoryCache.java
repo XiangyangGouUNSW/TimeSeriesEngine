@@ -15,6 +15,7 @@ import com.sfkg.timeseries.entity.TimeseriesSyncLog;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -39,6 +40,17 @@ public class TimeseriesMemoryCache {
     private final List<TimeseriesSyncLog> syncLogs = new CopyOnWriteArrayList<>();
     private final List<TimeseriesDataPoint> dataPoints = new CopyOnWriteArrayList<>();
 
+    // ── Map indexes for fast lookup ───────────────────────────────────
+    private final Map<String, TimeseriesInstanceConfig> instanceBySequenceId = new ConcurrentHashMap<>();
+    private final Map<String, TimeseriesConstraint> constraintByConstraintId = new ConcurrentHashMap<>();
+    private final Map<String, List<TimeseriesConstraint>> constraintsByCategoryId = new ConcurrentHashMap<>();
+    private final Map<String, TimeseriesRelation> relationByRelationId = new ConcurrentHashMap<>();
+    private final Map<String, List<TimeseriesRelation>> relationsByTargetSequenceId = new ConcurrentHashMap<>();
+    private final Map<String, List<TimeseriesRelation>> relationsBySourceSequenceId = new ConcurrentHashMap<>();
+    private final Map<String, TimeseriesEvent> eventsByEventId = new ConcurrentHashMap<>();
+    private final Map<String, List<TimeseriesAnomalyResult>> anomalyResultsByTaskId = new ConcurrentHashMap<>();
+    private final Map<String, List<TimeseriesForecastResult>> forecastResultsByTaskId = new ConcurrentHashMap<>();
+
     public boolean isLoaded(CachedTable table) {
         return loadedTables.contains(table);
     }
@@ -53,15 +65,15 @@ public class TimeseriesMemoryCache {
 
     public void evict(CachedTable table) {
         switch (table) {
-            case INSTANCE_CONFIG -> instanceConfigs.clear();
+            case INSTANCE_CONFIG -> { instanceConfigs.clear(); instanceBySequenceId.clear(); }
             case CATEGORY -> categories.clear();
-            case CONSTRAINT -> constraints.clear();
-            case RELATION -> relations.clear();
-            case EVENT -> events.clear();
+            case CONSTRAINT -> { constraints.clear(); constraintByConstraintId.clear(); constraintsByCategoryId.clear(); }
+            case RELATION -> { relations.clear(); relationByRelationId.clear(); relationsByTargetSequenceId.clear(); relationsBySourceSequenceId.clear(); }
+            case EVENT -> { events.clear(); eventsByEventId.clear(); }
             case ANOMALY_TASK -> anomalyTasks.clear();
             case FORECAST_TASK -> forecastTasks.clear();
-            case ANOMALY_RESULT -> anomalyResults.clear();
-            case FORECAST_RESULT -> forecastResults.clear();
+            case ANOMALY_RESULT -> { anomalyResults.clear(); anomalyResultsByTaskId.clear(); }
+            case FORECAST_RESULT -> { forecastResults.clear(); forecastResultsByTaskId.clear(); }
             case SYNC_LOG -> syncLogs.clear();
             case TIMESERIES_DATA -> dataPoints.clear();
         }
@@ -70,12 +82,14 @@ public class TimeseriesMemoryCache {
 
     public void replaceInstanceConfigs(Collection<TimeseriesInstanceConfig> entities) {
         replaceAll(instanceConfigs, entities);
+        rebuildInstanceIndex();
         markLoaded(CachedTable.INSTANCE_CONFIG);
     }
 
     public void putInstanceConfig(TimeseriesInstanceConfig entity) {
         if (entity != null && entity.getSequenceId() != null) {
             upsert(instanceConfigs, item -> entity.getSequenceId().equals(item.getSequenceId()), entity);
+            instanceBySequenceId.put(entity.getSequenceId(), entity);
             markLoaded(CachedTable.INSTANCE_CONFIG);
         }
     }
@@ -114,12 +128,15 @@ public class TimeseriesMemoryCache {
 
     public void replaceConstraints(Collection<TimeseriesConstraint> entities) {
         replaceAll(constraints, entities);
+        rebuildConstraintIndexes();
         markLoaded(CachedTable.CONSTRAINT);
     }
 
     public void putConstraint(TimeseriesConstraint entity) {
         if (entity != null && entity.getConstraintId() != null) {
             upsert(constraints, item -> entity.getConstraintId().equals(item.getConstraintId()), entity);
+            constraintByConstraintId.put(entity.getConstraintId(), entity);
+            rebuildConstraintsByCategoryId();
             markLoaded(CachedTable.CONSTRAINT);
         }
     }
@@ -136,12 +153,16 @@ public class TimeseriesMemoryCache {
 
     public void replaceRelations(Collection<TimeseriesRelation> entities) {
         replaceAll(relations, entities);
+        rebuildRelationIndexes();
         markLoaded(CachedTable.RELATION);
     }
 
     public void putRelation(TimeseriesRelation entity) {
         if (entity != null && entity.getRelationId() != null) {
             upsert(relations, item -> entity.getRelationId().equals(item.getRelationId()), entity);
+            relationByRelationId.put(entity.getRelationId(), entity);
+            rebuildRelationsByTargetId();
+            rebuildRelationsBySourceId();
             markLoaded(CachedTable.RELATION);
         }
     }
@@ -158,12 +179,17 @@ public class TimeseriesMemoryCache {
 
     public void replaceEvents(Collection<TimeseriesEvent> entities) {
         replaceAll(events, entities);
+        eventsByEventId.clear();
+        if (entities != null) {
+            entities.forEach(e -> { if (e.getEventId() != null) eventsByEventId.put(e.getEventId(), e); });
+        }
         markLoaded(CachedTable.EVENT);
     }
 
     public void putEvent(TimeseriesEvent entity) {
         if (entity != null && entity.getEventId() != null) {
             upsert(events, item -> entity.getEventId().equals(item.getEventId()), entity);
+            eventsByEventId.put(entity.getEventId(), entity);
             markLoaded(CachedTable.EVENT);
         }
     }
@@ -224,12 +250,14 @@ public class TimeseriesMemoryCache {
 
     public void replaceAnomalyResults(Collection<TimeseriesAnomalyResult> entities) {
         replaceAll(anomalyResults, entities);
+        rebuildAnomalyResultsByTaskId();
         markLoaded(CachedTable.ANOMALY_RESULT);
     }
 
     public void putAnomalyResult(TimeseriesAnomalyResult entity) {
         if (entity != null && entity.getResultId() != null) {
             upsert(anomalyResults, item -> entity.getResultId().equals(item.getResultId()), entity);
+            rebuildAnomalyResultsByTaskId();
             markLoaded(CachedTable.ANOMALY_RESULT);
         }
     }
@@ -240,12 +268,14 @@ public class TimeseriesMemoryCache {
 
     public void replaceForecastResults(Collection<TimeseriesForecastResult> entities) {
         replaceAll(forecastResults, entities);
+        rebuildForecastResultsByTaskId();
         markLoaded(CachedTable.FORECAST_RESULT);
     }
 
     public void putForecastResult(TimeseriesForecastResult entity) {
         if (entity != null && entity.getResultId() != null) {
             upsert(forecastResults, item -> entity.getResultId().equals(item.getResultId()), entity);
+            rebuildForecastResultsByTaskId();
             markLoaded(CachedTable.FORECAST_RESULT);
         }
     }
@@ -311,6 +341,136 @@ public class TimeseriesMemoryCache {
                         .thenComparing(TimeseriesDataPoint::getTimestamp, Comparator.nullsLast(java.time.LocalDateTime::compareTo)))
                 .collect(Collectors.toList());
     }
+
+    // ── Indexed query methods ────────────────────────────────────────
+
+    public TimeseriesInstanceConfig getInstanceBySequenceId(String sequenceId) {
+        return sequenceId != null ? instanceBySequenceId.get(sequenceId) : null;
+    }
+
+    public List<TimeseriesConstraint> listConstraintsByCategoryId(String categoryId) {
+        return categoryId != null && constraintsByCategoryId.containsKey(categoryId)
+                ? List.copyOf(constraintsByCategoryId.get(categoryId))
+                : List.of();
+    }
+
+    public TimeseriesRelation getRelationByRelationId(String relationId) {
+        return relationId != null ? relationByRelationId.get(relationId) : null;
+    }
+
+    public List<TimeseriesRelation> listRelationsByTargetSequenceId(String sequenceId) {
+        return sequenceId != null && relationsByTargetSequenceId.containsKey(sequenceId)
+                ? List.copyOf(relationsByTargetSequenceId.get(sequenceId))
+                : List.of();
+    }
+
+    public List<TimeseriesRelation> listRelationsBySourceSequenceId(String sequenceId) {
+        return sequenceId != null && relationsBySourceSequenceId.containsKey(sequenceId)
+                ? List.copyOf(relationsBySourceSequenceId.get(sequenceId))
+                : List.of();
+    }
+
+    public TimeseriesEvent getEventByEventId(String eventId) {
+        return eventId != null ? eventsByEventId.get(eventId) : null;
+    }
+
+    public List<TimeseriesAnomalyResult> listAnomalyResultsByTaskId(String taskId) {
+        return taskId != null && anomalyResultsByTaskId.containsKey(taskId)
+                ? List.copyOf(anomalyResultsByTaskId.get(taskId))
+                : List.of();
+    }
+
+    public List<TimeseriesForecastResult> listForecastResultsByTaskId(String taskId) {
+        return taskId != null && forecastResultsByTaskId.containsKey(taskId)
+                ? List.copyOf(forecastResultsByTaskId.get(taskId))
+                : List.of();
+    }
+
+    // ── Internal index rebuild helpers ────────────────────────────────
+
+    private void rebuildInstanceIndex() {
+        instanceBySequenceId.clear();
+        instanceConfigs.forEach(c -> {
+            if (c.getSequenceId() != null) instanceBySequenceId.put(c.getSequenceId(), c);
+        });
+    }
+
+    private void rebuildConstraintIndexes() {
+        constraintByConstraintId.clear();
+        constraintsByCategoryId.clear();
+        constraints.forEach(c -> {
+            if (c.getConstraintId() != null) constraintByConstraintId.put(c.getConstraintId(), c);
+        });
+        rebuildConstraintsByCategoryId();
+    }
+
+    private void rebuildConstraintsByCategoryId() {
+        constraintsByCategoryId.clear();
+        constraints.forEach(c -> {
+            if (c.getCategoryId() != null) {
+                constraintsByCategoryId.computeIfAbsent(c.getCategoryId(), k -> new CopyOnWriteArrayList<>()).add(c);
+            }
+        });
+    }
+
+    private void rebuildRelationIndexes() {
+        relationByRelationId.clear();
+        relations.forEach(r -> {
+            if (r.getRelationId() != null) relationByRelationId.put(r.getRelationId(), r);
+        });
+        rebuildRelationsByTargetId();
+        rebuildRelationsBySourceId();
+    }
+
+    private void rebuildRelationsByTargetId() {
+        relationsByTargetSequenceId.clear();
+        relations.forEach(r -> {
+            if (r.getTargetSequenceId() != null) {
+                relationsByTargetSequenceId.computeIfAbsent(r.getTargetSequenceId(), k -> new CopyOnWriteArrayList<>()).add(r);
+            }
+        });
+    }
+
+    private void rebuildRelationsBySourceId() {
+        relationsBySourceSequenceId.clear();
+        relations.forEach(r -> {
+            if (r.getSourceSequences() != null) {
+                r.getSourceSequences().forEach(src -> {
+                    if (src != null) {
+                        relationsBySourceSequenceId.computeIfAbsent(src, k -> new CopyOnWriteArrayList<>()).add(r);
+                    }
+                });
+            }
+        });
+    }
+
+    private void rebuildAnomalyResultsByTaskId() {
+        anomalyResultsByTaskId.clear();
+        anomalyResults.forEach(r -> {
+            // AnomalyResult may not have taskId; use source + sequenceIds as key
+            if (r.getSource() != null) {
+                anomalyResultsByTaskId.computeIfAbsent(r.getSource(), k -> new CopyOnWriteArrayList<>()).add(r);
+            }
+            if (r.getSequenceIds() != null) {
+                r.getSequenceIds().forEach(sid -> {
+                    if (sid != null) {
+                        anomalyResultsByTaskId.computeIfAbsent(sid, k -> new CopyOnWriteArrayList<>()).add(r);
+                    }
+                });
+            }
+        });
+    }
+
+    private void rebuildForecastResultsByTaskId() {
+        forecastResultsByTaskId.clear();
+        forecastResults.forEach(r -> {
+            if (r.getTaskId() != null) {
+                forecastResultsByTaskId.computeIfAbsent(r.getTaskId(), k -> new CopyOnWriteArrayList<>()).add(r);
+            }
+        });
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────
 
     private <T> void replaceAll(List<T> target, Collection<T> records) {
         target.clear();
