@@ -36,31 +36,34 @@ class DbscanAnomalyModel(AnomalyModel):
     def __init__(self, eps: float = 0.5, min_samples: int = 5):
         self.eps = eps
         self.min_samples = min_samples
-        self._core_samples: np.ndarray | None = None
+        self._normal_points: np.ndarray | None = None
 
     def fit(self, history: np.ndarray) -> None:
         history = np.asarray(history, dtype=float)
         if history.ndim == 1:
             history = history.reshape(-1, 1)
         model = DBSCAN(eps=self.eps, min_samples=self.min_samples).fit(history)
-        # 核心样本 = 标签不为 -1（不是噪声）的点
-        self._core_samples = history[model.labels_ != -1]
+        # 正常点 = 所有被分进簇的点（核心点 + 边界点），排除噪声(-1)。
+        # 注意：这不是"严格核心点"（严格核心点要用 model.core_sample_indices_），
+        # 而是"非噪声点"——正常区域的完整形态（含边缘），检测更宽容。
+        self._normal_points = history[model.labels_ != -1]
 
     def detect(self, window: np.ndarray) -> list[dict]:
         window = np.asarray(window, dtype=float)
         if window.ndim == 1:
             window = window.reshape(-1, 1)
         findings = []
-        if self._core_samples is None or len(self._core_samples) == 0:
+        if self._normal_points is None or len(self._normal_points) == 0:
             return findings
         for i, point in enumerate(window):
-            dist = float(np.min(np.linalg.norm(self._core_samples - point, axis=1)))
+            dist = float(np.min(np.linalg.norm(self._normal_points - point, axis=1)))
             if dist > self.eps:
                 findings.append({
                     "anomaly_type": "DISCRETE_OUTLIER",
                     "severity": "MEDIUM",
-                    "description": f"点 {i} 离群（距正常核心样本 {dist:.2f} > {self.eps}）",
+                    "description": f"点 {i} 离群（距最近正常点 {dist:.2f} > {self.eps}）",
                     "score": dist,
+                    "index": i,
                 })
         return findings
 
@@ -116,6 +119,7 @@ class GcadAnomalyModel(AnomalyModel):
                         "severity": "MEDIUM",
                         "description": f"序列{t} 在点{i} 因果预测残差 {residual:.3f} 超阈值",
                         "score": residual,
+                        "index": i,
                     })
         return findings
 

@@ -12,8 +12,8 @@ service TimeseriesCoreService {
   rpc syncRelations(SyncRelationsRequest)
       returns (SyncConfigResponse);
 
-  // Production ingest entry: resolve once, then persist and update the hot
-  // window in parallel inside Core.
+  // Production ingest entry: resolve once, persist to cold storage, then
+  // update the hot window inside Core.
   rpc ingestData(IngestDataRequest)
       returns (IngestDataResponse);
   // Fine-grained ingest RPCs are retained for testing, replay and compensation.
@@ -202,7 +202,7 @@ message RelationLagRange {
 }
 
 message RuntimeRelationSource {
-  string source_category_id = 1;
+  string source_sequence_id = 1;
   double weight = 2;
   oneof lag_spec {
     int64 fixed_lag = 3;
@@ -213,7 +213,7 @@ message RuntimeRelationSource {
 message RuntimeRelationConfig {
   string relation_id = 1;
   reserved 2;
-  string target_category_id = 3;
+  string target_sequence_id = 3;
   string relation_type = 4;
   reserved 5, 6;
   double confidence = 7;
@@ -298,6 +298,7 @@ message AlignWindowDataRequest {
     QueryWindowDataRequest window_query = 3;
   }
   AlignmentConfig config = 2;
+  repeated string relation_ids = 4;
 }
 
 message AlignWindowDataResponse {
@@ -332,7 +333,10 @@ message ComputeStatisticsRequest {
     AlignedWindowData aligned_data = 2;
     QueryWindowDataRequest window_query = 4;
   }
+  // The registered relation identifies one target sequence and its source
+  // sequences when a correlation vector is computed from aligned data.
   AlignmentConfig alignment_config = 3;
+  string relation_id = 5;
 }
 
 message ComputeStatisticsResponse {
