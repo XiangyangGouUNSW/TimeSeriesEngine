@@ -13,7 +13,7 @@ service TimeseriesCoreService {
   rpc syncRelations (SyncRelationsRequest) returns (SyncConfigResponse);
   rpc ingestData (IngestDataRequest) returns (IngestDataResponse);
   rpc SyncTaskStatus (SyncTaskStatusRequest) returns (SyncResponse);
-  rpc QueryHistoryData (QueryHistoryDataRequest) returns (QueryHistoryDataResponse);
+  rpc queryHistoryData (QueryHistoryDataRequest) returns (QueryHistoryDataResponse);
   rpc queryHistoryOverview (QueryHistoryOverviewRequest) returns (QueryHistoryOverviewResponse);
   rpc queryWindowData (QueryWindowDataRequest) returns (QueryWindowDataResponse);
 }

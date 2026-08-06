@@ -8,7 +8,7 @@
   "constraintDescription": "OT should be monitored below threshold",
   "constraintExpression": "x < 40",
   "lowerBound": 0.0,
-  "upperBound": 40.0,
+  "upperBound": 20.0,
   "terms": [
     {
       "variable": "x",

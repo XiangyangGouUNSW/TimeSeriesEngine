@@ -296,7 +296,7 @@ public class TimeseriesCoreGrpcClient {
                     SERVICE_NAME, op.getCode(), op.getSuccessCount(), op.getFailedCount(), op.getMessage());
             return SyncResult.of(success, op.getMessage());
         } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] <- ingestData FAILED: {}", SERVICE_NAME, e.getStatus().getDescription());
+            LOG.warn("[{}] <- ingestData FAILED: code={} desc={}", SERVICE_NAME, e.getStatus().getCode(), e.getStatus().getDescription());
             return SyncResult.fail(e.getStatus().getDescription());
         } finally {
             channel.shutdown();
@@ -351,7 +351,7 @@ public class TimeseriesCoreGrpcClient {
             }
             return vo;
         } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] queryHistoryData failed: {}", SERVICE_NAME, e.getStatus().getDescription());
+            LOG.warn("[{}] queryHistoryData failed: code={} desc={}", SERVICE_NAME, e.getStatus().getCode(), e.getStatus().getDescription());
             return new HistoryDataVO();
         } finally {
             channel.shutdown();
@@ -420,7 +420,7 @@ public class TimeseriesCoreGrpcClient {
             LOG.info("[{}] <- queryHistoryOverview total={} seqs={}", SERVICE_NAME, overview.getTotalPointCount(), overview.getSequenceCount());
             return result;
         } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] queryHistoryOverview failed: {}", SERVICE_NAME, e.getStatus().getDescription());
+            LOG.warn("[{}] queryHistoryOverview failed: code={} desc={}", SERVICE_NAME, e.getStatus().getCode(), e.getStatus().getDescription());
             return Map.of("error", e.getStatus().getDescription());
         } finally {
             channel.shutdown();
@@ -478,7 +478,7 @@ public class TimeseriesCoreGrpcClient {
                     resp.hasData() ? resp.getData().getSequencesCount() : 0);
             return result;
         } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] queryWindowData failed: {}", SERVICE_NAME, e.getStatus().getDescription());
+            LOG.warn("[{}] queryWindowData failed: code={} desc={}", SERVICE_NAME, e.getStatus().getCode(), e.getStatus().getDescription());
             return Map.of("error", e.getStatus().getDescription());
         } finally {
             channel.shutdown();
@@ -521,7 +521,7 @@ public class TimeseriesCoreGrpcClient {
                     op.getCode(), op.getSuccessCount(), op.getFailedCount(), op.getMessage());
             return SyncResult.of(success, op.getMessage());
         } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] <- {} FAILED: {}", SERVICE_NAME, operation, e.getStatus().getDescription());
+            LOG.warn("[{}] <- {} FAILED: code={} desc={}", SERVICE_NAME, operation, e.getStatus().getCode(), e.getStatus().getDescription());
             return SyncResult.fail(e.getStatus().getDescription());
         } finally {
             channel.shutdown();
@@ -537,7 +537,7 @@ public class TimeseriesCoreGrpcClient {
             LOG.info("[{}] <- {} success={} msg={}", SERVICE_NAME, operation, resp.getSuccess(), resp.getMessage());
             return SyncResult.of(resp.getSuccess(), resp.getMessage());
         } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] <- {} FAILED: {}", SERVICE_NAME, operation, e.getStatus().getDescription());
+            LOG.warn("[{}] <- {} FAILED: code={} desc={}", SERVICE_NAME, operation, e.getStatus().getCode(), e.getStatus().getDescription());
             return SyncResult.fail(e.getStatus().getDescription());
         } finally {
             channel.shutdown();
