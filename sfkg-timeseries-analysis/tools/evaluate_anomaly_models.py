@@ -24,7 +24,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "generated"))
 
-from anomaly_models import DbscanAnomalyModel, GcadAnomalyModel
+from anomaly_models import (
+    DbscanAnomalyModel,
+    GcadAnomalyModel,
+    TrendShiftAnomalyModel,
+)
 
 
 def load_ett(csv_path: str) -> np.ndarray:
@@ -172,6 +176,71 @@ def eval_gcad_multivariate(data: np.ndarray):
     return rows, sel_info, kept, dropped
 
 
+# ---------------- TREND_SHIFT 单变量趋势异常 ----------------
+
+TREND_KINDS = {"ramp": "缓慢漂移", "step": "阶跃", "reversal": "斜率突变"}
+
+
+def build_trend_data(n: int, seed: int = 1) -> np.ndarray:
+    """平滑单变量序列：平坦基线 + 小噪声（趋势漂移测试用，独立于因果数据）。"""
+    rng = np.random.RandomState(seed)
+    return (50.0 + rng.normal(0, 0.3, n)).reshape(-1, 1)
+
+
+def eval_trend(n: int):
+    """TREND_SHIFT：水平漂移/阶跃/斜率突变三类注入 + 参数扫描。
+
+    返回 (scan, best, best_detail)：扫描表、最优参数、最优参数下三场景指标。
+    最优选择：平均召回≥0.9 里总误报最小；没有达标的就取误报最小。
+    """
+    y = build_trend_data(n)
+    train = y[:1000]
+    sigma = float(train.std())
+    win_normal = y[1500:1550]
+    true_anomalous = set(range(25, 50))
+
+    def inject(kind):
+        win = win_normal.copy().flatten()
+        if kind == "ramp":        # 缓慢漂移：每点 +0.10σ，累计 2.5σ
+            win[25:] += 0.10 * sigma * np.arange(25, 50)
+        elif kind == "step":      # 阶跃：后半段整体上移 2σ
+            win[25:] += 2.0 * sigma
+        elif kind == "reversal":  # 斜率突变：后半段转强上升斜坡（0.10σ/点）
+            ramp = 0.10 * sigma * np.arange(25, 50)
+            win[25:] = win[24] + ramp
+        return win.reshape(-1, 1)
+
+    scan = []
+    for w in (4, 6, 10):
+        for lv in (2.0, 2.5, 3.0):
+            for sm in (2.0, 2.5, 3.0):
+                recalls, fps = [], []
+                for kind in TREND_KINDS:
+                    model = TrendShiftAnomalyModel(
+                        window=w, level_limit=lv, slope_std_mult=sm)
+                    model.fit(train)
+                    findings = model.detect(inject(kind))
+                    r, _, _ = point_metrics(
+                        {f["index"] for f in findings}, true_anomalous, len(win_normal))
+                    recalls.append(r)
+                    fps.append(len(model.detect(win_normal)))
+                scan.append((w, lv, sm, float(np.mean(recalls)), fps, sum(fps)))
+    ok = [s for s in scan if s[3] >= 0.9]
+    best = min(ok if ok else scan, key=lambda s: (s[5], -s[3]))
+
+    # 最优参数下各场景详细指标（对照验收线）
+    model = TrendShiftAnomalyModel(
+        window=best[0], level_limit=best[1], slope_std_mult=best[2])
+    model.fit(train)
+    detail = []
+    for kind in TREND_KINDS:
+        findings = model.detect(inject(kind))
+        r, p, acc = point_metrics(
+            {f["index"] for f in findings}, true_anomalous, len(win_normal))
+        detail.append((kind, r, p, acc, len(model.detect(win_normal))))
+    return scan, best, detail
+
+
 def main() -> None:
     data = load_ett(str(ROOT / "data" / "ETT-small" / "ETTh1.csv"))
     print(f"数据：{data.shape[0]} 点 × {data.shape[1]} 序列（ETTh1）")
@@ -193,6 +262,19 @@ def main() -> None:
     print(f"     {'quantile':<10}{'平均召回':>8}  各异常误报(系数变化/关系反转/变量失效)")
     for q, avg_r, fp_list in rows:
         print(f"     {q:<10.2f}{avg_r:>8.2f}  {fp_list}")
+
+    # TREND_SHIFT 单变量趋势异常
+    scan, best, detail = eval_trend(data.shape[0])
+    print("\n[TREND_SHIFT] 单变量趋势异常（水平漂移 / 阶跃 / 斜率突变）")
+    print("  参数扫描（window/level_limit/slope_std_mult → 平均召回, 误报[漂移,阶跃,突变]）：")
+    for w, lv, sm, avg_r, fps, tot in scan:
+        print(f"    {w}/{lv:.1f}/{sm:.1f} → 召回 {avg_r:.2f}  误报{tot} {fps}")
+    w0, lv0, sm0, avg0, _, _ = best
+    print(f"  最优参数 window={w0} level_limit={lv0} slope_std_mult={sm0}"
+          f" → 平均召回 {avg0:.2f}")
+    print(f"  {'场景':<10}{'召回':>6}{'精确':>6}{'准确':>6}{'正常误报':>8}")
+    for kind, r, p, acc, fp in detail:
+        print(f"  {TREND_KINDS[kind]:<10}{r:>6.2f}{p:>6.2f}{acc:>6.2f}{fp:>8}")
     print("=" * 60)
     print("说明：三种模式偏移 = 破坏因变量与自变量的因果关系（模式偏移/趋势异常）。")
     print("quantile 是训练残差的分位数阈值：越高越严格（误报低但可能漏检），")

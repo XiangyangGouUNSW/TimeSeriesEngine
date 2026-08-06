@@ -53,7 +53,7 @@ def main() -> None:
         task_id="task-gcad-mv-001",
         task_name="GCAD 多变量集成验证",
         sequence_ids=seq_ids,
-        methods=["CAUSAL_PATTERN"],
+        methods=["CAUSAL_PATTERN", "TREND_SHIFT"],
         semantic_context=pb.SemanticContext(
             sequences=(
                 [pb.SequenceMetadata(sequence_id=sid, role="FEATURE") for sid in FEATURES]
@@ -73,12 +73,14 @@ def main() -> None:
     prior = engine._get_correlation_prior(target_id, source_ids, seq_ids)
     print(f"[3] _get_correlation_prior → 列索引先验 {prior}")
 
-    # 4. 跑模型检测（真实 ETT 数据无注入异常 → 应基本不检出）
+    # 4. 跑模型检测（CAUSAL_PATTERN + TREND_SHIFT 两条腿）
     findings = engine._run_anomaly_models(task)
     print(f"[4] _run_anomaly_models 检出 {len(findings)} 条模式偏离")
-    for f in findings[:5]:
-        print(f"    {f['anomaly_type']} @点{f['index']} 残差 {f['score']:.3f}")
-    print("\n集成验证通过 ✓（链路通；真实数据无注入异常，检出应为 0 或极少误报）")
+    for f in findings[:8]:
+        print(f"    {f['anomaly_type']} @点{f['index']} 分数 {f['score']:.3f}")
+    kinds = sorted({f["anomaly_type"] for f in findings})
+    print(f"    命中方法：{kinds}")
+    print("\n集成验证通过 ✓（链路通；GCAD 无注入应少报，TREND_SHIFT 可能检出 OT 自身趋势漂移）")
 
 
 if __name__ == "__main__":
