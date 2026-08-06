@@ -195,7 +195,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             BeanUtils.copyProperties(request, entity);
         }
         entity.setRelationId(relationId);
-        entity.setTargetCategoryName(resolveCategoryName(entity.getTargetCategoryId()));
+        entity.setTargetCategoryName(resolveCategoryName(entity.getTargetSequenceId()));
 
         relationMapper.insert(entity);
         memoryCache.putRelation(entity);
@@ -324,17 +324,17 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         }
         return equalsIfPresent(request.getRelationId(), entity.getRelationId())
                 && containsIfPresent(request.getRelationName(), entity.getRelationName())
-                && sourceContains(request.getSourceCategoryId(), entity)
-                && equalsIfPresent(request.getTargetCategoryId(), entity.getTargetCategoryId())
+                && sourceContains(request.getSourceSequenceId(), entity)
+                && equalsIfPresent(request.getTargetSequenceId(), entity.getTargetSequenceId())
                 && equalsTextIfPresent(request.getRelationType(), entity.getRelationType())
                 && equalsTextIfPresent(request.getEffectiveStatus(), entity.getEffectiveStatus())
                 && equalsTextIfPresent(request.getConfirmStatus(), entity.getConfirmStatus())
                 && matchesRelationKeyword(request.getKeyword(), entity);
     }
 
-    private boolean sourceContains(String sourceCategoryId, TimeseriesRelation entity) {
-        return sourceCategoryId == null
-                || (entity.getSourceCategories() != null && entity.getSourceCategories().contains(sourceCategoryId));
+    private boolean sourceContains(String sourceSequenceId, TimeseriesRelation entity) {
+        return sourceSequenceId == null
+                || (entity.getSourceSequences() != null && entity.getSourceSequences().contains(sourceSequenceId));
     }
 
     private boolean equalsIfPresent(String expected, String actual) {

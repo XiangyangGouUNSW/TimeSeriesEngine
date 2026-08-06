@@ -50,10 +50,14 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
 
     @Override
     public String createAnomalyEvent(AnomalyResultVO result) {
-        String eventId = UUID.randomUUID().toString();
+        String source = result != null && result.getSource() != null ? result.getSource() : "ANOMALY";
+        String seq = result != null && result.getSequenceId() != null
+                ? result.getSequenceId().replace(",", "_") : "UNKNOWN";
+        String ts = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyMMddHHmmss"));
+        String eventId = "EVT_" + source + "_" + seq + "_" + ts;
         TimeseriesEvent event = new TimeseriesEvent();
         event.setEventId(eventId);
-        event.setEventName("anomaly event " + eventId);
+        event.setEventName(source + " event on " + seq);
         event.setEventType(stripAnomalyPrefix(result == null ? null : result.getEventType(),
                 "ANOMALY"));
         event.setEventSource(result != null && result.getSource() != null

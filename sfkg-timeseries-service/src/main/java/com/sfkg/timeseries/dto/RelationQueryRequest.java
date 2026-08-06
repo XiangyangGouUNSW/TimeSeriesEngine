@@ -7,8 +7,8 @@ public class RelationQueryRequest {
 
     private String relationId;
     private String relationName;
-    private String sourceCategoryId;
-    private String targetCategoryId;
+    private String sourceSequenceId;
+    private String targetSequenceId;
     private String relationType;
     private String effectiveStatus;
     private String confirmStatus;

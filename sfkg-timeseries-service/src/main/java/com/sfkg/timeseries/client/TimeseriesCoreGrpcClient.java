@@ -14,6 +14,7 @@ import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.entity.TimeseriesRelation;
 import com.sfkg.timeseries.grpc.ConstraintRule;
 import com.sfkg.timeseries.grpc.ConstraintTerm;
+import com.sfkg.timeseries.grpc.HistoryOverview;
 import com.sfkg.timeseries.grpc.IngestDataRequest;
 import com.sfkg.timeseries.grpc.IngestDataResponse;
 import com.sfkg.timeseries.grpc.OperationCode;
@@ -161,15 +162,15 @@ public class TimeseriesCoreGrpcClient {
 
         RuntimeRelationConfig.Builder relationBuilder = RuntimeRelationConfig.newBuilder()
                 .setRelationId(nullToEmpty(relation.getRelationId()))
-                .setTargetCategoryId(nullToEmpty(relation.getTargetCategoryId()))
+                .setTargetSequenceId(nullToEmpty(relation.getTargetSequenceId()))
                 .setRelationType(nullToEmpty(relation.getRelationType()))
                 .setConfidence(relation.getConfidence() != null ? relation.getConfidence().doubleValue() : 0.0)
                 .setEnabled("ENABLE".equalsIgnoreCase(relation.getEffectiveStatus()));
 
-        if (relation.getSourceCategories() != null) {
-            for (String sourceCatId : relation.getSourceCategories()) {
+        if (relation.getSourceSequences() != null) {
+            for (String sourceSeqId : relation.getSourceSequences()) {
                 RuntimeRelationSource.Builder sourceBuilder = RuntimeRelationSource.newBuilder()
-                        .setSourceCategoryId(nullToEmpty(sourceCatId))
+                        .setSourceSequenceId(nullToEmpty(sourceSeqId))
                         .setWeight(1.0);
                 long lag = parseLag(relation.getLagRange());
                 if (lag >= 0) {
@@ -401,13 +402,14 @@ public class TimeseriesCoreGrpcClient {
             QueryHistoryOverviewResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
                     .withDeadlineAfter(5, TimeUnit.SECONDS)
                     .queryHistoryOverview(b.build());
+            HistoryOverview overview = resp.getOverview();
             Map<String, Object> result = new java.util.LinkedHashMap<>();
-            result.put("totalPointCount", resp.getTotalPointCount());
-            result.put("sequenceCount", resp.getSequenceCount());
-            result.put("columnNames", resp.getColumnNamesList());
-            result.put("firstTime", resp.hasFirstTime() ? resp.getFirstTime() : null);
-            result.put("lastTime", resp.hasLastTime() ? resp.getLastTime() : null);
-            result.put("series", resp.getSeriesList().stream().map(s -> {
+            result.put("totalPointCount", overview.getTotalPointCount());
+            result.put("sequenceCount", overview.getSequenceCount());
+            result.put("columnNames", overview.getColumnNamesList());
+            result.put("firstTime", overview.hasFirstTime() ? overview.getFirstTime() : null);
+            result.put("lastTime", overview.hasLastTime() ? overview.getLastTime() : null);
+            result.put("series", overview.getSeriesList().stream().map(s -> {
                 Map<String, Object> m = new java.util.LinkedHashMap<>();
                 m.put("sequenceId", s.getSequenceId());
                 m.put("pointCount", s.getPointCount());
@@ -415,7 +417,7 @@ public class TimeseriesCoreGrpcClient {
                 m.put("lastTime", s.hasLastTime() ? s.getLastTime() : null);
                 return m;
             }).collect(java.util.stream.Collectors.toList()));
-            LOG.info("[{}] <- queryHistoryOverview total={} seqs={}", SERVICE_NAME, resp.getTotalPointCount(), resp.getSequenceCount());
+            LOG.info("[{}] <- queryHistoryOverview total={} seqs={}", SERVICE_NAME, overview.getTotalPointCount(), overview.getSequenceCount());
             return result;
         } catch (StatusRuntimeException e) {
             LOG.warn("[{}] queryHistoryOverview failed: {}", SERVICE_NAME, e.getStatus().getDescription());

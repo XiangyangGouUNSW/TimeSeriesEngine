@@ -106,9 +106,11 @@ public class AnomalyResultReceiverGrpcService
 
             // create a forecast warning event
             TimeseriesEvent event = new TimeseriesEvent();
-            String eventId = UUID.randomUUID().toString();
+            String ts = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyMMddHHmmss"));
+            String taskId = entity.getTaskId() != null ? entity.getTaskId() : "UNKNOWN";
+            String eventId = "EVT_FORECAST_" + taskId + "_" + ts;
             event.setEventId(eventId);
-            event.setEventName("forecast event " + eventId);
+            event.setEventName("forecast event on " + taskId);
             event.setEventType("WARNING");
             event.setEventSource("FORECAST");
             event.setEventLevel("MEDIUM");

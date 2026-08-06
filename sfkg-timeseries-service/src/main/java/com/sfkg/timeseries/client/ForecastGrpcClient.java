@@ -75,6 +75,7 @@ public class ForecastGrpcClient {
 
         AnalysisSyncForecastTaskRequest req = AnalysisSyncForecastTaskRequest.newBuilder()
                 .setMeta(newMeta())
+                .setConfigVersion(System.currentTimeMillis())
                 .setTask(configBuilder.build())
                 .build();
 

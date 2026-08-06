@@ -2,7 +2,7 @@
   "sequenceId": "ETTh1_HULL",
   "instanceName": "ETTh1 High Useful Load Rear",
   "externalSequenceId": "ETTh1_HULL",
-  "categoryId": "ETTh1",
+  "categoryId": "HULL",
   "dataSourceId": "ETTh1.csv",
   "dataType": "double",
   "accessStatus": "ENABLE"

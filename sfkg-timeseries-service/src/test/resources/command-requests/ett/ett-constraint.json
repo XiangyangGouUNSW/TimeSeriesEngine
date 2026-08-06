@@ -1,7 +1,7 @@
 {
   "constraintId": "ett-ot-upper-limit",
   "constraintName": "oil temperature upper limit",
-  "categoryId": "ETTh1",
+  "categoryId": "OT",
   "variableMapping": {
     "x": "ETTh1_OT"
   },

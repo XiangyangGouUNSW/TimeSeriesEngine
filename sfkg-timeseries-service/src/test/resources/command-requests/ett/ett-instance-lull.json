@@ -2,7 +2,7 @@
   "sequenceId": "ETTh1_LULL",
   "instanceName": "ETTh1 Low Useful Load Rear",
   "externalSequenceId": "ETTh1_LULL",
-  "categoryId": "ETTh1",
+  "categoryId": "LULL",
   "dataSourceId": "ETTh1.csv",
   "dataType": "double",
   "accessStatus": "ENABLE"

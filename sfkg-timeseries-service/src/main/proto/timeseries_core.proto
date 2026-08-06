@@ -94,7 +94,7 @@ message SyncConstraintsRequest {
 // ── Relation config ───────────────────────────────────────────────
 
 message RuntimeRelationSource {
-  string source_category_id = 1;
+  string source_sequence_id = 1;
   double weight = 2;
   oneof lag_spec {
     int64 fixed_lag = 3;
@@ -110,7 +110,7 @@ message RelationLagRange {
 message RuntimeRelationConfig {
   string relation_id = 1;
   reserved 2;
-  string target_category_id = 3;
+  string target_sequence_id = 3;
   string relation_type = 4;
   reserved 5, 6;
   double confidence = 7;
@@ -199,12 +199,16 @@ message HistorySeriesSummary {
 
 message QueryHistoryOverviewResponse {
   OperationResult operation = 1;
-  uint64 total_point_count = 2;
-  uint64 sequence_count = 3;
-  repeated string column_names = 4;
-  optional int64 first_time = 5;
-  optional int64 last_time = 6;
-  repeated HistorySeriesSummary series = 7;
+  HistoryOverview overview = 2;
+}
+
+message HistoryOverview {
+  uint64 total_point_count = 1;
+  uint64 sequence_count = 2;
+  repeated string column_names = 3;
+  optional int64 first_time = 4;
+  optional int64 last_time = 5;
+  repeated HistorySeriesSummary series = 6;
 }
 
 // ── Window data query ─────────────────────────────────────────────

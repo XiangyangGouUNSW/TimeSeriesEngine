@@ -73,6 +73,7 @@ public class AnomalyGrpcClient {
 
         AnalysisSyncAnomalyTaskRequest req = AnalysisSyncAnomalyTaskRequest.newBuilder()
                 .setMeta(newMeta())
+                .setConfigVersion(System.currentTimeMillis())
                 .setTask(configBuilder.build())
                 .build();
 

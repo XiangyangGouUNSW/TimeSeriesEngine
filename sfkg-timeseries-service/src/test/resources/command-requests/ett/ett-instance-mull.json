@@ -2,7 +2,7 @@
   "sequenceId": "ETTh1_MULL",
   "instanceName": "ETTh1 Medium Useful Load Rear",
   "externalSequenceId": "ETTh1_MULL",
-  "categoryId": "ETTh1",
+  "categoryId": "MULL",
   "dataSourceId": "ETTh1.csv",
   "dataType": "double",
   "accessStatus": "ENABLE"

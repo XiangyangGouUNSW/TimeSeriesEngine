@@ -2,7 +2,7 @@
   "sequenceId": "ETTh1_LUFL",
   "instanceName": "ETTh1 Low Useful Load Front",
   "externalSequenceId": "ETTh1_LUFL",
-  "categoryId": "ETTh1",
+  "categoryId": "LUFL",
   "dataSourceId": "ETTh1.csv",
   "dataType": "double",
   "accessStatus": "ENABLE"

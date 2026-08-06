@@ -50,10 +50,12 @@ public class TimeseriesForecastResultServiceImpl implements TimeseriesForecastRe
 
     @Override
     public String createWarningEvent(ForecastResultVO result) {
-        String eventId = UUID.randomUUID().toString();
+        String ts = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyMMddHHmmss"));
+        String taskId = result != null && result.getTaskId() != null ? result.getTaskId() : "UNKNOWN";
+        String eventId = "EVT_FORECAST_" + taskId + "_" + ts;
         TimeseriesEvent event = new TimeseriesEvent();
         event.setEventId(eventId);
-        event.setEventName("forecast warning event " + eventId);
+        event.setEventName("forecast event on " + taskId);
         event.setEventType("WARNING");
         event.setEventSource("FORECAST");
         event.setEventLevel(result == null ? null : result.getWarningLevel());

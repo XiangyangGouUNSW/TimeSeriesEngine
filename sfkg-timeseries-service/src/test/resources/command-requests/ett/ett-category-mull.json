@@ -1,0 +1,7 @@
+{
+  "categoryId": "MULL",
+  "categoryName": "Medium Useful Load Low",
+  "dataType": "double",
+  "applicableObjectType": "TRANSFORMER",
+  "confirmStatus": "CONFIRMED"
+}

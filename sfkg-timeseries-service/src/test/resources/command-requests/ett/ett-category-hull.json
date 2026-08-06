@@ -1,0 +1,7 @@
+{
+  "categoryId": "HULL",
+  "categoryName": "High Useful Load Low",
+  "dataType": "double",
+  "applicableObjectType": "TRANSFORMER",
+  "confirmStatus": "CONFIRMED"
+}

@@ -8,8 +8,8 @@ public class RelationSaveRequest {
 
     private String relationId;
     private String relationName;
-    private Collection<String> sourceCategories;
-    private String targetCategoryId;
+    private Collection<String> sourceSequences;
+    private String targetSequenceId;
     private String relationType;
     private String lagRange;
     private java.math.BigDecimal confidence;

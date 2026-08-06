@@ -1,0 +1,7 @@
+{
+  "categoryId": "MUFL",
+  "categoryName": "Medium Useful Load",
+  "dataType": "double",
+  "applicableObjectType": "TRANSFORMER",
+  "confirmStatus": "CONFIRMED"
+}

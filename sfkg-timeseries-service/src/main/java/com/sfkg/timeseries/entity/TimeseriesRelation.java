@@ -9,8 +9,8 @@ public class TimeseriesRelation {
 
     private String relationId;
     private String relationName;
-    private Collection<String> sourceCategories;
-    private String targetCategoryId;
+    private Collection<String> sourceSequences;
+    private String targetSequenceId;
     private String targetCategoryName;
     private String relationType;
     private String lagRange;

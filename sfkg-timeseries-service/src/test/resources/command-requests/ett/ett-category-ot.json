@@ -1,0 +1,7 @@
+{
+  "categoryId": "OT",
+  "categoryName": "Oil Temperature",
+  "dataType": "double",
+  "applicableObjectType": "TRANSFORMER",
+  "confirmStatus": "CONFIRMED"
+}

@@ -2,7 +2,7 @@
   "sequenceId": "ETTh1_OT",
   "instanceName": "ETTh1 Oil Temperature",
   "externalSequenceId": "ETTh1_OT",
-  "categoryId": "ETTh1",
+  "categoryId": "OT",
   "dataSourceId": "ETTh1.csv",
   "dataType": "double",
   "accessStatus": "ENABLE"

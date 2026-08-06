@@ -1,0 +1,7 @@
+{
+  "categoryId": "LUFL",
+  "categoryName": "Low Useful Load",
+  "dataType": "double",
+  "applicableObjectType": "TRANSFORMER",
+  "confirmStatus": "CONFIRMED"
+}

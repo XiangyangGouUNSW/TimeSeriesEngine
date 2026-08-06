@@ -1,0 +1,7 @@
+{
+  "categoryId": "HUFL",
+  "categoryName": "High Useful Load",
+  "dataType": "double",
+  "applicableObjectType": "TRANSFORMER",
+  "confirmStatus": "CONFIRMED"
+}
