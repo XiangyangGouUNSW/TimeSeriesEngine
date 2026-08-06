@@ -161,7 +161,13 @@ class AnalysisEngine:
                 message=f"异常检测失败：{e}", findings=[], model_version="")
 
     def _run_anomaly_models(self, task) -> list[dict]:
-        """根据任务 methods 训练/使用异常模型，检测模式偏离。"""
+        """根据任务 methods 训练/使用异常模型，检测模式偏离。
+
+        多自变量→单因变量场景：
+          - 因变量/自变量由 semantic_context.sequences 的 role（TARGET/FEATURE）确定；
+          - 相关性先验：调 C computeBasicStatistics 拿 {序列ID: 系数}，
+            转成列索引后传给 GCAD 筛选自变量；拿不到先验就降级为不用。
+        """
         seq_ids = list(task.sequence_ids)
         if not seq_ids:
             return []
@@ -170,8 +176,24 @@ class AnalysisEngine:
         try:
             history = self._get_history_matrix(seq_ids)
             window = self._get_window_matrix(seq_ids)
+            # 语义上下文 → 因变量/自变量（列索引）
+            target_id, source_ids = self._extract_roles(task, seq_ids)
+            target_index = seq_ids.index(target_id) if target_id in seq_ids else None
+            source_indices = [seq_ids.index(sid) for sid in source_ids if sid in seq_ids]
+            # 相关性先验：调 C 失败就降级为 None（模型用不上先验）
+            corr_prior = None
+            if target_id and source_ids:
+                try:
+                    corr_prior = self._get_correlation_prior(target_id, source_ids, seq_ids)
+                except Exception as e:
+                    logger.info(f"[engine] 拿相关性先验失败，降级为不用先验：{e}")
             for method in methods:
-                model = build_anomaly_model(method)
+                model = build_anomaly_model(
+                    method,
+                    target_index=target_index,
+                    source_indices=source_indices,
+                    correlation_prior=corr_prior,
+                )
                 if model is None:
                     continue
                 model.fit(history)
@@ -182,6 +204,37 @@ class AnalysisEngine:
         except Exception as e:
             logger.info(f"[engine] 模型检测异常：{e}")
         return findings
+
+    def _extract_roles(self, task, seq_ids) -> tuple[str | None, list[str]]:
+        """从 semantic_context.sequences 的 role 确定因变量/自变量序列 ID。
+
+        返回 (target_sequence_id, source_sequence_ids)。
+        没有 TARGET/FEATURE 标注时退回默认：最后一条序列当因变量，其余当自变量。
+        """
+        seq_set = set(seq_ids)
+        target_id = None
+        source_ids: list[str] = []
+        for meta in getattr(task.semantic_context, "sequences", []):
+            role = (getattr(meta, "role", "") or "").upper()
+            if meta.sequence_id not in seq_set:
+                continue
+            if role == "TARGET":
+                target_id = meta.sequence_id
+            elif role == "FEATURE":
+                source_ids.append(meta.sequence_id)
+        if target_id is None and seq_ids:
+            target_id = seq_ids[-1]
+        if not source_ids:
+            source_ids = [sid for sid in seq_ids if sid != target_id]
+        return target_id, source_ids
+
+    def _get_correlation_prior(self, target_id, source_ids, seq_ids) -> dict[int, float] | None:
+        """调 C computeBasicStatistics 拿相关性先验，转成 {列索引: 系数}。"""
+        by_id = self.core.get_correlation_vector(target_id, source_ids)
+        if not by_id:
+            return None
+        seq_index = {sid: i for i, sid in enumerate(seq_ids)}
+        return {seq_index[sid]: coef for sid, coef in by_id.items() if sid in seq_index}
 
     def _get_history_matrix(self, seq_ids) -> np.ndarray:
         """从 C 拉历史数据，转成 [time, seq_count] 矩阵。"""

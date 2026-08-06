@@ -174,6 +174,38 @@ class GrpcCoreDataClient(CoreDataClient):
         resp = self._call(self._stub.checkConstraints, request)
         return resp.satisfied, list(resp.violations)
 
+    def get_correlation_vector(
+        self,
+        target_sequence_id: str,
+        independent_sequence_ids: list[str],
+        relation_id: str | None = None,
+    ) -> dict[str, float] | None:
+        """调 C 的 computeBasicStatistics 拿相关性向量（GCAD 的相关性先验）。
+
+        因变量/自变量通过 alignment_config 的角色（DEPENDENT/INDEPENDENT）告诉 C，
+        relation_id 指定对应的时序关联；C 用窗口数据算因变量与每个自变量的
+        Pearson 相关系数。返回 {independent_sequence_id: coefficient}。
+        """
+        alignment_config = pb.AlignmentConfig(
+            sequences=[
+                pb.SequenceAlignmentConfig(
+                    sequence_id=target_sequence_id, role=pb.VARIABLE_ROLE_DEPENDENT),
+            ] + [
+                pb.SequenceAlignmentConfig(
+                    sequence_id=sid, role=pb.VARIABLE_ROLE_INDEPENDENT)
+                for sid in independent_sequence_ids
+            ],
+        )
+        request = pb.ComputeStatisticsRequest(
+            relation_id=relation_id or "",
+            alignment_config=alignment_config,
+            window_query=pb.QueryWindowDataRequest(
+                sequence_ids=[target_sequence_id] + list(independent_sequence_ids)),
+        )
+        resp = self._call(self._stub.computeBasicStatistics, request)
+        cv = resp.correlation_vector
+        return {c.independent_sequence_id: c.coefficient for c in cv.correlations}
+
     def _to_point(self, raw):
         """proto RawTimeseriesPoint → (time, sequence_id, value)。
         value 的 oneof 没设置（空值）返回 None，调用处过滤。

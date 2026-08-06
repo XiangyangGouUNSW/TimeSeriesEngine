@@ -69,58 +69,95 @@ class DbscanAnomalyModel(AnomalyModel):
 
 
 class GcadAnomalyModel(AnomalyModel):
-    """GCAD（格兰杰因果）异常检测：连续多变量序列。
+    """GCAD（格兰杰因果）异常检测：多自变量 → 单因变量。
 
-    简化实现：
-      fit：对每条目标序列，用"所有序列过去 lag 步的值"线性预测当前值，
-           得到因果结构（哪些序列的过去影响它），并记录训练残差阈值；
-      detect：用学到的因果模型预测新窗口，残差超阈值 → 模式偏离异常。
+    核心场景：因变量（如产品合格率）受多个自变量（温度、压力、转速）影响。
+    fit：用【自变量的过去 lag 步】预测【因变量的当前值】（lasso 稀疏回归），
+         得到因果系数（哪些自变量真正影响因变量），并记录训练残差阈值；
+    detect：新窗口里用学到的因果模型预测因变量，残差超阈值 → 模式偏移。
+
+    支持先验：
+      - relations（谁影响谁）→ 通过 target/source 列索引体现
+      - 相关性矩阵（C 算的）→ 筛选自变量（只保留和因变量相关性较高的）
     """
 
-    def __init__(self, lag: int = 3, residual_quantile: float = 0.9):
+    def __init__(self, lag: int = 3, residual_quantile: float = 0.95,
+                 target_index: int | None = None,
+                 source_indices: list[int] | None = None,
+                 correlation_prior: dict[int, float] | None = None,
+                 corr_threshold: float = 0.1, alpha: float = 0.01):
         self.lag = lag
         self.residual_quantile = residual_quantile
-        self._coefs: list[np.ndarray] = []   # 每条序列的因果系数
-        self._thresholds: list[float] = []   # 每条序列的残差阈值
+        self.target_index = target_index
+        self.corr_threshold = corr_threshold
+        self.alpha = alpha
+        # 原始自变量列（None=默认全部非目标列）；先验在 fit 时统一解析
+        self.source_indices = list(source_indices) if source_indices else None
+        self.correlation_prior = dict(correlation_prior) if correlation_prior else {}
+        self._sources: list[int] = []
+        self._coef: np.ndarray | None = None
+        self._threshold: float | None = None
+
+    def _resolve_sources(self, n_seq: int) -> list[int]:
+        """确定最终自变量列：显式 source_indices 或全部非目标列，再按相关性先验筛选。
+
+        先验只在 |相关系数| >= corr_threshold 时保留；全被筛掉就退回筛选前（避免过度削减）。
+        """
+        target = self.target_index if self.target_index is not None else n_seq - 1
+        srcs = ([s for s in self.source_indices if s != target]
+                if self.source_indices is not None
+                else [i for i in range(n_seq) if i != target])
+        if srcs and self.correlation_prior:
+            selected = [s for s in srcs
+                        if abs(self.correlation_prior.get(s, 0.0)) >= self.corr_threshold]
+            if selected:
+                srcs = selected
+        return srcs
 
     def fit(self, history: np.ndarray) -> None:
         history = np.asarray(history, dtype=float)
         n_time, n_seq = history.shape
-        if n_time <= self.lag + 2:
+        if self.target_index is None:
+            self.target_index = n_seq - 1
+        srcs = self._resolve_sources(n_seq)
+        self._sources = srcs
+        if not srcs or n_time <= self.lag + 2:
             return
-        self._coefs, self._thresholds = [], []
-        for t in range(n_seq):
-            # 特征：所有序列过去 lag 步的值（展平）+ 截距
-            X, y = [], []
-            for i in range(self.lag, n_time):
-                X.append(history[i - self.lag:i].flatten())
-                y.append(history[i, t])
-            X = np.array(X)
-            Xb = np.hstack([X, np.ones((len(X), 1))])
-            coef, *_ = np.linalg.lstsq(Xb, np.array(y), rcond=None)
-            self._coefs.append(coef)
-            residuals = np.abs(np.array(y) - Xb @ coef)
-            self._thresholds.append(float(np.quantile(residuals, self.residual_quantile)))
+        # 特征：自变量的过去 lag 步（展平）
+        X, y = [], []
+        for i in range(self.lag, n_time):
+            X.append(history[i - self.lag:i][:, srcs].flatten())
+            y.append(history[i, self.target_index])
+        X = np.array(X)
+        y = np.array(y)
+        # lasso 稀疏回归：只有真正影响因变量的自变量有非零系数
+        from sklearn.linear_model import Lasso
+        lasso = Lasso(alpha=self.alpha, max_iter=3000, tol=1e-4)
+        lasso.fit(X, y)
+        self._coef = np.concatenate([lasso.coef_, [lasso.intercept_]])
+        residuals = np.abs(y - lasso.predict(X))
+        self._threshold = float(np.quantile(residuals, self.residual_quantile))
 
     def detect(self, window: np.ndarray) -> list[dict]:
         window = np.asarray(window, dtype=float)
         findings = []
         n_time, n_seq = window.shape
-        if n_time <= self.lag or not self._coefs:
+        if self._coef is None or n_time <= self.lag:
             return findings
-        for t in range(n_seq):
-            for i in range(self.lag, n_time):
-                feat = np.hstack([window[i - self.lag:i].flatten(), [1.0]])
-                pred = feat @ self._coefs[t]
-                residual = float(abs(window[i, t] - pred))
-                if residual > self._thresholds[t]:
-                    findings.append({
-                        "anomaly_type": "CAUSAL_PATTERN",
-                        "severity": "MEDIUM",
-                        "description": f"序列{t} 在点{i} 因果预测残差 {residual:.3f} 超阈值",
-                        "score": residual,
-                        "index": i,
-                    })
+        srcs = self._sources or self._resolve_sources(n_seq)
+        for i in range(self.lag, n_time):
+            feat = np.hstack([window[i - self.lag:i][:, srcs].flatten(), [1.0]])
+            pred = feat @ self._coef
+            residual = float(abs(window[i, self.target_index] - pred))
+            if residual > self._threshold:
+                findings.append({
+                    "anomaly_type": "CAUSAL_PATTERN",
+                    "severity": "MEDIUM",
+                    "description": (f"因变量(列{self.target_index}) 在点{i} "
+                                    f"因果预测残差 {residual:.3f} 超阈值"),
+                    "score": residual,
+                    "index": i,
+                })
         return findings
 
 
@@ -128,7 +165,16 @@ class GcadAnomalyModel(AnomalyModel):
 def build_anomaly_model(method: str, **kwargs) -> AnomalyModel | None:
     """根据方法名返回模型实例；未知方法返回 None。"""
     if method == "DISCRETE_OUTLIER":
-        return DbscanAnomalyModel(**kwargs)
+        return DbscanAnomalyModel(eps=kwargs.get("eps", 0.5),
+                                  min_samples=kwargs.get("min_samples", 5))
     if method == "CAUSAL_PATTERN":
-        return GcadAnomalyModel(**kwargs)
+        return GcadAnomalyModel(
+            lag=kwargs.get("lag", 3),
+            residual_quantile=kwargs.get("residual_quantile", 0.95),
+            target_index=kwargs.get("target_index"),
+            source_indices=kwargs.get("source_indices"),
+            correlation_prior=kwargs.get("correlation_prior"),
+            corr_threshold=kwargs.get("corr_threshold", 0.1),
+            alpha=kwargs.get("alpha", 0.01),
+        )
     return None

@@ -52,6 +52,18 @@ class CoreDataClient:
     ) -> AlignedWindow:
         raise NotImplementedError
 
+    def get_correlation_vector(
+        self,
+        target_sequence_id: str,
+        independent_sequence_ids: list[str],
+        relation_id: str | None = None,
+    ) -> dict[str, float] | None:
+        """相关性先验：因变量与每个自变量的相关系数 {independent_id: coef}。
+
+        默认返回 None（无此能力时上层降级为不用先验）。Grpc 客户端实现真实调用。
+        """
+        return None
+
 
 def parse_utc_ms(text: str) -> int:
     """把 '2016-07-01 00:00:00' 转成 UTC 毫秒整数。"""

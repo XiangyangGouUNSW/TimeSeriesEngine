@@ -1,13 +1,15 @@
-"""异常检测模型基线评估：DBSCAN vs GCAD，在 ETT 数据上对比。
+"""异常检测模型评估：DBSCAN 离群 + GCAD 多自变量→单因变量。
 
 用法（sfkg 环境）：
   python tools/evaluate_anomaly_models.py
 
 思路：
-  用 ETTh1 数据，构造"正常段 + 注入异常段"的测试：
-  - DBSCAN：在 OT 列注入尖峰（离群点），看能否检出
-  - GCAD：破坏序列间的相关性（模式偏离），看能否检出
-  输出召回率 / 精确率 / 准确率，作为后续对比 SOTA 模型的基线。
+  - DBSCAN：OT 列注入尖峰，看离散离群检出。
+  - GCAD：合成"多自变量→单因变量"因果数据
+        y[t] = a1*x1[t-1] + a2*x2[t-1] + a3*x3[t-1] + ε
+    （x1..x3 取 ETT 真实列，另加 1 个与 y 无关的干扰列）。
+    注入三种模式偏移（系数变化 / 关系反转 / 变量失效），
+    对比【有 / 无相关性先验】时的检出能力（召回 / 精确 / 正常窗口误报）。
 """
 
 from __future__ import annotations
@@ -73,26 +75,101 @@ def eval_dbscan(data: np.ndarray):
     return r, p, a, len(findings)
 
 
-def eval_gcad(data: np.ndarray):
-    """GCAD：破坏序列相关性（模式偏离）。"""
-    x = zscore(data)                       # 标准化
-    train = x[:1000]                       # 正常段训练
-    # 正常窗口（不注入，测误报）
-    win_normal = x[1500:1550].copy()
-    # 异常窗口：后半段破坏序列 0 的相关性（反转）
-    win_anom = x[1500:1550].copy()
-    win_anom[25:, 0] = -win_anom[25:, 0]
-    true_anomalous = set(range(25, 50))    # 后半 25 点
+# ---------------- GCAD 多自变量→单因变量 ----------------
 
-    model = GcadAnomalyModel(lag=3, residual_quantile=0.9)
-    model.fit(train)
-    findings = model.detect(win_anom)
-    detected = {f["index"] for f in findings}
-    r, p, a = point_metrics(detected, true_anomalous, len(win_anom))
-    # 正常窗口误报
-    findings_normal = model.detect(win_normal)
-    fp_normal = len(findings_normal)
-    return r, p, a, len(findings), fp_normal
+def build_causal_data(data: np.ndarray, seed: int = 0):
+    """合成"多自变量→单因变量"因果数据。
+
+    自变量取 ETT 前三列 x1,x2,x3 + 1 个与因变量无关的干扰列 noise_x。
+    因变量 y[t] = a1*x1[t-1] + a2*x2[t-1] + a3*x3[t-1] + ε（滞后 1 的格兰杰因果）。
+    返回 [x1,x2,x3,noise_x,y] 的 [time, 5] 矩阵和系数 (a1,a2,a3)。
+    """
+    x = zscore(data)
+    x1, x2, x3 = x[:, 0], x[:, 1], x[:, 2]
+    rng = np.random.RandomState(seed)
+    noise_x = rng.normal(0, 1.0, len(x))       # 干扰列：和 y 无关
+    noise = rng.normal(0, 0.05, len(x))        # 观测噪声
+    a1, a2, a3 = 1.0, 0.8, -0.6
+    y = np.empty(len(x))
+    y[0] = 0.0
+    y[1:] = a1 * x1[:-1] + a2 * x2[:-1] + a3 * x3[:-1]
+    y += noise
+    M = np.column_stack([x1, x2, x3, noise_x, y])
+    return M, (a1, a2, a3)
+
+
+def inject_causal_anomaly(M: np.ndarray, a, kind: str, start: int = 25):
+    """在窗口后半段注入模式偏移。返回 [50 行] 异常窗口。
+
+    窗口内 y[t] 依赖 x[t-1]：注入段局部 25..49 需用 x 局部 24..48 重算 y。
+    """
+    win = M[1500:1550].copy()
+    a1, a2, a3 = a
+    x1, x2, x3 = win[:, 0], win[:, 1], win[:, 2]
+    s1, s2, s3 = x1[24:49], x2[24:49], x3[24:49]   # x[t-1]
+    if kind == "coef_shift":      # 系数变化：a1 翻倍（关系破坏的一种）
+        win[start:, 4] = 2 * a1 * s1 + a2 * s2 + a3 * s3
+    elif kind == "rel_break":     # 关系反转：x1 影响方向反向
+        win[start:, 4] = -a1 * s1 + a2 * s2 + a3 * s3
+    elif kind == "source_drop":   # 变量失效：x1 不再影响 y
+        win[start:, 4] = a2 * s2 + a3 * s3
+    else:
+        raise ValueError(kind)
+    return win
+
+
+def corr_prior_from_train(train: np.ndarray, target_idx: int) -> dict[int, float]:
+    """模拟 C 端 computeBasicStatistics：用训练段算因变量与各自变量的相关。"""
+    y = train[:, target_idx]
+    return {j: float(np.corrcoef(train[:, j], y)[0, 1])
+            for j in range(train.shape[1]) if j != target_idx}
+
+
+KINDS = {"coef_shift": "系数变化a1×2", "rel_break": "关系反转a1→-a1",
+         "source_drop": "变量失效a1→0"}
+
+
+def eval_gcad_multivariate(data: np.ndarray):
+    """GCAD 调优：①相关性先验筛选验证 ②阈值(quantile)权衡扫描。
+
+    ① 对比有无先验时模型实际使用的自变量列（_sources），确认筛选真的剔除了干扰列；
+    ② 不同 residual_quantile 下三种注入异常的平均召回 + 正常窗口误报，找误报/召回平衡点。
+    """
+    M, a = build_causal_data(data)
+    train = M[:1000]                          # 正常段训练
+    target_idx = 4
+    prior = corr_prior_from_train(train, target_idx)
+    kept = sorted(j for j, c in prior.items() if abs(c) >= 0.1)
+    dropped = sorted(j for j in prior if j not in kept)
+    win_normal = M[1500:1550].copy()          # 正常窗口（测误报）
+
+    # ① 先验筛选验证：模型最终使用的自变量列
+    m_no_prior = GcadAnomalyModel(lag=3, residual_quantile=0.95,
+                                  target_index=target_idx)
+    m_no_prior.fit(train)
+    m_prior = GcadAnomalyModel(lag=3, residual_quantile=0.95,
+                               target_index=target_idx,
+                               correlation_prior=prior, corr_threshold=0.1)
+    m_prior.fit(train)
+    sel_info = (m_no_prior._sources, m_prior._sources)
+
+    # ② 阈值权衡：quantile 越高越严格（误报↓但可能漏检）
+    rows = []
+    for q in (0.90, 0.95, 0.98, 0.99):
+        recalls, fp_list = [], []
+        for kind in KINDS:
+            model = GcadAnomalyModel(lag=3, residual_quantile=q,
+                                     target_index=target_idx,
+                                     correlation_prior=prior, corr_threshold=0.1)
+            model.fit(train)
+            win = inject_causal_anomaly(M, a, kind)
+            findings = model.detect(win)
+            r, _, _ = point_metrics({f["index"] for f in findings},
+                                    set(range(25, 50)), len(win))
+            recalls.append(r)
+            fp_list.append(len(model.detect(win_normal)))
+        rows.append((q, float(np.mean(recalls)), fp_list))
+    return rows, sel_info, kept, dropped
 
 
 def main() -> None:
@@ -105,14 +182,21 @@ def main() -> None:
     print("[DBSCAN] 离散离群（OT 注入 3 尖峰）")
     print(f"  检出 {n} 条 | 召回 {r:.2f} | 精确 {p:.2f} | 准确 {a:.2f}")
 
-    # GCAD
-    r, p, a, n, fp = eval_gcad(data)
-    print("[GCAD] 多变量模式偏离（破坏序列相关性）")
-    print(f"  检出 {n} 条 | 召回 {r:.2f} | 精确 {p:.2f} | 准确 {a:.2f}")
-    print(f"  正常窗口误报 {fp} 条（应为 0 为佳）")
+    # GCAD 多自变量→单因变量
+    rows, (src_no_prior, src_prior), kept, dropped = eval_gcad_multivariate(data)
+    print("\n[GCAD] 多自变量→单因变量（y = a1·x1[t-1] + a2·x2[t-1] + a3·x3[t-1]）")
+    print("  列：0=x1  1=x2  2=x3  3=干扰列(与y无关)  4=因变量y")
+    print("  ①相关性先验筛选验证：")
+    print(f"     无先验：模型使用全部自变量列 {src_no_prior}")
+    print(f"     有先验：剔除 {dropped}（|corr|<0.1），保留 {src_prior}")
+    print(f"  ②阈值权衡（三种模式偏移平均召回，正常窗口 50 点）：")
+    print(f"     {'quantile':<10}{'平均召回':>8}  各异常误报(系数变化/关系反转/变量失效)")
+    for q, avg_r, fp_list in rows:
+        print(f"     {q:<10.2f}{avg_r:>8.2f}  {fp_list}")
     print("=" * 60)
-    print("说明：这是注入异常测试的基线。召回=注入异常检出比例，")
-    print("精确=检出的点里真异常比例，准确=全部点判断对的比例。")
+    print("说明：三种模式偏移 = 破坏因变量与自变量的因果关系（模式偏移/趋势异常）。")
+    print("quantile 是训练残差的分位数阈值：越高越严格（误报低但可能漏检），")
+    print("召回=注入异常检出比例，误报=正常窗口里被误报的点数（应为 0 为佳）。")
 
 
 if __name__ == "__main__":

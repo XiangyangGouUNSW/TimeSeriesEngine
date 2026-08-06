@@ -17,6 +17,7 @@ from concurrent import futures
 from pathlib import Path
 
 import grpc
+import numpy as np
 
 # 模块根目录 = tools 的上一级
 ROOT = Path(__file__).resolve().parent.parent
@@ -132,6 +133,40 @@ class FakeCoreService(pb_grpc.TimeseriesCoreServiceServicer):
                 sequences=sequences,
             ),
         )
+
+    def computeBasicStatistics(self, request, context):
+        """相关性向量：因变量(DEPENDENT) 与每个自变量(INDEPENDENT) 的 Pearson 相关。
+
+        用训练段（前 1000 点）算，避免被注入异常的实时段污染。
+        对应 C 端 computeBasicStatistics 的 correlation_vector（GCAD 相关性先验）。
+        """
+        dependent_id = None
+        independent_ids = []
+        for sc in request.alignment_config.sequences:
+            if sc.role == pb.VARIABLE_ROLE_DEPENDENT:
+                dependent_id = sc.sequence_id
+            elif sc.role == pb.VARIABLE_ROLE_INDEPENDENT:
+                independent_ids.append(sc.sequence_id)
+        if dependent_id is None:
+            return pb.ComputeStatisticsResponse(
+                operation=pb.OperationResult(
+                    code=pb.OPERATION_CODE_INVALID_ARGUMENT,
+                    message="computeBasicStatistics 缺少因变量(DEPENDENT)"),
+            )
+        dep = np.asarray(self._columns[self._col(dependent_id)], dtype=float)
+        seg = min(len(dep), 1000)
+        correlations = []
+        for sid in independent_ids:
+            ind = np.asarray(self._columns[self._col(sid)], dtype=float)
+            if seg >= 2 and dep[:seg].std() > 0 and ind[:seg].std() > 0:
+                coef = float(np.corrcoef(dep[:seg], ind[:seg])[0, 1])
+            else:
+                coef = 0.0
+            correlations.append(pb.SequenceCorrelation(
+                independent_sequence_id=sid, coefficient=coef))
+        cv = pb.CorrelationVector(
+            dependent_sequence_id=dependent_id, correlations=correlations)
+        return pb.ComputeStatisticsResponse(operation=self._ok(), correlation_vector=cv)
 
     def checkConstraints(self, request, context):
         """空壳约束检查：直接返回"违反约束"（假数据，演示通讯用）。"""
