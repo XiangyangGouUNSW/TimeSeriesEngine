@@ -170,6 +170,18 @@ if(SFKG_BUILD_TESTS)
     add_test(NAME statistics_service_test
         COMMAND statistics_service_test)
 
+    if(SFKG_BUILD_GRPC)
+        add_executable(runtime_instance_config_proto_test
+            tests/runtime_instance_config_proto_test.cpp)
+        target_include_directories(runtime_instance_config_proto_test
+            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+        target_link_libraries(runtime_instance_config_proto_test
+            PRIVATE sfkg_timeseries_grpc)
+        add_test(
+            NAME runtime_instance_config_proto_test
+            COMMAND runtime_instance_config_proto_test)
+    endif()
+
     if(SFKG_WITH_TAOS)
         add_executable(taos_client_smoke tests/taos_client_smoke.cpp)
         target_link_libraries(taos_client_smoke

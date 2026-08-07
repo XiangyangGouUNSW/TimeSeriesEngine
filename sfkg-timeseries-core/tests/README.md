@@ -1,6 +1,8 @@
 # 测试
 
 - `runtime_config_registry_test.cpp`：不依赖 gRPC 的配置闭环测试；
+- `runtime_instance_config_proto_test.cpp`：验证 `RuntimeInstanceConfig.series_kind`
+  的 proto 转换和旧客户端省略字段时的兼容行为；
 - `taos_client_smoke.cpp`：依赖本地 TDengine，验证写入、历史查询和多种值类型；
 - `smoke_client.cpp`：面向运行中服务的全 RPC 冒烟客户端；
 - `data/smoke_scenario.json`：便于其他语言客户端复用的固定测试场景。

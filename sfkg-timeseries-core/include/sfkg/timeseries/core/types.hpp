@@ -74,6 +74,13 @@ enum class VariableRole {
     Dependent
 };
 
+enum class SeriesKind {
+    Unspecified,
+    Continuous,
+    Discrete,
+    Categorical
+};
+
 enum class BucketAggregation {
     First,
     Last,
@@ -167,6 +174,7 @@ struct RuntimeInstanceConfig {
     std::string external_sequence_id;
     std::string category_id;
     std::string data_type;
+    SeriesKind series_kind{SeriesKind::Unspecified};
 };
 
 // Confirmed constraint copied from the unified service for runtime use.

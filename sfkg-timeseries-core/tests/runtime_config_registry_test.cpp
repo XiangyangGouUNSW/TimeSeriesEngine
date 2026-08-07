@@ -16,11 +16,14 @@ int main() {
     temperature.external_sequence_id = "temp";
     temperature.category_id = "temperature";
     temperature.data_type = "continuous";
+    temperature.series_kind = SeriesKind::Continuous;
 
     auto result = registry.replaceInstanceConfigs({{temperature}});
     assert(result.code == OperationCode::Ok);
     assert(result.success_count == 1);
     assert(registry.findInstance("temperature-1").has_value());
+    assert(registry.findInstance("temperature-1")->series_kind ==
+           SeriesKind::Continuous);
     assert(registry.resolveSequenceId("source-a", "temp") ==
            std::optional<SequenceId>{"temperature-1"});
 
@@ -52,10 +55,13 @@ int main() {
     pressure.external_sequence_id = "pressure";
     pressure.category_id = "pressure";
     pressure.data_type = "continuous";
+    pressure.series_kind = SeriesKind::Discrete;
     result = registry.upsertInstanceConfigs({{pressure}});
     assert(result.code == OperationCode::Ok);
     assert(registry.findInstance("temperature-1").has_value());
     assert(registry.findInstance("pressure-1").has_value());
+    assert(registry.findInstance("pressure-1")->series_kind ==
+           SeriesKind::Discrete);
 
     temperature.external_sequence_id = "temp-v2";
     result = registry.upsertInstanceConfigs({{temperature}});

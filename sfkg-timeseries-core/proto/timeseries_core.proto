@@ -120,6 +120,15 @@ enum VariableRole {
   VARIABLE_ROLE_DEPENDENT = 2;
 }
 
+// Business meaning of a sequence. This is metadata for a whole sequence, not
+// a per-point value type. The unified service owns this classification.
+enum SeriesKind {
+  SERIES_KIND_UNSPECIFIED = 0;
+  SERIES_KIND_CONTINUOUS = 1;
+  SERIES_KIND_DISCRETE = 2;
+  SERIES_KIND_CATEGORICAL = 3;
+}
+
 enum BucketAggregation {
   BUCKET_AGGREGATION_UNSPECIFIED = 0;
   BUCKET_AGGREGATION_FIRST = 1;
@@ -186,7 +195,11 @@ message RuntimeInstanceConfig {
   string data_source_id = 2;
   string external_sequence_id = 3;
   string category_id = 4;
+  // Kept for compatibility with the first interface. It currently accepts
+  // physical type names and legacy continuous/discrete aliases.
   string data_type = 5;
+  // Business classification of the sequence; omitted means unspecified.
+  SeriesKind series_kind = 6;
 }
 
 // Runtime copy of a confirmed constraint. enabled only controls whether the

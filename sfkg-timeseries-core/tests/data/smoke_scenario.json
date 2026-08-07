@@ -6,14 +6,16 @@
       "data_source_id": "source-a",
       "external_sequence_id": "temp",
       "category_id": "temperature",
-      "data_type": "continuous"
+      "data_type": "continuous",
+      "series_kind": "SERIES_KIND_CONTINUOUS"
     },
     {
       "sequence_id": "pressure-1",
       "data_source_id": "source-a",
       "external_sequence_id": "pressure",
       "category_id": "pressure",
-      "data_type": "continuous"
+      "data_type": "continuous",
+      "series_kind": "SERIES_KIND_CONTINUOUS"
     }
   ],
   "values": [

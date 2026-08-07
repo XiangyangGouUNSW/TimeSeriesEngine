@@ -347,12 +347,28 @@ bool fromProto(
     const pb::RuntimeInstanceConfig& source,
     RuntimeInstanceConfig* target,
     std::string* error) {
-    (void)error;
     target->sequence_id = source.sequence_id();
     target->data_source_id = source.data_source_id();
     target->external_sequence_id = source.external_sequence_id();
     target->category_id = source.category_id();
     target->data_type = source.data_type();
+    switch (source.series_kind()) {
+        case pb::SERIES_KIND_UNSPECIFIED:
+            target->series_kind = SeriesKind::Unspecified;
+            break;
+        case pb::SERIES_KIND_CONTINUOUS:
+            target->series_kind = SeriesKind::Continuous;
+            break;
+        case pb::SERIES_KIND_DISCRETE:
+            target->series_kind = SeriesKind::Discrete;
+            break;
+        case pb::SERIES_KIND_CATEGORICAL:
+            target->series_kind = SeriesKind::Categorical;
+            break;
+        default:
+            *error = "unknown series_kind";
+            return false;
+    }
     return true;
 }
 

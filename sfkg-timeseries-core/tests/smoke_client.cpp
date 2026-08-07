@@ -33,6 +33,7 @@ void addInstances(pb::SyncInstanceConfigsRequest* request) {
     temperature->set_external_sequence_id("temp");
     temperature->set_category_id("temperature");
     temperature->set_data_type("continuous");
+    temperature->set_series_kind(pb::SERIES_KIND_CONTINUOUS);
 
     auto* pressure = request->add_items();
     pressure->set_sequence_id("pressure-1");
@@ -40,6 +41,7 @@ void addInstances(pb::SyncInstanceConfigsRequest* request) {
     pressure->set_external_sequence_id("pressure");
     pressure->set_category_id("pressure");
     pressure->set_data_type("continuous");
+    pressure->set_series_kind(pb::SERIES_KIND_CONTINUOUS);
 }
 
 void addConstraint(pb::SyncConstraintsRequest* request) {

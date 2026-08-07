@@ -197,3 +197,28 @@ std::optional<RuntimeRelationConfig> findRelation(
 4. 先调用 `syncRelations` 注册具体关系；
 5. 调用 `alignWindowData` 时传入对应的 `relation_ids`；
 6. 同步更新 proto 客户端代码。
+
+## 时序序列类型配置约定（新增）
+
+`RuntimeInstanceConfig` 新增 `series_kind`，用于描述整个序列的业务含义，
+不随每个时序点重复传入。当前枚举为：
+
+```text
+SERIES_KIND_UNSPECIFIED
+SERIES_KIND_CONTINUOUS
+SERIES_KIND_DISCRETE
+SERIES_KIND_CATEGORICAL
+```
+
+统一服务负责保存并传入该字段。现有 `data_type` 字段保留兼容旧客户端，
+仍用于接入阶段的实际值类型校验，并继续接受原有取值约定。当前 Core 不会
+根据 `series_kind` 自动选择对齐策略；统一服务仍应在 `AlignmentConfig` 中
+明确传入 `aggregation` 和 `fill_method`。因此本次新增字段不会改变
+`TimeseriesIngestData`、`WindowData` 或历史查询接口。
+
+受影响的调用方只有传输 `RuntimeInstanceConfig` 的配置同步调用：
+
+1. 统一服务需要重新生成 proto 客户端，并可在 `syncInstanceConfigs` 中传入
+   `series_kind`；省略时 Core 按 `UNSPECIFIED` 处理。
+2. Core 的 proto 转换和运行时注册表会保存并校验该字段。
+3. 旧客户端不传该字段仍可联调；现有 `data_type` 的兼容行为保持不变。

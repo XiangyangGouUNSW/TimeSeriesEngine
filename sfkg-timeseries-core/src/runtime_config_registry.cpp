@@ -24,6 +24,17 @@ bool isBlank(const std::string& value) {
     return value.empty();
 }
 
+bool validSeriesKind(SeriesKind kind) {
+    switch (kind) {
+        case SeriesKind::Unspecified:
+        case SeriesKind::Continuous:
+        case SeriesKind::Discrete:
+        case SeriesKind::Categorical:
+            return true;
+    }
+    return false;
+}
+
 }  // namespace
 
 OperationResult RuntimeConfigRegistry::replaceInstanceConfigs(
@@ -36,6 +47,10 @@ OperationResult RuntimeConfigRegistry::replaceInstanceConfigs(
             isBlank(item.external_sequence_id)) {
             return internal::invalidArgument(
                 "instance identifiers must not be empty");
+        }
+        if (!validSeriesKind(item.series_kind)) {
+            return internal::invalidArgument(
+                "instance series_kind is invalid");
         }
         if (!instances.emplace(item.sequence_id, item).second) {
             return internal::invalidArgument(
@@ -72,6 +87,10 @@ OperationResult RuntimeConfigRegistry::upsertInstanceConfigs(
             isBlank(item.external_sequence_id)) {
             return internal::invalidArgument(
                 "instance identifiers must not be empty");
+        }
+        if (!validSeriesKind(item.series_kind)) {
+            return internal::invalidArgument(
+                "instance series_kind is invalid");
         }
         if (!seen_sequence_ids.emplace(item.sequence_id).second) {
             return internal::invalidArgument(
