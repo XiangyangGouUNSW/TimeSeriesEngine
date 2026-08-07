@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -35,6 +36,8 @@ class AnalysisEngine:
         self.cfg = config
         self.store = model_store or ModelStore()   # 预测模型复用缓存（内存+磁盘）
         self._version: dict = {}       # {task_id: config_version}，预测模型失效判断
+        self._version_lock = threading.RLock()     # 保护 _version / _train_locks
+        self._train_locks: dict = {}   # {task_id: Lock}，同任务并发到达只训一次
         self._register_model_loader()
 
     # ================= 预测链路 =================
@@ -137,6 +140,7 @@ class AnalysisEngine:
         """缓存命中返回模型；未命中训练 PatchTST 并存入 store。
 
         key = task_id；config_version 变化时重训（简版失效逻辑）。
+        同任务并发到达时拿 per-task 锁 double-check，只训一次。
         """
         key = task.task_id
         model = self.store.get(key)
@@ -144,39 +148,57 @@ class AnalysisEngine:
             logger.info(f"[engine] ②命中预测模型缓存 task_id={key}，跳过训练")
             return model
 
-        # 拉多元历史训练（前 train_ratio）
-        start_ms = min(s.start_time_ms for s in scales.values()
-                       if s.start_time_ms is not None)
-        end_ms = max(s.end_time_ms for s in scales.values()
-                     if s.end_time_ms is not None)
-        cut_ms = start_ms + int((end_ms - start_ms)
-                                * self.cfg["training"]["train_ratio"])
-        chunk = self.core.get_history(all_ids, end_time_ms=cut_ms)
-        history = np.array(chunk.values, dtype=np.float32)
-        logger.info(f"[engine] ②训练 PatchTST：{len(history)} 行 × {len(all_ids)} 列")
+        # 未命中：拿 per-task 锁，再确认一次（防并发重复训练，训练在锁内串行）
+        with self._train_lock(key):
+            model = self.store.get(key)
+            if model is not None and self._model_config_fresh(key, config_version):
+                logger.info(f"[engine] ②等待后命中缓存 task_id={key}，跳过训练")
+                return model
 
-        f = self.cfg.get("forecast_model", {})
-        fc = PatchTSTForecaster(
-            sequence_ids=all_ids,
-            context_length=int(f.get("context_length", 96)),
-            prediction_length=int(f.get("prediction_length", 24)),
-            patch_size=int(f.get("patch_size", 16)),
-            patch_stride=int(f.get("stride", 8)),
-            d_model=int(f.get("d_model", 64)),
-            n_heads=int(f.get("n_heads", 4)),
-            num_layers=int(f.get("num_layers", 2)),
-            epochs=int(f.get("epochs", 20)),
-            batch_size=int(f.get("batch_size", 64)),
-            learning_rate=float(f.get("learning_rate", 1e-3)),
-        )
-        fc.fit(history)
-        self._version[key] = config_version
-        self.store.save(key, fc)
-        return fc
+            # 拉多元历史训练（前 train_ratio）
+            start_ms = min(s.start_time_ms for s in scales.values()
+                           if s.start_time_ms is not None)
+            end_ms = max(s.end_time_ms for s in scales.values()
+                         if s.end_time_ms is not None)
+            cut_ms = start_ms + int((end_ms - start_ms)
+                                    * self.cfg["training"]["train_ratio"])
+            chunk = self.core.get_history(all_ids, end_time_ms=cut_ms)
+            history = np.array(chunk.values, dtype=np.float32)
+            logger.info(f"[engine] ②训练 PatchTST：{len(history)} 行 × {len(all_ids)} 列")
+
+            f = self.cfg.get("forecast_model", {})
+            fc = PatchTSTForecaster(
+                sequence_ids=all_ids,
+                context_length=int(f.get("context_length", 96)),
+                prediction_length=int(f.get("prediction_length", 24)),
+                patch_size=int(f.get("patch_size", 16)),
+                patch_stride=int(f.get("stride", 8)),
+                d_model=int(f.get("d_model", 64)),
+                n_heads=int(f.get("n_heads", 4)),
+                num_layers=int(f.get("num_layers", 2)),
+                epochs=int(f.get("epochs", 20)),
+                batch_size=int(f.get("batch_size", 64)),
+                learning_rate=float(f.get("learning_rate", 1e-3)),
+            )
+            fc.fit(history)
+            self.store.save(key, fc)
+            with self._version_lock:
+                self._version[key] = config_version
+            return fc
+
+    def _train_lock(self, key: str) -> threading.Lock:
+        """取 task_id 对应的训练锁（惰性创建，锁表也受 _version_lock 保护）。"""
+        with self._version_lock:
+            lock = self._train_locks.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                self._train_locks[key] = lock
+            return lock
 
     def _model_config_fresh(self, key: str, config_version: int) -> bool:
         """简版失效判断：任务 config_version 变了就重训。"""
-        return self._version.get(key, 0) == config_version
+        with self._version_lock:
+            return self._version.get(key, 0) == config_version
 
     # ================= 异常链路 =================
 

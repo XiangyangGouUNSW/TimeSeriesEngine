@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from pathlib import Path
 
@@ -29,35 +30,51 @@ class ModelStore:
 
     def __init__(self, model_dir: str | Path | None = None):
         self._models: dict[str, object] = {}
+        self._lock = threading.RLock()   # 内存缓存锁：save/get/invalidate 并发安全
         self._model_dir = Path(model_dir) if model_dir else Path("models")
 
     def _path(self, key: str) -> Path:
         return self._model_dir / f"{key}.pt"
 
     def save(self, key: str, model) -> None:
-        self._models[key] = model
+        # 先写内存（立刻可用），再原子写磁盘（tmp + rename，避免读到半截文件）
+        with self._lock:
+            self._models[key] = model
         self._model_dir.mkdir(parents=True, exist_ok=True)
         if hasattr(model, "save"):
-            model.save(self._path(key))
-        logger.info("[ModelStore] save %s（内存 + %s）", key, self._path(key))
+            p = self._path(key)
+            tmp = p.with_name(p.name + ".tmp")
+            try:
+                model.save(tmp)
+                tmp.replace(p)          # rename 原子替换，旧模型文件被覆盖
+            except Exception:
+                if tmp.exists():
+                    tmp.unlink()        # 写失败清掉临时文件，不留半截
+                raise
+        logger.info("[ModelStore] save %s（内存 + %s）", key, p)
 
     def get(self, key: str):
-        if key in self._models:
-            return self._models[key]
+        with self._lock:
+            if key in self._models:
+                return self._models[key]
         p = self._path(key)
-        if p.exists() and hasattr(self, "_loader"):
-            model = self._loader(key, p)
-            self._models[key] = model
+        loader = getattr(self, "_loader", None)
+        if p.exists() and loader is not None:
+            model = loader(key, p)          # 磁盘加载放锁外（避免持锁做 IO）
+            with self._lock:
+                self._models[key] = model
             return model
         return None
 
     def is_ready(self, key: str) -> bool:
-        if key in self._models:
-            return True
+        with self._lock:
+            if key in self._models:
+                return True
         return self._path(key).exists()
 
     def invalidate(self, key: str) -> None:
-        self._models.pop(key, None)
+        with self._lock:
+            self._models.pop(key, None)
         p = self._path(key)
         if p.exists():
             p.unlink()

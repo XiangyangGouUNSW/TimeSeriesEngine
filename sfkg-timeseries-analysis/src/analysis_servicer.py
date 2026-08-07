@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -29,6 +30,7 @@ class AnalysisServicer(pb_grpc.TimeseriesAnalysisServiceServicer):
 
     def __init__(self, engine=None):
         self._engine = engine           # AnalysisEngine（调用链）
+        self._lock = threading.RLock()  # 保护下面三个 dict（多线程并发读写）
         self._tasks = {}                # task_id -> 任务配置
         self._forecast_results = {}     # task_id -> 最新 ForecastResult
         self._anomaly_results = {}      # task_id -> 最新 AnomalyResult
@@ -37,11 +39,14 @@ class AnalysisServicer(pb_grpc.TimeseriesAnalysisServiceServicer):
 
     def SyncAnomalyTask(self, request, context):
         task = request.task
-        self._tasks[task.task_id] = task
+        with self._lock:
+            self._tasks[task.task_id] = task
         logger.info("SyncAnomalyTask: task_id=%s", task.task_id)
         if self._engine:
+            # 引擎调用（训练/检测）在锁外执行，不阻塞其他线程
             result = self._engine.run_anomaly(task)
-            self._anomaly_results[task.task_id] = result
+            with self._lock:
+                self._anomaly_results[task.task_id] = result
             return pb.TaskAck(task_id=task.task_id, accepted=True,
                               status=result.status, message=result.message,
                               updated_at_ms=_now_ms())
@@ -51,13 +56,15 @@ class AnalysisServicer(pb_grpc.TimeseriesAnalysisServiceServicer):
 
     def SyncForecastTask(self, request, context):
         task = request.task
-        self._tasks[task.task_id] = task
+        with self._lock:
+            self._tasks[task.task_id] = task
         logger.info("SyncForecastTask: task_id=%s config_version=%s",
                     task.task_id, request.config_version)
         if self._engine:
             result = self._engine.run_forecast(task,
                                                config_version=request.config_version)
-            self._forecast_results[task.task_id] = result
+            with self._lock:
+                self._forecast_results[task.task_id] = result
             return pb.TaskAck(task_id=task.task_id, accepted=True,
                               status=result.status, message=result.message,
                               updated_at_ms=_now_ms())
@@ -79,14 +86,16 @@ class AnalysisServicer(pb_grpc.TimeseriesAnalysisServiceServicer):
 
     def QueryAnomalyResults(self, request, context):
         logger.info("QueryAnomalyResults: task_id=%s", request.query.task_id)
-        result = self._anomaly_results.get(request.query.task_id)
+        with self._lock:
+            result = self._anomaly_results.get(request.query.task_id)
         return pb.QueryAnomalyResultsResponse(
             task_id=request.query.task_id,
             results=[result] if result else [])
 
     def QueryForecastResults(self, request, context):
         logger.info("QueryForecastResults: task_id=%s", request.query.task_id)
-        result = self._forecast_results.get(request.query.task_id)
+        with self._lock:
+            result = self._forecast_results.get(request.query.task_id)
         return pb.QueryForecastResultsResponse(
             task_id=request.query.task_id,
             results=[result] if result else [])
