@@ -10,6 +10,7 @@ import com.sfkg.timeseries.dto.InstanceConfigSaveRequest;
 import com.sfkg.timeseries.dto.SyncResult;
 import com.sfkg.timeseries.entity.TimeseriesCategory;
 import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
+import com.sfkg.timeseries.entity.TimeseriesRelation;
 import com.sfkg.timeseries.mapper.TimeseriesInstanceConfigMapper;
 import com.sfkg.timeseries.service.TimeseriesInstanceService;
 import com.sfkg.timeseries.vo.InstanceConfigVO;
@@ -56,6 +57,17 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
     }
 
     private String doSaveInstanceConfig(InstanceConfigSaveRequest request, boolean isUpdate) {
+        if (request != null) {
+            if (request.getSequenceId() != null && request.getSequenceId().isBlank()) {
+                throw new BusinessException("sequenceId must not be blank");
+            }
+            if (request.getCategoryId() != null) {
+                validateCategory(request.getCategoryId());
+                if (!memoryCache.getCategory(request.getCategoryId()).isPresent()) {
+                    throw new BusinessException("category not found: " + request.getCategoryId());
+                }
+            }
+        }
         cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
         String sequenceId = request == null || request.getSequenceId() == null
                 ? generateSequenceId()
@@ -76,6 +88,21 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
         instanceConfigMapper.insert(entity);
         memoryCache.putInstanceConfig(entity);
         coreGrpcClient.syncInstanceConfig(entity);
+
+        // Re-sync relations that reference this instance's category (for category-level expansion)
+        if (entity.getCategoryId() != null) {
+            cacheManager.ensureTableLoaded(CachedTable.RELATION);
+            for (TimeseriesRelation rel : memoryCache.listRelations()) {
+                boolean matches = entity.getCategoryId().equals(rel.getTargetSequenceId());
+                if (!matches && rel.getSourceSequences() != null) {
+                    matches = rel.getSourceSequences().contains(entity.getCategoryId());
+                }
+                if (matches) {
+                    coreGrpcClient.syncRelationConfig(rel);
+                }
+            }
+        }
+
         return sequenceId;
     }
 

@@ -15,6 +15,7 @@ public class RelationVO {
     private String relationType;
     private String lagRange;
     private BigDecimal confidence;
+    private String relationDescription;
     private String effectiveStatus;
     private String confirmStatus;
 }

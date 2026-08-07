@@ -46,12 +46,12 @@ public class TimeseriesTaskContextResolver {
         for (String seqId : seqIds) {
             for (TimeseriesRelation rel : memoryCache.listRelationsByTargetSequenceId(seqId)) {
                 if (addedRelationIds.add(rel.getRelationId())) {
-                    ctx.addRelations(toProtoRelation(rel));
+                    ctx.addAllRelations(toProtoRelation(rel));
                 }
             }
             for (TimeseriesRelation rel : memoryCache.listRelationsBySourceSequenceId(seqId)) {
                 if (addedRelationIds.add(rel.getRelationId())) {
-                    ctx.addRelations(toProtoRelation(rel));
+                    ctx.addAllRelations(toProtoRelation(rel));
                 }
             }
         }
@@ -119,14 +119,14 @@ public class TimeseriesTaskContextResolver {
         for (String seqId : targetIds) {
             for (TimeseriesRelation rel : memoryCache.listRelationsByTargetSequenceId(seqId)) {
                 if (addedRelationIds.add(rel.getRelationId())) {
-                    ctx.addRelations(toProtoRelation(rel));
+                    ctx.addAllRelations(toProtoRelation(rel));
                 }
             }
         }
         for (String seqId : autoFeatures) {
             for (TimeseriesRelation rel : memoryCache.listRelationsBySourceSequenceId(seqId)) {
                 if (addedRelationIds.add(rel.getRelationId())) {
-                    ctx.addRelations(toProtoRelation(rel));
+                    ctx.addAllRelations(toProtoRelation(rel));
                 }
             }
         }
@@ -148,21 +148,41 @@ public class TimeseriesTaskContextResolver {
                 .build();
     }
 
-    private SequenceRelation toProtoRelation(TimeseriesRelation rel) {
-        SequenceRelation.Builder b = SequenceRelation.newBuilder()
-                .setRelationId(rel.getRelationId() != null ? rel.getRelationId() : "")
-                .setTargetSequenceId(rel.getTargetSequenceId() != null ? rel.getTargetSequenceId() : "")
-                .setRelationType(rel.getRelationType() != null ? rel.getRelationType() : "")
-                .setConfidence(rel.getConfidence() != null ? rel.getConfidence().doubleValue() : 0.0);
+    private List<SequenceRelation> toProtoRelation(TimeseriesRelation rel) {
+        String relationId = rel.getRelationId() != null ? rel.getRelationId() : "";
+        String targetId = rel.getTargetSequenceId() != null ? rel.getTargetSequenceId() : "";
+        String relType = rel.getRelationType() != null ? rel.getRelationType() : "";
+        double confidence = rel.getConfidence() != null ? rel.getConfidence().doubleValue() : 0.0;
+        int lagSteps = 0;
         if (rel.getLagRange() != null) {
             try {
-                b.setLagSteps(Integer.parseInt(rel.getLagRange().trim()));
+                lagSteps = Integer.parseInt(rel.getLagRange().trim());
             } catch (NumberFormatException ignored) {}
         }
+
+        List<SequenceRelation> result = new ArrayList<>();
         if (rel.getSourceSequences() != null && !rel.getSourceSequences().isEmpty()) {
-            b.setSourceSequenceId(rel.getSourceSequences().iterator().next());
+            for (String src : rel.getSourceSequences()) {
+                if (src == null || src.isBlank()) continue;
+                result.add(SequenceRelation.newBuilder()
+                        .setRelationId(relationId)
+                        .setSourceSequenceId(src)
+                        .setTargetSequenceId(targetId)
+                        .setRelationType(relType)
+                        .setLagSteps(lagSteps)
+                        .setConfidence(confidence)
+                        .build());
+            }
+        } else {
+            result.add(SequenceRelation.newBuilder()
+                    .setRelationId(relationId)
+                    .setTargetSequenceId(targetId)
+                    .setRelationType(relType)
+                    .setLagSteps(lagSteps)
+                    .setConfidence(confidence)
+                    .build());
         }
-        return b.build();
+        return result;
     }
 
     /**

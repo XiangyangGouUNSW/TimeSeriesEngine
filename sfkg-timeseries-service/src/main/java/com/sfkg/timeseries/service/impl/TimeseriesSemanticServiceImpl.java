@@ -348,6 +348,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             throw new BusinessException("targetSequenceId must not be empty");
         }
         cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
+        cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
         Set<String> sourceSet = new HashSet<>();
         for (String src : request.getSourceSequences()) {
             if (src == null || src.isBlank()) continue;
@@ -355,15 +356,15 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 throw new BusinessException("source sequence cannot equal target: " + src);
             }
             sourceSet.add(src);
-            if (memoryCache.getInstanceBySequenceId(src) == null) {
-                throw new BusinessException("source sequence not found: " + src);
+            if (!isValidSequenceOrCategory(src)) {
+                throw new BusinessException("source sequence or category not found: " + src);
             }
         }
         if (sourceSet.isEmpty()) {
-            throw new BusinessException("sourceSequences must contain valid sequence IDs");
+            throw new BusinessException("sourceSequences must contain valid sequence or category IDs");
         }
-        if (memoryCache.getInstanceBySequenceId(request.getTargetSequenceId()) == null) {
-            throw new BusinessException("target sequence not found: " + request.getTargetSequenceId());
+        if (!isValidSequenceOrCategory(request.getTargetSequenceId())) {
+            throw new BusinessException("target sequence or category not found: " + request.getTargetSequenceId());
         }
         if (request.getRelationType() != null && !request.getRelationType().isBlank()
                 && !VALID_RELATION_TYPES.contains(request.getRelationType().toUpperCase())) {
@@ -502,5 +503,11 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 || containsIfPresent(keyword, entity.getTargetCategoryName())
                 || containsIfPresent(keyword, entity.getRelationType())
                 || containsIfPresent(keyword, entity.getLagRange());
+    }
+
+    private boolean isValidSequenceOrCategory(String id) {
+        if (id == null || id.isBlank()) return false;
+        return memoryCache.getInstanceBySequenceId(id) != null
+                || memoryCache.getCategory(id).isPresent();
     }
 }
