@@ -26,6 +26,9 @@ from training_loop import ModelStore
 
 logger = logging.getLogger(__name__)
 
+# 异常检测类型：methods 空时的默认组合（约束 + 模式偏移都检测）
+DEFAULT_METHODS = ["CONSTRAINT_CHECK", "CAUSAL_PATTERN"]
+
 
 class AnalysisEngine:
     """把调用链串起来的引擎。"""
@@ -34,15 +37,14 @@ class AnalysisEngine:
         self.core = core_client        # GrpcCoreDataClient（调 C 取数据/检查）
         self.sender = result_client    # AnalysisResultClient（调 S 写事件）
         self.cfg = config
-        self.store = model_store or ModelStore()   # 预测模型复用缓存（内存+磁盘）
-        self._version: dict = {}       # {task_id: config_version}，预测模型失效判断
-        self._version_lock = threading.RLock()     # 保护 _version / _train_locks
-        self._train_locks: dict = {}   # {task_id: Lock}，同任务并发到达只训一次
+        self.store = model_store or ModelStore()   # 模型复用缓存（内存+磁盘）
+        self._train_locks: dict = {}   # {key: Lock}，同 key 并发训练只训一次
+        self._train_locks_lock = threading.RLock()  # 保护 _train_locks
         self._register_model_loader()
 
     # ================= 预测链路 =================
 
-    def run_forecast(self, task, config_version: int = 0) -> pb.ForecastResult:
+    def run_forecast(self, task) -> pb.ForecastResult:
         now = int(time.time() * 1000)
         target_ids = list(task.target_sequence_ids)
         if not target_ids:
@@ -64,8 +66,7 @@ class AnalysisEngine:
                                              f"数据不足：{'，'.join(missing)}（需要 {need}）")
 
             # ② 预测模型复用：缓存命中就跳过训练，否则训练并保存
-            model = self._get_or_train_forecaster(task, all_ids, scales,
-                                                  config_version)
+            model = self._get_or_train_forecaster(task, all_ids, scales)
 
             # ③ 取最近多元窗口，预测未来
             ctx = self._context_length(task)
@@ -136,22 +137,22 @@ class AnalysisEngine:
             return ctx
         return int(self.cfg.get("forecast_model", {}).get("context_length", 96))
 
-    def _get_or_train_forecaster(self, task, all_ids, scales, config_version: int = 0):
+    def _get_or_train_forecaster(self, task, all_ids, scales):
         """缓存命中返回模型；未命中训练 PatchTST 并存入 store。
 
-        key = task_id；config_version 变化时重训（简版失效逻辑）。
-        同任务并发到达时拿 per-task 锁 double-check，只训一次。
+        无版本管理：key = task_id，训好一直复用。同 key 并发到达时
+        拿 per-task 锁 double-check，只训一次。
         """
         key = task.task_id
         model = self.store.get(key)
-        if model is not None and self._model_config_fresh(key, config_version):
+        if model is not None:
             logger.info(f"[engine] ②命中预测模型缓存 task_id={key}，跳过训练")
             return model
 
         # 未命中：拿 per-task 锁，再确认一次（防并发重复训练，训练在锁内串行）
         with self._train_lock(key):
             model = self.store.get(key)
-            if model is not None and self._model_config_fresh(key, config_version):
+            if model is not None:
                 logger.info(f"[engine] ②等待后命中缓存 task_id={key}，跳过训练")
                 return model
 
@@ -182,55 +183,58 @@ class AnalysisEngine:
             )
             fc.fit(history)
             self.store.save(key, fc)
-            with self._version_lock:
-                self._version[key] = config_version
             return fc
 
     def _train_lock(self, key: str) -> threading.Lock:
-        """取 task_id 对应的训练锁（惰性创建，锁表也受 _version_lock 保护）。"""
-        with self._version_lock:
+        """取 key 对应的训练锁（惰性创建）。"""
+        with self._train_locks_lock:
             lock = self._train_locks.get(key)
             if lock is None:
                 lock = threading.Lock()
                 self._train_locks[key] = lock
             return lock
 
-    def _model_config_fresh(self, key: str, config_version: int) -> bool:
-        """简版失效判断：任务 config_version 变了就重训。"""
-        with self._version_lock:
-            return self._version.get(key, 0) == config_version
-
     # ================= 异常链路 =================
 
     def run_anomaly(self, task) -> pb.AnomalyResult:
         now = int(time.time() * 1000)
         findings = []   # 收集所有异常（约束 + 模式偏离）
+
+        # 检测类型显式化：methods 决定检什么（约束 / 模型 / 组合）
+        methods = list(task.methods) or DEFAULT_METHODS
+        do_constraint = "CONSTRAINT_CHECK" in methods
+        model_methods = [m for m in methods if m != "CONSTRAINT_CHECK"]
+        logger.info("[engine] 任务 %s 检测类型：methods=%s → 约束=%s，模型=%s",
+                    task.task_id, methods, do_constraint, model_methods)
         try:
-            # ① 取 C 实时窗口
-            window = self.core.get_real_time_window(list(task.sequence_ids))
-            logger.info(f"[engine] ①取实时窗口：{len(window.sequences)} 条序列")
+            # ① 取 C 实时窗口（仅模型检测需要实时数据）
+            if model_methods:
+                window = self.core.get_real_time_window(list(task.sequence_ids))
+                logger.info(f"[engine] ①取实时窗口：{len(window.sequences)} 条序列")
 
-            # ② 调 C 约束检查
-            constraint_ids = list(task.semantic_context.constraint_ids)
-            logger.info("[engine] 任务 %s 收到的 constraint_ids = %s",
-                        task.task_id, constraint_ids)
-            satisfied, violations = self.core.check_constraints(
-                constraint_ids, sequence_ids=list(task.sequence_ids))
-            logger.info(f"[engine] ②调 C 约束检查：satisfied={satisfied}，违规 {len(violations)} 条")
-            for v in violations:
-                findings.append(pb.AnomalyFinding(
-                    anomaly_type="CONSTRAINT_CHECK", severity="HIGH",
-                    description=f"违反约束 {v.constraint_id}，实际值 {v.evaluated_value}",
-                    score=v.evaluated_value))
+            # ② 调 C 约束检查（仅 methods 含 CONSTRAINT_CHECK 时）
+            if do_constraint:
+                constraint_ids = list(task.semantic_context.constraint_ids)
+                logger.info("[engine] 任务 %s 收到的 constraint_ids = %s",
+                            task.task_id, constraint_ids)
+                satisfied, violations = self.core.check_constraints(
+                    constraint_ids, sequence_ids=list(task.sequence_ids))
+                logger.info(f"[engine] ②调 C 约束检查：satisfied={satisfied}，违规 {len(violations)} 条")
+                for v in violations:
+                    findings.append(pb.AnomalyFinding(
+                        anomaly_type="CONSTRAINT_CHECK", severity="HIGH",
+                        description=f"违反约束 {v.constraint_id}，实际值 {v.evaluated_value}",
+                        score=v.evaluated_value))
 
-            # ③ 模型检测（模式偏离异常）
-            for f in self._run_anomaly_models(task):
-                finding = pb.AnomalyFinding(
-                    anomaly_type=f["anomaly_type"], severity=f["severity"],
-                    description=f["description"])
-                if f.get("score") is not None:
-                    finding.score = f["score"]
-                findings.append(finding)
+            # ③ 模型检测（模式偏离异常；无模型方法则跳过）
+            if model_methods:
+                for f in self._run_anomaly_models(task, model_methods):
+                    finding = pb.AnomalyFinding(
+                        anomaly_type=f["anomaly_type"], severity=f["severity"],
+                        description=f["description"])
+                    if f.get("score") is not None:
+                        finding.score = f["score"]
+                    findings.append(finding)
 
             # ④ 有异常 → 调 S 写异常
             if findings:
@@ -256,8 +260,11 @@ class AnalysisEngine:
                 generated_at_ms=now, status=pb.ANALYSIS_STATUS_FAILED,
                 message=f"异常检测失败：{e}", findings=[], model_version="")
 
-    def _run_anomaly_models(self, task) -> list[dict]:
-        """根据任务 methods 训练/使用异常模型，检测模式偏离。
+    def _run_anomaly_models(self, task, model_methods: list[str]) -> list[dict]:
+        """按检测类型复用/训练异常模型，检测模式偏离。
+
+        模型首训复用：key = "{task_id}:{method}"，训好一直复用（无重训/版本）；
+        未知方法名 → logger.warning 跳过；仅当存在未训方法时才拉历史数据。
 
         多自变量→单因变量场景：
           - 因变量/自变量由 semantic_context.sequences 的 role（TARGET/FEATURE）确定；
@@ -265,14 +272,11 @@ class AnalysisEngine:
             转成列索引后传给 GCAD 筛选自变量；拿不到先验就降级为不用。
         """
         seq_ids = list(task.sequence_ids)
-        if not seq_ids:
+        if not seq_ids or not model_methods:
             return []
-        methods = list(task.methods) or ["CAUSAL_PATTERN"]   # 默认连续模式检测
         findings = []
         try:
-            history = self._get_history_matrix(seq_ids)
-            window = self._get_window_matrix(seq_ids)
-            # 语义上下文 → 因变量/自变量（列索引）
+            # 语义上下文 → 因变量/自变量（列索引），各方法共用一套
             target_id, source_ids = self._extract_roles(task, seq_ids)
             target_index = seq_ids.index(target_id) if target_id in seq_ids else None
             source_indices = [seq_ids.index(sid) for sid in source_ids if sid in seq_ids]
@@ -285,7 +289,16 @@ class AnalysisEngine:
                     logger.info(f"[engine] 拿相关性先验失败，降级为不用先验：{e}")
             # 互耦对：从语义上下文 relations 识别（MUTUAL_COUPLING 方法用）
             coupled_pairs = self._extract_coupled_pairs(task, seq_ids)
-            for method in methods:
+
+            # 方法 → 模型：缓存命中直接复用；未命中才建模型待训
+            ready: dict[str, object] = {}
+            to_train: list[str] = []
+            for method in model_methods:
+                key = f"{task.task_id}:{method}"
+                model = self.store.get(key)
+                if model is not None:
+                    ready[method] = model
+                    continue
                 model = build_anomaly_model(
                     method,
                     target_index=target_index,
@@ -294,8 +307,23 @@ class AnalysisEngine:
                     coupled_pairs=coupled_pairs,
                 )
                 if model is None:
+                    logger.warning("[engine] 未知检测方法 %s，跳过", method)
                     continue
-                model.fit(history)
+                ready[method] = model
+                to_train.append(method)
+
+            if not ready:
+                return []
+
+            # 仅当有待训方法时才拉历史数据（fit 用）；窗口每周期都要（detect 用）
+            history = self._get_history_matrix(seq_ids) if to_train else None
+            window = self._get_window_matrix(seq_ids)
+            for method, model in ready.items():
+                if method in to_train:
+                    model.fit(history)
+                    self.store.save(f"{task.task_id}:{method}", model)
+                    logger.info("[engine] 首训异常模型 %s（key=%s:%s）",
+                                method, task.task_id, method)
                 detected = model.detect(window)
                 if detected:
                     logger.info(f"[engine] 模型 {method} 检出 {len(detected)} 条模式偏离")

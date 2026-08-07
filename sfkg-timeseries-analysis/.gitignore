@@ -26,6 +26,9 @@ generated/
 *.log
 *.tmp
 
+# ---- 运行时模型缓存（训练产物，不提交）----
+models/
+
 # ---- 系统文件 ----
 .DS_Store
 Thumbs.db

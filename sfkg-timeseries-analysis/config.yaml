@@ -54,3 +54,10 @@ inference:
   horizon_steps: 24            # 预测未来多少步
   pretend_today_ratio: 0.97    # 演示：假装"现在是"数据集的 97% 位置，
                                # 留最后 3% 当真实值，用来对比预测准不准
+
+scheduler:
+  interval_seconds: 10         # 固定周期触发间隔：每 N 秒跑一次所有 ENABLED 任务
+                               # （演示/联调可调短，如 3）
+
+result_repository:
+  maxlen: 50                   # 每任务结果仓库保留最近多少条（Query 轮询）

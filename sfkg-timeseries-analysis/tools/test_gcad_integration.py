@@ -87,7 +87,9 @@ def main() -> None:
     print(f"[3b] _extract_coupled_pairs → 互耦对列索引 {pairs}")
 
     # 5. 跑模型检测（CAUSAL_PATTERN + TREND_SHIFT + MUTUAL_COUPLING）
-    findings = engine._run_anomaly_models(task)
+    #    检测类型显式化后，_run_anomaly_models 接收 model_methods 参数
+    findings = engine._run_anomaly_models(
+        task, ["CAUSAL_PATTERN", "TREND_SHIFT", "MUTUAL_COUPLING"])
     print(f"[4] _run_anomaly_models 检出 {len(findings)} 条模式偏离")
     for f in findings[:8]:
         print(f"    {f['anomaly_type']} @点{f['index']} 分数 {f['score']:.3f}")

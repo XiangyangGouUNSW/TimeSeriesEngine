@@ -83,7 +83,7 @@ def main() -> None:
 
         # 1. 第一次：训练 + 预测
         task = _task("task-patchtst-001")
-        r1 = engine.run_forecast(task, config_version=1)
+        r1 = engine.run_forecast(task)
         print(f"\n[1] 首次预测 status={pb.AnalysisStatus.Name(r1.status)}")
         print(f"    预测 {len(r1.timestamps_ms)} 步，前 3 值 {r1.values[:3]}")
         assert r1.status == pb.ANALYSIS_STATUS_SUCCESS
@@ -93,24 +93,19 @@ def main() -> None:
         assert sender.events[-1]["event_type"] == pb.ANOMALY_EVENT_TYPE_WARNING
         print(f"    写预警调用 {len(sender.events)} 次（假 S 记录）")
 
-        # 2. 模型复用：同任务同 version 再跑，应命中缓存（日志出现"跳过训练"）
-        task2 = _task("task-patchtst-001")
-        r2 = engine.run_forecast(task2, config_version=1)
+        # 2. 模型复用：同任务再跑，应命中缓存（日志出现"跳过训练"），不重训
+        r2 = engine.run_forecast(_task("task-patchtst-001"))
+        assert r2.status == pb.ANALYSIS_STATUS_SUCCESS
         print(f"[2] 二次预测 status={pb.AnalysisStatus.Name(r2.status)}（应命中缓存）")
 
-        # 3. config_version 变化 → 重训（不报错即可）
-        task3 = _task("task-patchtst-001")
-        r3 = engine.run_forecast(task3, config_version=2)
-        print(f"[3] config_version=2 重训 status={pb.AnalysisStatus.Name(r3.status)}")
-
-        # 4. 磁盘持久化：训练后应已写文件，新 store 识别为就绪
+        # 3. 磁盘持久化：训练后应已写文件，新 store 识别为就绪
         store2 = ModelStore(model_dir=tmp)
         ok = store2.is_ready("task-patchtst-001")
-        print(f"[4] 磁盘缓存就绪：{ok}")
+        print(f"[3] 磁盘缓存就绪：{ok}")
         assert ok, "训练后的模型文件应存在且可识别"
 
         print("\nPatchTST 预测集成验证通过 ✓"
-              "（预测24步 + 约束检查 + 写预警链路通，模型复用生效）")
+              "（预测24步 + 约束检查 + 写预警链路通，模型首训复用生效）")
 
 
 if __name__ == "__main__":
