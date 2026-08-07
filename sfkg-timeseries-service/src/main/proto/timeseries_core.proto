@@ -54,12 +54,20 @@ message TimeseriesValue {
   }
 }
 
+enum SeriesKind {
+  SERIES_KIND_UNSPECIFIED = 0;
+  SERIES_KIND_CONTINUOUS = 1;
+  SERIES_KIND_DISCRETE = 2;
+  SERIES_KIND_CATEGORICAL = 3;
+}
+
 message RuntimeInstanceConfig {
   string sequence_id = 1;
   string data_source_id = 2;
   string external_sequence_id = 3;
   string category_id = 4;
   string data_type = 5;
+  SeriesKind series_kind = 6;
 }
 
 message SyncInstanceConfigsRequest {

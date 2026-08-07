@@ -5,5 +5,6 @@
   "categoryId": "HUFL",
   "dataSourceId": "ETTh1.csv",
   "dataType": "double",
+  "seriesKind": "CONTINUOUS",
   "accessStatus": "ENABLE"
 }

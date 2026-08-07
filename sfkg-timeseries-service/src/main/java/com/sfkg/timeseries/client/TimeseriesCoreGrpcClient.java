@@ -30,6 +30,7 @@ import com.sfkg.timeseries.grpc.RuntimeConstraintConfig;
 import com.sfkg.timeseries.grpc.RuntimeInstanceConfig;
 import com.sfkg.timeseries.grpc.RuntimeRelationConfig;
 import com.sfkg.timeseries.grpc.RuntimeRelationSource;
+import com.sfkg.timeseries.grpc.SeriesKind;
 import com.sfkg.timeseries.grpc.SyncConfigResponse;
 import com.sfkg.timeseries.grpc.SyncConstraintsRequest;
 import com.sfkg.timeseries.grpc.SyncInstanceConfigsRequest;
@@ -81,6 +82,7 @@ public class TimeseriesCoreGrpcClient {
                 .setExternalSequenceId(nullToEmpty(config.getExternalSequenceId()))
                 .setCategoryId(nullToEmpty(config.getCategoryId()))
                 .setDataType(nullToEmpty(config.getDataType()))
+                .setSeriesKind(toSeriesKind(config.getSeriesKind()))
                 .build();
         SyncInstanceConfigsRequest req = SyncInstanceConfigsRequest.newBuilder()
                 .addItems(item)
@@ -105,6 +107,7 @@ public class TimeseriesCoreGrpcClient {
                     .setExternalSequenceId(nullToEmpty(config.getExternalSequenceId()))
                     .setCategoryId(nullToEmpty(config.getCategoryId()))
                     .setDataType(nullToEmpty(config.getDataType()))
+                    .setSeriesKind(toSeriesKind(config.getSeriesKind()))
                     .build());
         }
         LOG.info("[{}] -> syncInstanceConfigs count={} at {}", SERVICE_NAME, configs.size(), address);
@@ -196,6 +199,18 @@ public class TimeseriesCoreGrpcClient {
         } catch (NumberFormatException e) {
             return 0;
         }
+    }
+
+    private SeriesKind toSeriesKind(String seriesKind) {
+        if (seriesKind == null || seriesKind.isBlank()) {
+            return SeriesKind.SERIES_KIND_UNSPECIFIED;
+        }
+        return switch (seriesKind.toUpperCase()) {
+            case "CONTINUOUS" -> SeriesKind.SERIES_KIND_CONTINUOUS;
+            case "DISCRETE" -> SeriesKind.SERIES_KIND_DISCRETE;
+            case "CATEGORICAL" -> SeriesKind.SERIES_KIND_CATEGORICAL;
+            default -> SeriesKind.SERIES_KIND_UNSPECIFIED;
+        };
     }
 
     // ── anomaly / forecast task config ────────────────────────────────

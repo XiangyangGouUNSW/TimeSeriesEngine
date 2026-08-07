@@ -17,5 +17,6 @@ public class TimeseriesInstanceConfig {
     private String dataSourceId;
     private String accessStatus;
     private String dataType;
+    private String seriesKind;
     private LocalDateTime lastDataTime;
 }

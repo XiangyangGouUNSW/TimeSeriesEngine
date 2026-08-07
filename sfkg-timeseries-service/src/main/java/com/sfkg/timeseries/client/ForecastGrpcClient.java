@@ -15,6 +15,7 @@ import com.sfkg.timeseries.grpc.ResultQuery;
 import com.sfkg.timeseries.grpc.SemanticContext;
 import com.sfkg.timeseries.grpc.TaskAck;
 import com.sfkg.timeseries.grpc.TimeseriesAnalysisServiceGrpc;
+import com.sfkg.timeseries.service.TimeseriesTaskContextResolver;
 import com.sfkg.timeseries.vo.ForecastResultVO;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
@@ -32,9 +33,12 @@ public class ForecastGrpcClient {
     private static final String SERVICE_NAME = "timeseries-analysis";
 
     private final GrpcClientProperties grpcClientProperties;
+    private final TimeseriesTaskContextResolver contextResolver;
 
-    public ForecastGrpcClient(GrpcClientProperties grpcClientProperties) {
+    public ForecastGrpcClient(GrpcClientProperties grpcClientProperties,
+                              TimeseriesTaskContextResolver contextResolver) {
         this.grpcClientProperties = grpcClientProperties;
+        this.contextResolver = contextResolver;
     }
 
     public SyncResult syncForecastTask(TimeseriesForecastTask task) {
@@ -68,10 +72,7 @@ public class ForecastGrpcClient {
         if (task.getModelKey() != null) {
             configBuilder.setModelKey(task.getModelKey());
         }
-        if (task.getConstraintIds() != null && !task.getConstraintIds().isEmpty()) {
-            configBuilder.setSemanticContext(
-                    SemanticContext.newBuilder().addAllConstraintIds(task.getConstraintIds()).build());
-        }
+        configBuilder.setSemanticContext(contextResolver.resolveForecastContext(task));
 
         AnalysisSyncForecastTaskRequest req = AnalysisSyncForecastTaskRequest.newBuilder()
                 .setMeta(newMeta())
