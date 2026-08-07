@@ -10,6 +10,8 @@ public interface TimeseriesAnomalyTaskService {
 
     String saveAnomalyTask(AnomalyTaskSaveRequest request);
 
+    String createAnomalyTask(AnomalyTaskSaveRequest request);
+
     List<AnomalyTaskVO> listAnomalyTasks();
 
     List<AnomalyTaskVO> listAnomalyTasks(TaskQueryRequest request);

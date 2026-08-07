@@ -47,7 +47,23 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
     }
 
     @Override
+    public String createForecastTask(ForecastTaskSaveRequest request) {
+        String taskId = request != null ? request.getTaskId() : null;
+        if (taskId != null) {
+            cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
+            if (memoryCache.getForecastTask(taskId).isPresent()) {
+                throw new BusinessException("forecast task already exists: " + taskId);
+            }
+        }
+        return doSaveForecastTask(request);
+    }
+
+    @Override
     public String saveForecastTask(ForecastTaskSaveRequest request) {
+        return doSaveForecastTask(request);
+    }
+
+    private String doSaveForecastTask(ForecastTaskSaveRequest request) {
         validateForecastObjects(request);
         validateForecastHorizon(request.getForecastHorizon());
         cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
@@ -97,7 +113,7 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
         forecastTaskMapper.updateById(entity);
         memoryCache.putForecastTask(entity);
         syncForecastTaskToCore(request.getTaskId());
-        syncForecastTaskToForecastService(request.getTaskId());
+        forecastGrpcClient.updateForecastTaskStatus(request.getTaskId(), request.getStatus());
     }
 
     private static final long MAX_FORECAST_HORIZON = 10_000;

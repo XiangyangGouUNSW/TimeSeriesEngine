@@ -30,7 +30,7 @@ public class TimeseriesForecastTaskController {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ApiResult<Void> createForecastTask(@RequestBody ForecastTaskSaveRequest request) {
-        forecastTaskService.saveForecastTask(request);
+        forecastTaskService.createForecastTask(request);
         return returnSuccess("forecast task create success");
     }
 

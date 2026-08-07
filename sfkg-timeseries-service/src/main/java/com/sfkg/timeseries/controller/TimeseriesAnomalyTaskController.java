@@ -30,7 +30,7 @@ public class TimeseriesAnomalyTaskController {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ApiResult<Void> createAnomalyTask(@RequestBody AnomalyTaskSaveRequest request) {
-        anomalyTaskService.saveAnomalyTask(request);
+        anomalyTaskService.createAnomalyTask(request);
         return returnSuccess("anomaly task create success");
     }
 

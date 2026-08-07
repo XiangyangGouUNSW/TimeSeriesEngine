@@ -48,7 +48,23 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
     }
 
     @Override
+    public String createAnomalyTask(AnomalyTaskSaveRequest request) {
+        String taskId = request != null ? request.getTaskId() : null;
+        if (taskId != null) {
+            cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
+            if (memoryCache.getAnomalyTask(taskId).isPresent()) {
+                throw new BusinessException("anomaly task already exists: " + taskId);
+            }
+        }
+        return doSaveAnomalyTask(request);
+    }
+
+    @Override
     public String saveAnomalyTask(AnomalyTaskSaveRequest request) {
+        return doSaveAnomalyTask(request);
+    }
+
+    private String doSaveAnomalyTask(AnomalyTaskSaveRequest request) {
         validateDetectObjects(request);
         if (request.getMethods() != null) {
             for (String method : request.getMethods()) {
@@ -102,7 +118,7 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
         anomalyTaskMapper.updateById(entity);
         memoryCache.putAnomalyTask(entity);
         // syncAnomalyTaskToCore(request.getTaskId());  // C端 SyncTaskStatus 暂不启用
-        syncAnomalyTaskToAnomalyService(request.getTaskId());
+        anomalyGrpcClient.updateAnomalyTaskStatus(request.getTaskId(), request.getStatus());
     }
 
     private static final Set<String> VALID_DETECT_METHODS = Set.of(

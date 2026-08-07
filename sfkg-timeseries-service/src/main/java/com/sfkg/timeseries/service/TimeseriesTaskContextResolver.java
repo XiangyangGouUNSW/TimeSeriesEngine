@@ -45,12 +45,12 @@ public class TimeseriesTaskContextResolver {
         Set<String> addedRelationIds = new HashSet<>();
         for (String seqId : seqIds) {
             for (TimeseriesRelation rel : memoryCache.listRelationsByTargetSequenceId(seqId)) {
-                if (addedRelationIds.add(rel.getRelationId())) {
+                if (isRelationEnabled(rel) && addedRelationIds.add(rel.getRelationId())) {
                     ctx.addAllRelations(toProtoRelation(rel));
                 }
             }
             for (TimeseriesRelation rel : memoryCache.listRelationsBySourceSequenceId(seqId)) {
-                if (addedRelationIds.add(rel.getRelationId())) {
+                if (isRelationEnabled(rel) && addedRelationIds.add(rel.getRelationId())) {
                     ctx.addAllRelations(toProtoRelation(rel));
                 }
             }
@@ -63,6 +63,7 @@ public class TimeseriesTaskContextResolver {
         // feature sequences from relations
         for (String seqId : seqIds) {
             for (TimeseriesRelation rel : memoryCache.listRelationsByTargetSequenceId(seqId)) {
+                if (!isRelationEnabled(rel)) continue;
                 if (rel.getSourceSequences() != null) {
                     for (String srcSeq : rel.getSourceSequences()) {
                         TimeseriesInstanceConfig srcInst = memoryCache.getInstanceBySequenceId(srcSeq);
@@ -93,6 +94,7 @@ public class TimeseriesTaskContextResolver {
         Set<String> autoFeatures = new HashSet<>(featureIds);
         for (String targetId : targetIds) {
             for (TimeseriesRelation rel : memoryCache.listRelationsByTargetSequenceId(targetId)) {
+                if (!isRelationEnabled(rel)) continue;
                 if (rel.getSourceSequences() != null) {
                     autoFeatures.addAll(rel.getSourceSequences());
                 }
@@ -118,14 +120,14 @@ public class TimeseriesTaskContextResolver {
         Set<String> addedRelationIds = new HashSet<>();
         for (String seqId : targetIds) {
             for (TimeseriesRelation rel : memoryCache.listRelationsByTargetSequenceId(seqId)) {
-                if (addedRelationIds.add(rel.getRelationId())) {
+                if (isRelationEnabled(rel) && addedRelationIds.add(rel.getRelationId())) {
                     ctx.addAllRelations(toProtoRelation(rel));
                 }
             }
         }
         for (String seqId : autoFeatures) {
             for (TimeseriesRelation rel : memoryCache.listRelationsBySourceSequenceId(seqId)) {
-                if (addedRelationIds.add(rel.getRelationId())) {
+                if (isRelationEnabled(rel) && addedRelationIds.add(rel.getRelationId())) {
                     ctx.addAllRelations(toProtoRelation(rel));
                 }
             }
@@ -228,5 +230,9 @@ public class TimeseriesTaskContextResolver {
             }
         }
         return result;
+    }
+
+    private boolean isRelationEnabled(TimeseriesRelation rel) {
+        return rel != null && "ENABLE".equalsIgnoreCase(rel.getEffectiveStatus());
     }
 }

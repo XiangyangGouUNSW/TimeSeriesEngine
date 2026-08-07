@@ -10,6 +10,8 @@ public interface TimeseriesForecastTaskService {
 
     String saveForecastTask(ForecastTaskSaveRequest request);
 
+    String createForecastTask(ForecastTaskSaveRequest request);
+
     List<ForecastTaskVO> listForecastTasks();
 
     List<ForecastTaskVO> listForecastTasks(TaskQueryRequest request);
