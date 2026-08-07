@@ -394,11 +394,7 @@ public class TimeseriesCoreGrpcClient {
             return new HistoryDataVO();
         }
         QueryHistoryDataRequest.Builder reqBuilder = QueryHistoryDataRequest.newBuilder();
-        if (request.getSequenceIds() != null && !request.getSequenceIds().isEmpty()) {
-            reqBuilder.addAllSequenceIds(request.getSequenceIds());
-        } else if (request.getSequenceId() != null) {
-            reqBuilder.addSequenceIds(request.getSequenceId());
-        }
+        reqBuilder.addAllSequenceIds(resolveQuerySequenceIds(request));
         if (request.getStartTime() != null) {
             reqBuilder.setStartTime(request.getStartTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
         }
@@ -466,9 +462,7 @@ public class TimeseriesCoreGrpcClient {
             return Map.of("error", "core address not configured");
         }
         QueryHistoryOverviewRequest.Builder b = QueryHistoryOverviewRequest.newBuilder();
-        if (request != null && request.getSequenceIds() != null) {
-            b.addAllSequenceIds(request.getSequenceIds());
-        }
+        b.addAllSequenceIds(resolveQuerySequenceIds(request));
         if (request != null && request.getStartTime() != null) {
             b.setStartTime(request.getStartTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
         }
@@ -514,9 +508,7 @@ public class TimeseriesCoreGrpcClient {
             return Map.of("error", "core address not configured");
         }
         QueryWindowDataRequest.Builder b = QueryWindowDataRequest.newBuilder();
-        if (request != null && request.getSequenceIds() != null) {
-            b.addAllSequenceIds(request.getSequenceIds());
-        }
+        b.addAllSequenceIds(resolveQuerySequenceIds(request));
         if (request != null && request.getStartTime() != null) {
             b.setStartTime(request.getStartTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
         }
@@ -630,4 +622,19 @@ public class TimeseriesCoreGrpcClient {
 
     private static String nullToEmpty(String v) { return v != null ? v : ""; }
     private static boolean isBlank(String s) { return s == null || s.isBlank(); }
+
+    /**
+     * Resolve sequence IDs from a query request, supporting both
+     * {@code sequenceIds} (list) and {@code sequenceId} (single).
+     */
+    private static java.util.List<String> resolveQuerySequenceIds(HistoryDataQueryRequest request) {
+        if (request == null) return java.util.List.of();
+        if (request.getSequenceIds() != null && !request.getSequenceIds().isEmpty()) {
+            return request.getSequenceIds();
+        }
+        if (request.getSequenceId() != null && !request.getSequenceId().isBlank()) {
+            return java.util.List.of(request.getSequenceId());
+        }
+        return java.util.List.of();
+    }
 }

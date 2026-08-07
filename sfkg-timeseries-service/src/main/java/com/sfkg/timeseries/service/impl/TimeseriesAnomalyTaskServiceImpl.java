@@ -122,7 +122,8 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
     }
 
     private static final Set<String> VALID_DETECT_METHODS = Set.of(
-            "CONSTRAINT_CHECK", "MODEL_ANOMALY_DETECTION", "HYBRID");
+            "CONSTRAINT_CHECK", "MODEL_ANOMALY_DETECTION", "DISCRETE_OUTLIER",
+            "CAUSAL_PATTERN", "HISTORICAL_MATCH", "HYBRID");
 
     @Override
     public void validateDetectObjects(AnomalyTaskSaveRequest request) {

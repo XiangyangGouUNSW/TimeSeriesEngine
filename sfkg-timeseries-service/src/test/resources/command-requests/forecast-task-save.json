@@ -5,7 +5,8 @@
     "1001",
     "1002"
   ],
-  "forecastHorizon": "24h",
+  "forecastHorizon": "24",
   "warningRule": "forecast temperature > 90",
+  "modelKey": "temp_forecast_v1",
   "status": "ENABLE"
 }

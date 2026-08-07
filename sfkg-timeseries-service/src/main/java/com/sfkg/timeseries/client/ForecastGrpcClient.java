@@ -60,9 +60,8 @@ public class ForecastGrpcClient {
                 configBuilder.setForecastHorizonSteps(Integer.parseInt(task.getForecastHorizon()));
             } catch (NumberFormatException ignored) {}
         }
-        if (task.getFeatureSequenceIds() != null) {
-            configBuilder.addAllFeatureSequenceIds(task.getFeatureSequenceIds());
-        }
+        // feature_sequence_ids: original + auto-discovered from relations (category-level expanded)
+        configBuilder.addAllFeatureSequenceIds(contextResolver.resolveForecastFeatureIds(task));
         if (task.getObservationWindowMs() != null) {
             configBuilder.setObservationWindowMs(task.getObservationWindowMs());
         }
