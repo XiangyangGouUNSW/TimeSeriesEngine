@@ -3,10 +3,33 @@
 #include "operation_helpers.hpp"
 
 namespace sfkg::timeseries::core {
+namespace {
+
+TimeseriesValueKind valueKindForDataType(const std::string& data_type) {
+    if (data_type == "double" || data_type == "float" ||
+        data_type == "continuous") {
+        return TimeseriesValueKind::Double;
+    }
+    if (data_type == "int" || data_type == "int64" ||
+        data_type == "integer" || data_type == "discrete") {
+        return TimeseriesValueKind::Int64;
+    }
+    if (data_type == "bool" || data_type == "boolean") {
+        return TimeseriesValueKind::Bool;
+    }
+    if (data_type == "string" || data_type == "text" ||
+        data_type == "label" || data_type == "categorical") {
+        return TimeseriesValueKind::String;
+    }
+    return TimeseriesValueKind::Unknown;
+}
+
+}  // namespace
 
 HistoryQueryResult HistoryQueryService::queryHistoryData(
     const HistoryQuery& query) const {
     HistoryQueryResult result;
+    std::unordered_map<SequenceId, TimeseriesValueKind> value_kinds;
     if (query.sequence_ids.empty() || query.start_time > query.end_time) {
         result.operation = internal::invalidArgument(
             "sequence_ids must not be empty and time range must be ordered");
@@ -18,15 +41,23 @@ HistoryQueryResult HistoryQueryService::queryHistoryData(
                 "sequence_id must not be empty");
             return result;
         }
-        if (!configs_.findInstance(sequence_id)) {
+        const auto config = configs_.findInstance(sequence_id);
+        if (!config) {
             result.operation = internal::makeOperationResult(
                 OperationCode::NotFound, 0, 0,
                 "sequence is not registered: " + sequence_id);
             return result;
         }
+        value_kinds.emplace(
+            sequence_id, valueKindForDataType(config->data_type));
     }
     result.operation = taos_client_.queryRaw(
-        query.sequence_ids, query.start_time, query.end_time, &result.data);
+        query.sequence_ids,
+        query.start_time,
+        query.end_time,
+        &result.data,
+        query.granularity,
+        &value_kinds);
     return result;
 }
 

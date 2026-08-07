@@ -99,6 +99,20 @@ int main() {
         "queryRaw preserves requested sequence order");
 
     read.points.clear();
+    const auto bucketed = client.queryRaw(
+        {"smoke-v2-other"}, base, base + 4, &read, 2);
+    passed &= expect(
+        bucketed.code == core::OperationCode::Ok &&
+            read.points.size() == 2 &&
+            read.points[0].time == base &&
+            read.points[1].time == base + 2 &&
+            sameValue(read.points[0].value, core::TimeseriesValue{
+                std::string("second")}) &&
+            sameValue(read.points[1].value, core::TimeseriesValue{
+                std::string("third")}),
+        "queryRaw applies millisecond granularity with last value");
+
+    read.points.clear();
     const auto empty = client.queryRaw(
         {"smoke-double"}, base + 100, base + 200, &read);
     passed &= expect(
@@ -126,6 +140,20 @@ int main() {
         overview.operation.code == core::OperationCode::Ok &&
             overview_order == requested_order,
         "queryHistoryOverview preserves requested sequence order");
+    const auto typed_history = history.queryHistoryData(
+        {{"smoke-v2-double"}, base, base + 4, std::nullopt});
+    passed &= expect(
+        typed_history.operation.code == core::OperationCode::Ok &&
+            typed_history.data.points.size() == 1 &&
+            sameValue(typed_history.data.points.front().value,
+                      core::TimeseriesValue{12.5}),
+        "history query uses registered physical value type");
+    const auto mixed_history = history.queryHistoryData(
+        {{"smoke-v2-double", "smoke-v2-int"}, base, base + 4, std::nullopt});
+    passed &= expect(
+        mixed_history.operation.code == core::OperationCode::Ok &&
+            mixed_history.data.points.size() == 2,
+        "history query preserves mixed-type fallback");
     const auto not_found = history.queryHistoryData(
         {{"not-registered"}, base, base + 1, std::nullopt});
     passed &= expect(

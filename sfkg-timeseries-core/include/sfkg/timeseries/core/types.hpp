@@ -15,6 +15,17 @@ using SequenceId = std::string;
 using TimeseriesValue =
     std::variant<double, std::int64_t, bool, std::string>;
 
+// Physical value layout used by the raw TDengine schema. This is distinct
+// from SeriesKind: it describes which one of the four value columns stores a
+// sequence's values.
+enum class TimeseriesValueKind {
+    Unknown,
+    Double,
+    Int64,
+    Bool,
+    String
+};
+
 enum class OperationCode {
     Ok,
     PartialSuccess,

@@ -25,7 +25,10 @@ public:
         const std::vector<SequenceId>& sequence_ids,
         Timestamp start,
         Timestamp end,
-        TimeseriesBatch* out) const;
+        TimeseriesBatch* out,
+        std::optional<std::int64_t> granularity = std::nullopt,
+        const std::unordered_map<SequenceId, TimeseriesValueKind>* value_kinds =
+            nullptr) const;
     OperationResult queryHistoryOverview(
         const HistoryOverviewQuery& query,
         HistoryOverview* out) const;

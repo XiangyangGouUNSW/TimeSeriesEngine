@@ -15,6 +15,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(SFKG_BUILD_GRPC "Build the gRPC server and smoke client" ON)
 option(SFKG_BUILD_TESTS "Build local shell-stage tests" ON)
 option(SFKG_BUILD_DEMOS "Build local data import demonstrations" ON)
+option(SFKG_BUILD_BENCHMARKS "Build manual gRPC benchmark tools" OFF)
 option(SFKG_WITH_TAOS "Build with the TDengine native client" ON)
 set(SFKG_TAOS_ROOT "$ENV{HOME}/sfkg/tdengine" CACHE PATH
     "TDengine installation root containing include/taos.h and lib/libtaos.so")
@@ -137,6 +138,23 @@ if(SFKG_BUILD_GRPC)
         tools/etth1_grpc_history_demo.cpp)
     target_link_libraries(etth1-grpc-history-demo
         PRIVATE sfkg_timeseries_proto)
+
+    if(SFKG_BUILD_BENCHMARKS)
+        add_executable(grpc_ingest_benchmark
+            tools/grpc_ingest_benchmark.cpp)
+        target_link_libraries(grpc_ingest_benchmark
+            PRIVATE sfkg_timeseries_proto Threads::Threads)
+
+        add_executable(grpc_mixed_benchmark
+            tools/grpc_mixed_benchmark.cpp)
+        target_link_libraries(grpc_mixed_benchmark
+            PRIVATE sfkg_timeseries_proto Threads::Threads)
+
+        add_executable(grpc_stage_benchmark
+            tools/grpc_stage_benchmark.cpp)
+        target_link_libraries(grpc_stage_benchmark
+            PRIVATE sfkg_timeseries_proto Threads::Threads)
+    endif()
 
 endif()
 

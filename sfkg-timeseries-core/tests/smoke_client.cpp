@@ -116,6 +116,7 @@ int run(int argc, char* argv[]) {
         address, ::grpc::InsecureChannelCredentials());
     auto stub = pb::TimeseriesCoreService::NewStub(channel);
     bool passed = true;
+    constexpr std::int64_t kStorageTestTime = 1'700'000'000'000LL;
 
     {
         pb::SyncInstanceConfigsRequest request;
@@ -171,12 +172,12 @@ int run(int argc, char* argv[]) {
 
         auto* double_point = request.add_points();
         double_point->set_sequence_id("temperature-1");
-        double_point->set_time(1'000);
+        double_point->set_time(kStorageTestTime);
         double_point->mutable_value()->set_double_value(25.0);
 
         auto* second_double_point = request.add_points();
         second_double_point->set_sequence_id("temperature-1");
-        second_double_point->set_time(1'001);
+        second_double_point->set_time(kStorageTestTime + 1);
         second_double_point->mutable_value()->set_double_value(25.5);
 
         const auto status = stub->ingestData(&context, request, &response);
@@ -192,7 +193,7 @@ int run(int argc, char* argv[]) {
         auto* point = request.add_points();
         point->set_data_source_id("source-a");
         point->set_external_sequence_id("temp");
-        point->set_time(1'000);
+        point->set_time(kStorageTestTime + 2);
         point->mutable_value()->set_double_value(25.0);
         const auto status = stub->ingestAndResolveData(
             &context, request, &response);
@@ -206,7 +207,8 @@ int run(int argc, char* argv[]) {
         pb::WriteRawDataResponse response;
         ::grpc::ClientContext context;
         addRawPoint(
-            request.mutable_data(), "temperature-1", 1'700'000'000'000LL, 25.0);
+            request.mutable_data(), "temperature-1",
+            kStorageTestTime + 100, 25.0);
         const auto status = stub->writeRawData(
             &context, request, &response);
         passed &= check(
@@ -218,7 +220,9 @@ int run(int argc, char* argv[]) {
         pb::BuildTimeWindowRequest request;
         pb::BuildTimeWindowResponse response;
         ::grpc::ClientContext context;
-        addRawPoint(request.mutable_data(), "temperature-1", 1'000, 25.0);
+        addRawPoint(
+            request.mutable_data(), "temperature-1",
+            kStorageTestTime + 200, 25.0);
         request.set_window_size(60'000);
         const auto status = stub->buildTimeWindow(
             &context, request, &response);
@@ -284,6 +288,7 @@ int run(int argc, char* argv[]) {
         request.add_sequence_ids("temperature-1");
         request.set_start_time(1'699'999'999'000LL);
         request.set_end_time(1'700'000'001'000LL);
+        request.set_granularity(1'000);
         const auto status = stub->queryHistoryData(
             &context, request, &response);
         passed &= check(

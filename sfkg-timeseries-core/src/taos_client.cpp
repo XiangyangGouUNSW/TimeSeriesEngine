@@ -2,12 +2,13 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
 #include <limits>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -146,6 +147,166 @@ struct ResultGuard {
     }
 };
 
+struct QueryFieldIndexes {
+    int timestamp{-1};
+    int value{-1};
+    int double_value{-1};
+    int integer_value{-1};
+    int boolean_value{-1};
+    int string_value{-1};
+    int value_type{-1};
+    int sequence_id{-1};
+};
+
+struct OverviewFieldIndexes {
+    int sequence_id{-1};
+    int point_count{-1};
+    int first_time{-1};
+    int last_time{-1};
+};
+
+std::string lowercase(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](char ch) {
+        return static_cast<char>(
+            std::tolower(static_cast<unsigned char>(ch)));
+    });
+    return value;
+}
+
+bool resolveQueryFields(
+    TAOS_RES* result,
+    QueryFieldIndexes* indexes,
+    bool typed_query) {
+    const int field_count = taos_num_fields(result);
+    TAOS_FIELD* fields = taos_fetch_fields(result);
+    if (field_count <= 0 || fields == nullptr) {
+        return false;
+    }
+
+    for (int index = 0; index < field_count; ++index) {
+        const std::string name = lowercase(fields[index].name);
+        int* target = nullptr;
+        if (name == "ts") {
+            target = &indexes->timestamp;
+        } else if (name == "value") {
+            target = &indexes->value;
+        } else if (name == "d_value") {
+            target = &indexes->double_value;
+        } else if (name == "i_value") {
+            target = &indexes->integer_value;
+        } else if (name == "b_value") {
+            target = &indexes->boolean_value;
+        } else if (name == "s_value") {
+            target = &indexes->string_value;
+        } else if (name == "value_type") {
+            target = &indexes->value_type;
+        } else if (name == "sequence_id") {
+            target = &indexes->sequence_id;
+        }
+        if (target != nullptr) {
+            if (*target != -1) {
+                return false;
+            }
+            *target = index;
+        }
+    }
+
+    if (typed_query) {
+        return indexes->timestamp != -1 && indexes->value != -1 &&
+            indexes->value_type != -1 && indexes->sequence_id != -1;
+    }
+    return indexes->timestamp != -1 &&
+        indexes->double_value != -1 &&
+        indexes->integer_value != -1 &&
+        indexes->boolean_value != -1 &&
+        indexes->string_value != -1 &&
+        indexes->value_type != -1 &&
+        indexes->sequence_id != -1;
+}
+
+const char* valueColumn(TimeseriesValueKind kind) {
+    switch (kind) {
+        case TimeseriesValueKind::Double:
+            return "d_value";
+        case TimeseriesValueKind::Int64:
+            return "i_value";
+        case TimeseriesValueKind::Bool:
+            return "b_value";
+        case TimeseriesValueKind::String:
+            return "s_value";
+        case TimeseriesValueKind::Unknown:
+            return nullptr;
+    }
+    return nullptr;
+}
+
+int valueTypeCode(TimeseriesValueKind kind) {
+    switch (kind) {
+        case TimeseriesValueKind::Double:
+            return 0;
+        case TimeseriesValueKind::Int64:
+            return 1;
+        case TimeseriesValueKind::Bool:
+            return 2;
+        case TimeseriesValueKind::String:
+            return 3;
+        case TimeseriesValueKind::Unknown:
+            return -1;
+    }
+    return -1;
+}
+
+std::string decodeNcharColumn(
+    const void* column,
+    const int* offsets,
+    int row_index) {
+    const auto* encoded = static_cast<const char*>(column) +
+        offsets[row_index];
+    std::uint16_t byte_length{};
+    std::memcpy(&byte_length, encoded, sizeof(byte_length));
+    return std::string(encoded + sizeof(byte_length), byte_length);
+}
+
+bool resolveOverviewFields(
+    TAOS_RES* result,
+    OverviewFieldIndexes* indexes) {
+    const int field_count = taos_num_fields(result);
+    TAOS_FIELD* fields = taos_fetch_fields(result);
+    if (field_count <= 0 || fields == nullptr) {
+        return false;
+    }
+
+    for (int index = 0; index < field_count; ++index) {
+        const std::string name = lowercase(fields[index].name);
+        int* target = nullptr;
+        if (name == "sequence_id") {
+            target = &indexes->sequence_id;
+        } else if (name == "point_count") {
+            target = &indexes->point_count;
+        } else if (name == "first_time") {
+            target = &indexes->first_time;
+        } else if (name == "last_time") {
+            target = &indexes->last_time;
+        }
+        if (target != nullptr) {
+            if (*target != -1) {
+                return false;
+            }
+            *target = index;
+        }
+    }
+
+    return indexes->sequence_id != -1 &&
+        indexes->point_count != -1 &&
+        indexes->first_time != -1 &&
+        indexes->last_time != -1;
+}
+
+bool queryTimingEnabled() {
+    const char* value = std::getenv("SFKG_TAOS_QUERY_TIMING");
+    return value != nullptr && std::string_view(value) == "1";
+}
+
 std::string tableName(const SequenceId& sequence_id) {
     // FNV-1a is deterministic across processes and platforms.  The prefix
     // keeps the generated identifier a legal, non-user-controlled table name.
@@ -185,46 +346,74 @@ struct BoundGroup {
     std::vector<char> integer_nulls;
     std::vector<char> boolean_nulls;
     std::vector<char> string_nulls;
+    // Unused value columns are bound as all-null columns.  One shared
+    // fallback buffer is enough for them; allocating a full value and
+    // null/length array for every possible type wastes work for homogeneous
+    // sequences.
+    std::vector<std::uint64_t> null_values;
+    std::vector<std::int32_t> null_lengths;
+    std::vector<char> all_nulls;
     std::array<TAOS_STMT2_BIND, 2> tags{};
     std::array<TAOS_STMT2_BIND, 5> columns{};
 
     explicit BoundGroup(const Group& group) : sequence_id(group.sequence_id) {
         table_name = tableName(sequence_id);
-        timestamps.reserve(group.points.size());
-        doubles.reserve(group.points.size());
-        integers.reserve(group.points.size());
-        booleans.reserve(group.points.size());
+        const auto point_count = group.points.size();
+        const auto type_index = group.points.front()->value.index();
+        timestamps.resize(point_count);
         timestamp_lengths.resize(group.points.size(), sizeof(std::int64_t));
-        double_lengths.resize(group.points.size(), sizeof(double));
-        integer_lengths.resize(group.points.size(), sizeof(std::int64_t));
-        boolean_lengths.resize(group.points.size(), sizeof(std::int8_t));
-        string_lengths.resize(group.points.size());
         timestamp_nulls.resize(group.points.size(), 1);
-        double_nulls.resize(group.points.size(), 1);
-        integer_nulls.resize(group.points.size(), 1);
-        boolean_nulls.resize(group.points.size(), 1);
-        string_nulls.resize(group.points.size(), 1);
+        null_values.resize(point_count);
+        null_lengths.resize(point_count);
+        all_nulls.resize(point_count, 1);
+
+        switch (type_index) {
+            case 0:
+                doubles.resize(point_count);
+                double_lengths.resize(point_count, sizeof(double));
+                double_nulls.resize(point_count, 1);
+                break;
+            case 1:
+                integers.resize(point_count);
+                integer_lengths.resize(point_count, sizeof(std::int64_t));
+                integer_nulls.resize(point_count, 1);
+                break;
+            case 2:
+                booleans.resize(point_count);
+                boolean_lengths.resize(point_count, sizeof(std::int8_t));
+                boolean_nulls.resize(point_count, 1);
+                break;
+            case 3: {
+                string_lengths.resize(point_count);
+                string_nulls.resize(point_count, 1);
+                std::size_t string_bytes = 0;
+                for (const auto* point : group.points) {
+                    string_bytes += std::get<std::string>(point->value).size();
+                }
+                string_buffer.reserve(string_bytes);
+                break;
+            }
+            default:
+                throw std::invalid_argument("unsupported raw value type");
+        }
 
         for (std::size_t index = 0; index < group.points.size(); ++index) {
             const auto& point = *group.points[index];
-            timestamps.push_back(point.time);
+            timestamps[index] = point.time;
             timestamp_nulls[index] = 0;
-            doubles.push_back(0.0);
-            integers.push_back(0);
-            booleans.push_back(0);
             std::visit([&](const auto& value) {
                 using Value = std::decay_t<decltype(value)>;
                 if constexpr (std::is_same_v<Value, double>) {
                     value_type = 0;
-                    doubles.back() = value;
+                    doubles[index] = value;
                     double_nulls[index] = 0;
                 } else if constexpr (std::is_same_v<Value, std::int64_t>) {
                     value_type = 1;
-                    integers.back() = value;
+                    integers[index] = value;
                     integer_nulls[index] = 0;
                 } else if constexpr (std::is_same_v<Value, bool>) {
                     value_type = 2;
-                    booleans.back() = value ? 1 : 0;
+                    booleans[index] = value ? 1 : 0;
                     boolean_nulls[index] = 0;
                 } else if constexpr (std::is_same_v<Value, std::string>) {
                     value_type = 3;
@@ -243,10 +432,26 @@ struct BoundGroup {
         tags[0] = {TSDB_DATA_TYPE_NCHAR, sequence_id.data(), &tag_sequence_length, nullptr, 1};
         tags[1] = {TSDB_DATA_TYPE_TINYINT, &tag_value_type, nullptr, nullptr, 1};
         columns[0] = {TSDB_DATA_TYPE_TIMESTAMP, timestamps.data(), timestamp_lengths.data(), timestamp_nulls.data(), static_cast<int>(timestamps.size())};
-        columns[1] = {TSDB_DATA_TYPE_DOUBLE, doubles.data(), double_lengths.data(), double_nulls.data(), static_cast<int>(doubles.size())};
-        columns[2] = {TSDB_DATA_TYPE_BIGINT, integers.data(), integer_lengths.data(), integer_nulls.data(), static_cast<int>(integers.size())};
-        columns[3] = {TSDB_DATA_TYPE_BOOL, booleans.data(), boolean_lengths.data(), boolean_nulls.data(), static_cast<int>(booleans.size())};
-        columns[4] = {TSDB_DATA_TYPE_NCHAR, string_buffer.data(), string_lengths.data(), string_nulls.data(), static_cast<int>(group.points.size())};
+        columns[1] = {TSDB_DATA_TYPE_DOUBLE,
+            type_index == 0 ? static_cast<void*>(doubles.data()) : static_cast<void*>(null_values.data()),
+            type_index == 0 ? double_lengths.data() : null_lengths.data(),
+            type_index == 0 ? double_nulls.data() : all_nulls.data(),
+            static_cast<int>(point_count)};
+        columns[2] = {TSDB_DATA_TYPE_BIGINT,
+            type_index == 1 ? static_cast<void*>(integers.data()) : static_cast<void*>(null_values.data()),
+            type_index == 1 ? integer_lengths.data() : null_lengths.data(),
+            type_index == 1 ? integer_nulls.data() : all_nulls.data(),
+            static_cast<int>(point_count)};
+        columns[3] = {TSDB_DATA_TYPE_BOOL,
+            type_index == 2 ? static_cast<void*>(booleans.data()) : static_cast<void*>(null_values.data()),
+            type_index == 2 ? boolean_lengths.data() : null_lengths.data(),
+            type_index == 2 ? boolean_nulls.data() : all_nulls.data(),
+            static_cast<int>(point_count)};
+        columns[4] = {TSDB_DATA_TYPE_NCHAR,
+            type_index == 3 ? static_cast<void*>(string_buffer.data()) : static_cast<void*>(null_values.data()),
+            type_index == 3 ? string_lengths.data() : null_lengths.data(),
+            type_index == 3 ? string_nulls.data() : all_nulls.data(),
+            static_cast<int>(point_count)};
     }
 };
 #endif
@@ -258,6 +463,8 @@ struct TaosClient::Impl {
     std::string user = envOr("SFKG_TAOS_USER", "root");
     std::string password = envOr("SFKG_TAOS_PASSWORD", "taosdata");
     std::string database = envOr("SFKG_TAOS_DB", "sfkg_timeseries");
+    std::string raw_stable_name =
+        envOr("SFKG_TAOS_RAW_STABLE", "raw_timeseries_data");
     std::uint16_t port{};
     std::uint32_t keep_days{};
     std::string config_error;
@@ -280,6 +487,11 @@ TaosClient::TaosClient() : impl_(std::make_unique<Impl>()) {
     }
     if (!validDatabaseName(impl_->database)) {
         impl_->config_error = "SFKG_TAOS_DB is empty, too long, or contains `";
+        return;
+    }
+    if (!validDatabaseName(impl_->raw_stable_name)) {
+        impl_->config_error =
+            "SFKG_TAOS_RAW_STABLE is empty, too long, or contains `";
         return;
     }
     if (const char* keep = std::getenv("SFKG_TAOS_KEEP_DAYS")) {
@@ -347,14 +559,15 @@ OperationResult TaosClient::ensureSchema() {
     if (result.result == nullptr || taos_errno(result.result) != 0) {
         return queryError(result.result, "create database");
     }
+    const std::string stable = quoteIdentifier(impl_->raw_stable_name);
     const std::string create_stable =
-        "CREATE STABLE IF NOT EXISTS " + database + ".`raw_timeseries_data` "
+        "CREATE STABLE IF NOT EXISTS " + database + "." + stable + " "
         "(ts TIMESTAMP, d_value DOUBLE, i_value BIGINT, b_value BOOL, "
         "s_value NCHAR(256)) TAGS (sequence_id NCHAR(128), value_type TINYINT)";
     taos_free_result(result.result);
     result.result = taos_query(impl_->write_connection, create_stable.c_str());
     if (result.result == nullptr || taos_errno(result.result) != 0) {
-        return queryError(result.result, "create raw_timeseries_data");
+        return queryError(result.result, "create raw data stable");
     }
     if (taos_select_db(impl_->write_connection, impl_->database.c_str()) != 0) {
         const std::string message = "select TDengine database for writes: " +
@@ -407,7 +620,7 @@ OperationResult TaosClient::insertRaw(const TimeseriesBatch& batch) {
 #if !SFKG_WITH_TAOS
     return internalError("TDengine support was disabled at configure time");
 #else
-    std::map<SequenceId, Group> groups;
+    std::unordered_map<SequenceId, Group> groups;
     for (const auto& point : batch.points) {
         if (point.sequence_id.empty()) {
             return invalidArgument("sequence_id must not be empty");
@@ -443,26 +656,8 @@ OperationResult TaosClient::insertRaw(const TimeseriesBatch& batch) {
         }
     }
 
-    // Grouping and type validation above are already outside this lock. The
-    // current first version also keeps statement binding here for simplicity;
-    // pure buffer construction can be moved out in a later throughput pass.
-    std::lock_guard lock(impl_->write_mutex);
-    if (impl_->write_connection == nullptr) {
-        return unavailable("TDengine is unreachable: " + impl_->connection_error);
-    }
-    const std::string sql =
-        "INSERT INTO ? USING " + quoteIdentifier(impl_->database) +
-        ".`raw_timeseries_data` TAGS(?,?) VALUES (?,?,?,?,?)";
-    TAOS_STMT2_OPTION option{0, true, true, nullptr, nullptr};
-    std::unique_ptr<TAOS_STMT2, decltype(&taos_stmt2_close)> statement(
-        taos_stmt2_init(impl_->write_connection, &option), taos_stmt2_close);
-    if (!statement) {
-        return unavailable("initialize TDengine stmt2: connection unavailable");
-    }
-    if (taos_stmt2_prepare(statement.get(), sql.c_str(), 0) != 0) {
-        return stmtError(statement.get(), "prepare raw insert");
-    }
-
+    // Build the bound buffers before taking the connection lock. This work is
+    // local to the request and does not need to serialize with other writes.
     std::vector<std::unique_ptr<BoundGroup>> bound_groups;
     std::vector<char*> table_names;
     std::vector<TAOS_STMT2_BIND*> tags;
@@ -482,6 +677,24 @@ OperationResult TaosClient::insertRaw(const TimeseriesBatch& batch) {
         }
     } catch (const std::exception& exception) {
         return internalError(std::string("prepare raw values: ") + exception.what());
+    }
+
+    std::lock_guard lock(impl_->write_mutex);
+    if (impl_->write_connection == nullptr) {
+        return unavailable("TDengine is unreachable: " + impl_->connection_error);
+    }
+    const std::string sql =
+        "INSERT INTO ? USING " + quoteIdentifier(impl_->database) +
+        "." + quoteIdentifier(impl_->raw_stable_name) +
+        " TAGS(?,?) VALUES (?,?,?,?,?)";
+    TAOS_STMT2_OPTION option{0, true, true, nullptr, nullptr};
+    std::unique_ptr<TAOS_STMT2, decltype(&taos_stmt2_close)> statement(
+        taos_stmt2_init(impl_->write_connection, &option), taos_stmt2_close);
+    if (!statement) {
+        return unavailable("initialize TDengine stmt2: connection unavailable");
+    }
+    if (taos_stmt2_prepare(statement.get(), sql.c_str(), 0) != 0) {
+        return stmtError(statement.get(), "prepare raw insert");
     }
 
     TAOS_STMT2_BINDV bindv{
@@ -504,11 +717,12 @@ OperationResult TaosClient::queryRaw(
     const std::vector<SequenceId>& sequence_ids,
     Timestamp start,
     Timestamp end,
-    TimeseriesBatch* out) const {
+    TimeseriesBatch* out,
+    std::optional<std::int64_t> granularity,
+    const std::unordered_map<SequenceId, TimeseriesValueKind>* value_kinds) const {
     if (out == nullptr) {
         return invalidArgument("query output must not be null");
     }
-    out->points.clear();
     if (sequence_ids.empty()) {
         return invalidArgument("sequence_ids must not be empty");
     }
@@ -524,86 +738,325 @@ OperationResult TaosClient::queryRaw(
         return invalidArgument(impl_->config_error);
     }
     if (start == end) {
+        out->points.clear();
         return ok(0, "query returned no rows");
+    }
+    if (granularity && *granularity <= 0) {
+        return invalidArgument("query granularity must be positive");
     }
 #if !SFKG_WITH_TAOS
     return internalError("TDengine support was disabled at configure time");
 #else
-    // Serialize access to the shared query connection and its result handle.
-    std::lock_guard lock(impl_->query_mutex);
-    if (impl_->query_connection == nullptr) {
-        return unavailable("TDengine is unreachable: " + impl_->connection_error);
-    }
-    std::ostringstream sql;
-    sql << "SELECT ts,d_value,i_value,b_value,s_value,value_type,sequence_id FROM "
-        << quoteIdentifier(impl_->database) << ".`raw_timeseries_data` WHERE sequence_id IN (";
-    for (std::size_t index = 0; index < sequence_ids.size(); ++index) {
-        if (index != 0) {
-            sql << ',';
-        }
-        sql << escapeLiteral(sequence_ids[index]);
-    }
-    sql << ") AND ts >= " << start << " AND ts < " << end << " ORDER BY ts";
+    const bool timing_enabled = queryTimingEnabled();
+    const auto total_started = std::chrono::steady_clock::now();
+    TimeseriesBatch temporary;
+    temporary.points.reserve(1024);
+    bool time_ordered = true;
+    std::optional<Timestamp> previous_time;
+    std::chrono::duration<double, std::milli> lock_wait{};
+    std::chrono::duration<double, std::milli> sql_time{};
+    std::chrono::duration<double, std::milli> fetch_decode_time{};
 
-    ResultGuard result{taos_query(impl_->query_connection, sql.str().c_str())};
-    if (result.result == nullptr || taos_errno(result.result) != 0) {
-        return queryError(result.result, "query raw data");
+    std::optional<TimeseriesValueKind> typed_kind;
+    if (value_kinds != nullptr) {
+        for (const auto& sequence_id : sequence_ids) {
+            const auto found = value_kinds->find(sequence_id);
+            if (found == value_kinds->end() ||
+                found->second == TimeseriesValueKind::Unknown) {
+                typed_kind.reset();
+                break;
+            }
+            if (!typed_kind) {
+                typed_kind = found->second;
+            } else if (*typed_kind != found->second) {
+                // Keep mixed-type requests on the generic projection. A
+                // single typed SQL projection cannot represent them safely.
+                typed_kind.reset();
+                break;
+            }
+        }
     }
-    const int field_count = taos_num_fields(result.result);
-    if (field_count != 7) {
-        return internalError("query raw data returned an unexpected schema");
+    bool typed_fallback = false;
+    {
+        const auto lock_wait_started = std::chrono::steady_clock::now();
+        std::unique_lock lock(impl_->query_mutex);
+        lock_wait = std::chrono::steady_clock::now() - lock_wait_started;
+        if (impl_->query_connection == nullptr) {
+            return unavailable(
+                "TDengine is unreachable: " + impl_->connection_error);
+        }
+
+        bool use_typed_query = typed_kind.has_value();
+        for (;;) {
+            std::ostringstream sql;
+            const char* typed_column = use_typed_query
+                ? valueColumn(*typed_kind)
+                : nullptr;
+            if (use_typed_query) {
+                if (granularity) {
+                    sql << "SELECT _wstart AS ts,LAST(" << typed_column
+                        << ") AS value,LAST(value_type) AS value_type,"
+                           "sequence_id AS sequence_id FROM ";
+                } else {
+                    sql << "SELECT ts AS ts," << typed_column
+                        << " AS value,value_type AS value_type,"
+                           "sequence_id AS sequence_id FROM ";
+                }
+            } else if (granularity) {
+                sql << "SELECT _wstart AS ts,LAST(d_value) AS d_value,"
+                       "LAST(i_value) AS i_value,LAST(b_value) AS b_value,"
+                       "LAST(s_value) AS s_value,LAST(value_type) AS value_type,"
+                       "sequence_id AS sequence_id FROM ";
+            } else {
+                sql << "SELECT ts AS ts,d_value AS d_value,i_value AS i_value,"
+                       "b_value AS b_value,s_value AS s_value,"
+                       "value_type AS value_type,sequence_id AS sequence_id FROM ";
+            }
+            sql << quoteIdentifier(impl_->database) << "."
+                << quoteIdentifier(impl_->raw_stable_name)
+                << " WHERE sequence_id IN (";
+            for (std::size_t index = 0; index < sequence_ids.size(); ++index) {
+                if (index != 0) {
+                    sql << ',';
+                }
+                sql << escapeLiteral(sequence_ids[index]);
+            }
+            sql << ") AND ts >= " << start << " AND ts < " << end;
+            if (granularity) {
+                // `a` is TDengine's millisecond interval unit. LAST preserves
+                // a generic value type while reducing one sequence to one
+                // point per time bucket.
+                sql << " PARTITION BY sequence_id INTERVAL ("
+                    << *granularity << "a)";
+            } else {
+                sql << " ORDER BY ts";
+            }
+
+            const auto sql_started = std::chrono::steady_clock::now();
+            ResultGuard result{
+                taos_query(impl_->query_connection, sql.str().c_str())};
+            sql_time += std::chrono::steady_clock::now() - sql_started;
+            if (result.result == nullptr || taos_errno(result.result) != 0) {
+                return queryError(result.result, "query raw data");
+            }
+            QueryFieldIndexes fields;
+            if (!resolveQueryFields(result.result, &fields, use_typed_query)) {
+                return internalError(
+                    "query raw data result is missing one or more required fields");
+            }
+
+            const auto fetch_started = std::chrono::steady_clock::now();
+            bool typed_mismatch = false;
+            int row_count = 0;
+            TAOS_ROW block = nullptr;
+            while ((row_count = taos_fetch_block(result.result, &block)) > 0) {
+                auto** columns = reinterpret_cast<void**>(block);
+                const int* sequence_offsets = taos_get_column_data_offset(
+                    result.result, fields.sequence_id);
+                const int* string_offsets = use_typed_query
+                    ? nullptr
+                    : taos_get_column_data_offset(
+                        result.result, fields.string_value);
+                const int* typed_string_offsets = use_typed_query &&
+                    *typed_kind == TimeseriesValueKind::String
+                    ? taos_get_column_data_offset(
+                        result.result, fields.value)
+                    : nullptr;
+                if (sequence_offsets == nullptr ||
+                    (!use_typed_query && string_offsets == nullptr) ||
+                    (use_typed_query &&
+                     *typed_kind == TimeseriesValueKind::String &&
+                     typed_string_offsets == nullptr)) {
+                    return internalError(
+                        "query raw data did not return string offsets");
+                }
+                const auto required_size = temporary.points.size() +
+                    static_cast<std::size_t>(row_count);
+                if (temporary.points.capacity() < required_size) {
+                    temporary.points.reserve(std::max(
+                        required_size, temporary.points.capacity() * 2));
+                }
+                for (int row_index = 0; row_index < row_count; ++row_index) {
+                    auto* timestamps = static_cast<std::int64_t*>(
+                        columns[fields.timestamp]);
+                    auto* types = static_cast<std::int8_t*>(
+                        columns[fields.value_type]);
+                    if (timestamps == nullptr || types == nullptr ||
+                        taos_is_null(result.result, row_index,
+                                     fields.timestamp) ||
+                        taos_is_null(result.result, row_index,
+                                     fields.value_type)) {
+                        return internalError(
+                            "query raw data returned a null timestamp or value type");
+                    }
+                    const auto type = types[row_index];
+                    RawTimeseriesPoint point;
+                    point.time = timestamps[row_index];
+                    if (previous_time && point.time < *previous_time) {
+                        time_ordered = false;
+                    }
+                    previous_time = point.time;
+
+                    int value_column = -1;
+                    if (use_typed_query) {
+                        if (type != valueTypeCode(*typed_kind) ||
+                            taos_is_null(result.result, row_index,
+                                         fields.value)) {
+                            typed_mismatch = true;
+                            break;
+                        }
+                        value_column = fields.value;
+                    } else if (type == 0) {
+                        value_column = fields.double_value;
+                    } else if (type == 1) {
+                        value_column = fields.integer_value;
+                    } else if (type == 2) {
+                        value_column = fields.boolean_value;
+                    } else if (type == 3) {
+                        value_column = fields.string_value;
+                    }
+                    if (type < 0 || type > 3 ||
+                        taos_is_null(result.result, row_index, value_column)) {
+                        return internalError(
+                            "query raw data returned an invalid typed value");
+                    }
+                    if (taos_is_null(result.result, row_index,
+                                     fields.sequence_id)) {
+                        return internalError(
+                            "query raw data returned a null sequence_id");
+                    }
+                    point.sequence_id = decodeNcharColumn(
+                        columns[fields.sequence_id], sequence_offsets, row_index);
+                    if (use_typed_query) {
+                        auto* values = columns[fields.value];
+                        switch (*typed_kind) {
+                            case TimeseriesValueKind::Double:
+                                point.value = static_cast<double*>(
+                                    values)[row_index];
+                                break;
+                            case TimeseriesValueKind::Int64:
+                                point.value = static_cast<std::int64_t*>(
+                                    values)[row_index];
+                                break;
+                            case TimeseriesValueKind::Bool:
+                                point.value = static_cast<std::int8_t*>(
+                                    values)[row_index] != 0;
+                                break;
+                            case TimeseriesValueKind::String:
+                                point.value = decodeNcharColumn(
+                                    values, typed_string_offsets, row_index);
+                                break;
+                            case TimeseriesValueKind::Unknown:
+                                return internalError(
+                                    "typed query has an unknown value kind");
+                        }
+                    } else if (type == 0) {
+                        point.value = static_cast<double*>(
+                            columns[fields.double_value])[row_index];
+                    } else if (type == 1) {
+                        point.value = static_cast<std::int64_t*>(
+                            columns[fields.integer_value])[row_index];
+                    } else if (type == 2) {
+                        point.value = static_cast<std::int8_t*>(
+                            columns[fields.boolean_value])[row_index] != 0;
+                    } else {
+                        point.value = decodeNcharColumn(
+                            columns[fields.string_value], string_offsets, row_index);
+                    }
+                    temporary.points.push_back(std::move(point));
+                }
+                if (typed_mismatch) {
+                    break;
+                }
+            }
+            if (row_count < 0) {
+                return queryError(result.result, "fetch raw data block");
+            }
+            fetch_decode_time += std::chrono::steady_clock::now() - fetch_started;
+            if (!typed_mismatch) {
+                break;
+            }
+
+            // A stale or mixed physical type can exist in historical data if
+            // a sequence configuration was changed. Retry with the generic
+            // projection rather than silently dropping those rows.
+            typed_fallback = true;
+            use_typed_query = false;
+            temporary.points.clear();
+            time_ordered = true;
+            previous_time.reset();
+        }
+        // ResultGuard releases TAOS_RES while query_mutex is still held.
     }
-    for (TAOS_ROW row = taos_fetch_row(result.result); row != nullptr; row = taos_fetch_row(result.result)) {
-        const int* lengths = taos_fetch_lengths(result.result);
-        if (lengths == nullptr) {
-            return internalError("query raw data did not return field lengths");
-        }
-        if (row[0] == nullptr || row[5] == nullptr) {
-            return internalError("query raw data returned a null timestamp or value type");
-        }
-        const auto type = *static_cast<std::int8_t*>(row[5]);
-        RawTimeseriesPoint point;
-        point.time = *static_cast<std::int64_t*>(row[0]);
-        const int value_column = static_cast<int>(type) + 1;
-        // taos_fetch_row() advances through result blocks. The row number
-        // passed to taos_is_null() is block-local, so using a global counter
-        // breaks as soon as a result contains more than one 1024-row block.
-        // For this raw query, TDengine represents a NULL field by nullptr.
-        if (type < 0 || type > 3 || row[value_column] == nullptr) {
-            return internalError("query raw data returned an invalid typed value");
-        }
-        if (row[6] == nullptr) {
-            return internalError("query raw data returned a null sequence_id");
-        }
-        point.sequence_id = std::string(
-            static_cast<char*>(row[6]), static_cast<std::size_t>(lengths[6]));
-        if (type == 0) {
-            point.value = *static_cast<double*>(row[1]);
-        } else if (type == 1) {
-            point.value = *static_cast<std::int64_t*>(row[2]);
-        } else if (type == 2) {
-            point.value = *static_cast<std::int8_t*>(row[3]) != 0;
-        } else {
-            point.value = std::string(
-                static_cast<char*>(row[4]), static_cast<std::size_t>(lengths[4]));
-        }
-        out->points.push_back(std::move(point));
-    }
-    std::map<SequenceId, std::size_t> requested_order;
+
+    std::unordered_map<SequenceId, std::size_t> requested_order;
     for (std::size_t index = 0; index < sequence_ids.size(); ++index) {
         requested_order.emplace(sequence_ids[index], index);
     }
-    std::stable_sort(
-        out->points.begin(), out->points.end(),
-        [&requested_order](const RawTimeseriesPoint& left,
-                           const RawTimeseriesPoint& right) {
-            if (left.time != right.time) {
-                return left.time < right.time;
+    const auto requested_order_less = [&requested_order](
+        const RawTimeseriesPoint& left,
+        const RawTimeseriesPoint& right) {
+        return requested_order.at(left.sequence_id) <
+            requested_order.at(right.sequence_id);
+    };
+    const auto sort_started = std::chrono::steady_clock::now();
+    if (!time_ordered) {
+        // A grouped/windowed TDengine query may return partitions rather than
+        // one globally time-ordered stream. Preserve the API contract in this
+        // fallback path.
+        std::stable_sort(
+            temporary.points.begin(), temporary.points.end(),
+            [&requested_order](const RawTimeseriesPoint& left,
+                               const RawTimeseriesPoint& right) {
+                if (left.time != right.time) {
+                    return left.time < right.time;
+                }
+                return requested_order.at(left.sequence_id) <
+                    requested_order.at(right.sequence_id);
+            });
+    } else {
+        // SQL ORDER BY ts already established the primary order. Only sort
+        // equal-timestamp runs to enforce requested sequence order, avoiding
+        // an O(n log n) sort for the common monotonic case.
+        for (std::size_t begin = 0; begin < temporary.points.size();) {
+            std::size_t finish = begin + 1;
+            while (finish < temporary.points.size() &&
+                   temporary.points[finish].time == temporary.points[begin].time) {
+                ++finish;
             }
-            return requested_order.at(left.sequence_id) <
-                requested_order.at(right.sequence_id);
-        });
-    return ok(out->points.size(), "raw query completed");
+            if (finish - begin > 1) {
+                std::stable_sort(
+                    temporary.points.begin() +
+                        static_cast<std::ptrdiff_t>(begin),
+                    temporary.points.begin() +
+                        static_cast<std::ptrdiff_t>(finish),
+                    requested_order_less);
+            }
+            begin = finish;
+        }
+    }
+    const std::chrono::duration<double, std::milli> sort_time =
+        std::chrono::steady_clock::now() - sort_started;
+    const std::chrono::duration<double, std::milli> total_time =
+        std::chrono::steady_clock::now() - total_started;
+    const auto point_count = temporary.points.size();
+    out->points = std::move(temporary.points);
+    if (timing_enabled) {
+        std::clog << "queryRaw_timing points=" << point_count
+                  << " lock_wait_ms=" << lock_wait.count()
+                  << " sql_ms=" << sql_time.count()
+                  << " fetch_decode_ms=" << fetch_decode_time.count()
+                  << " sort_ms=" << sort_time.count()
+                  << " total_ms=" << total_time.count()
+                  << " time_ordered=" << (time_ordered ? "true" : "false")
+                  << " fetch_mode=block"
+                  << " typed_projection="
+                  << ((typed_kind && !typed_fallback) ? "true" : "false")
+                  << " granularity_ms="
+                  << (granularity ? std::to_string(*granularity) : "raw")
+                  << '\n';
+    }
+    return ok(point_count, "raw query completed");
 #endif
 }
 
@@ -642,8 +1095,11 @@ OperationResult TaosClient::queryHistoryOverview(
     }
 
     std::ostringstream sql;
-    sql << "SELECT sequence_id,COUNT(*),MIN(ts),MAX(ts) FROM "
-        << quoteIdentifier(impl_->database) << ".`raw_timeseries_data`";
+    sql << "SELECT sequence_id AS sequence_id,"
+           "COUNT(*) AS point_count,MIN(ts) AS first_time,"
+           "MAX(ts) AS last_time FROM "
+        << quoteIdentifier(impl_->database) << "."
+        << quoteIdentifier(impl_->raw_stable_name);
     if (!query.sequence_ids.empty() || query.start_time || query.end_time) {
         sql << " WHERE ";
         bool has_condition = false;
@@ -680,27 +1136,30 @@ OperationResult TaosClient::queryHistoryOverview(
     if (result.result == nullptr || taos_errno(result.result) != 0) {
         return queryError(result.result, "query history overview");
     }
-    if (taos_num_fields(result.result) != 4) {
+    OverviewFieldIndexes fields;
+    if (!resolveOverviewFields(result.result, &fields)) {
         return internalError(
-            "history overview returned an unexpected schema");
+            "history overview result is missing one or more required fields");
     }
 
-    std::size_t row_number = 0;
     for (TAOS_ROW row = taos_fetch_row(result.result);
          row != nullptr;
          row = taos_fetch_row(result.result)) {
         const int* lengths = taos_fetch_lengths(result.result);
-        if (lengths == nullptr || lengths[0] <= 0) {
+        if (lengths == nullptr ||
+            lengths[fields.sequence_id] <= 0) {
             return internalError(
                 "history overview did not return a sequence length");
         }
-        if (row[0] == nullptr || row[1] == nullptr ||
-            taos_is_null(result.result, static_cast<int>(row_number), 2) ||
-            taos_is_null(result.result, static_cast<int>(row_number), 3)) {
+        if (row[fields.sequence_id] == nullptr ||
+            row[fields.point_count] == nullptr ||
+            row[fields.first_time] == nullptr ||
+            row[fields.last_time] == nullptr) {
             return internalError(
                 "history overview returned a null sequence or aggregate");
         }
-        const auto raw_count = *static_cast<std::int64_t*>(row[1]);
+        const auto raw_count = *static_cast<std::int64_t*>(
+            row[fields.point_count]);
         if (raw_count < 0 ||
             static_cast<std::uint64_t>(raw_count) >
                 std::numeric_limits<std::size_t>::max()) {
@@ -710,10 +1169,13 @@ OperationResult TaosClient::queryHistoryOverview(
 
         HistorySeriesSummary series;
         series.sequence_id = std::string(
-            static_cast<char*>(row[0]), static_cast<std::size_t>(lengths[0]));
+            static_cast<char*>(row[fields.sequence_id]),
+            static_cast<std::size_t>(lengths[fields.sequence_id]));
         series.point_count = static_cast<std::size_t>(raw_count);
-        series.first_time = *static_cast<std::int64_t*>(row[2]);
-        series.last_time = *static_cast<std::int64_t*>(row[3]);
+        series.first_time = *static_cast<std::int64_t*>(
+            row[fields.first_time]);
+        series.last_time = *static_cast<std::int64_t*>(
+            row[fields.last_time]);
 
         if (out->total_point_count >
             std::numeric_limits<std::size_t>::max() - series.point_count) {
@@ -727,10 +1189,9 @@ OperationResult TaosClient::queryHistoryOverview(
         if (!out->last_time || *series.last_time > *out->last_time) {
             out->last_time = series.last_time;
         }
-        ++row_number;
     }
     if (!query.sequence_ids.empty()) {
-        std::map<SequenceId, std::size_t> requested_order;
+        std::unordered_map<SequenceId, std::size_t> requested_order;
         for (std::size_t index = 0; index < query.sequence_ids.size(); ++index) {
             requested_order.emplace(query.sequence_ids[index], index);
         }

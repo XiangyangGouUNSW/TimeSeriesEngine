@@ -117,9 +117,13 @@ SFKG_TAOS_PORT=6030 \
 SFKG_TAOS_USER=root \
 SFKG_TAOS_PASSWORD=taosdata \
 SFKG_TAOS_DB=sfkg_timeseries \
+SFKG_TAOS_RAW_STABLE=raw_timeseries_data \
 SFKG_TIMESERIES_CORE_ADDRESS=0.0.0.0:50051 \
 ./build-taos/sfkg-timeseries-core-server 0.0.0.0:50051
 ```
+
+`SFKG_TAOS_RAW_STABLE` 默认值为 `raw_timeseries_data`，用于指定原始时序数据的超级表名称；
+自定义名称时，Core 会按当前原始数据结构创建并查询对应超级表。
 
 Core 正常启动后应打印：
 
@@ -152,6 +156,10 @@ ss -lntp | grep ':50051'
 2. `syncConstraints`、`syncRelations` 同步约束和关联关系；
 3. 调用 `ingestData` 或 `ingestAndResolveData` 接入数据；
 4. 调用窗口、约束检查或历史查询接口。
+
+`queryHistoryData` 的 `granularity` 单位为毫秒。未设置时返回原始点；设置后
+按时间桶聚合，每个序列每个时间桶返回最后一个值。返回结果仍按时间升序，
+相同时间戳按请求中的 `sequence_ids` 顺序排列。
 
 Core 重启后运行时配置会清空，因此每次启动后都需要由统一服务重新同步配置。TDengine 中的历史数据不会因此清空。
 

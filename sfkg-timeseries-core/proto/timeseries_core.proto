@@ -382,6 +382,8 @@ message QueryHistoryDataRequest {
   repeated string sequence_ids = 1;
   int64 start_time = 2;
   int64 end_time = 3;
+  // Optional millisecond bucket size. When set, Core returns the last value
+  // observed for each sequence in each bucket.
   optional int64 granularity = 4;
 }
 
