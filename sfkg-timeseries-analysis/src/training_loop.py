@@ -1,33 +1,73 @@
-"""训练循环：轮询数据规模 → 达标就拉历史 → 训练 AR 模型 → 存进模型仓库。
+"""训练循环：轮询数据规模 → 达标就拉历史 → 训练模型 → 存进模型仓库。
 
 对应需求：
   1. 通过轮询调用检查 C 端的数据规模；
   2. 规模达标后调用 C 端拉历史数据；
-  3. 训练一个小模型（这里用自回归 AR）。
+  3. 训练模型（自回归 AR 或 PatchTST），训练好存起来供推理复用。
 """
 
 from __future__ import annotations
 
+import logging
 import time
+from pathlib import Path
 
 from core_client import CoreDataClient
 from ar_model import AutoregressiveModel
+from patchtst_forecaster import PatchTSTForecaster
+
+logger = logging.getLogger(__name__)
 
 
 class ModelStore:
-    """最简单的模型仓库：训练好的模型放这，推理时取。"""
+    """模型仓库：内存 + 磁盘双缓存。
 
-    def __init__(self):
-        self._models: dict[str, AutoregressiveModel] = {}
+    - save: 内存存一份 + 写 models/{key}.pt（含模型 + 标准化参数）；
+    - get: 内存命中直接返回；未命中且磁盘有则加载；
+    - invalidate: 删内存 + 磁盘文件（任务版本变化/删除时调用）。
+    """
 
-    def save(self, sequence_id: str, model: AutoregressiveModel) -> None:
-        self._models[sequence_id] = model
+    def __init__(self, model_dir: str | Path | None = None):
+        self._models: dict[str, object] = {}
+        self._model_dir = Path(model_dir) if model_dir else Path("models")
 
-    def get(self, sequence_id: str) -> AutoregressiveModel | None:
-        return self._models.get(sequence_id)
+    def _path(self, key: str) -> Path:
+        return self._model_dir / f"{key}.pt"
 
-    def is_ready(self, sequence_id: str) -> bool:
-        return sequence_id in self._models
+    def save(self, key: str, model) -> None:
+        self._models[key] = model
+        self._model_dir.mkdir(parents=True, exist_ok=True)
+        if hasattr(model, "save"):
+            model.save(self._path(key))
+        logger.info("[ModelStore] save %s（内存 + %s）", key, self._path(key))
+
+    def get(self, key: str):
+        if key in self._models:
+            return self._models[key]
+        p = self._path(key)
+        if p.exists() and hasattr(self, "_loader"):
+            model = self._loader(key, p)
+            self._models[key] = model
+            return model
+        return None
+
+    def is_ready(self, key: str) -> bool:
+        if key in self._models:
+            return True
+        return self._path(key).exists()
+
+    def invalidate(self, key: str) -> None:
+        self._models.pop(key, None)
+        p = self._path(key)
+        if p.exists():
+            p.unlink()
+        logger.info("[ModelStore] invalidate %s", key)
+
+    # ---- 具体模型类型的加载方式（由上层注入）----
+
+    def set_loader(self, loader) -> None:
+        """loader(key, path) -> model：磁盘缓存加载函数，让 store 不依赖具体模型类。"""
+        self._loader = loader
 
 
 class TrainingLoop:

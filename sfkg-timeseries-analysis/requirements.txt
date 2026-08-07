@@ -5,3 +5,8 @@ protobuf>=4.25
 numpy>=1.24
 pyyaml>=6.0
 scikit-learn>=1.5
+
+# 预测模型：PatchTST（SOTA Transformer 类）。torch 建议装 CUDA 版：
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+torch>=2.0
+transformers>=4.40

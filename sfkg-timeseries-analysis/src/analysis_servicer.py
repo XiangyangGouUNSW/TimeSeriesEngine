@@ -52,9 +52,11 @@ class AnalysisServicer(pb_grpc.TimeseriesAnalysisServiceServicer):
     def SyncForecastTask(self, request, context):
         task = request.task
         self._tasks[task.task_id] = task
-        logger.info("SyncForecastTask: task_id=%s", task.task_id)
+        logger.info("SyncForecastTask: task_id=%s config_version=%s",
+                    task.task_id, request.config_version)
         if self._engine:
-            result = self._engine.run_forecast(task)
+            result = self._engine.run_forecast(task,
+                                               config_version=request.config_version)
             self._forecast_results[task.task_id] = result
             return pb.TaskAck(task_id=task.task_id, accepted=True,
                               status=result.status, message=result.message,

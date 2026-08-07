@@ -20,6 +20,8 @@ import timeseries_core_pb2 as cpb           # P↔C 的消息（AlignedWindowDat
 
 from ar_model import AutoregressiveModel
 from anomaly_models import build_anomaly_model
+from patchtst_forecaster import PatchTSTForecaster
+from training_loop import ModelStore
 
 logger = logging.getLogger(__name__)
 
@@ -27,14 +29,17 @@ logger = logging.getLogger(__name__)
 class AnalysisEngine:
     """把调用链串起来的引擎。"""
 
-    def __init__(self, core_client, result_client, config: dict):
+    def __init__(self, core_client, result_client, config: dict, model_store=None):
         self.core = core_client        # GrpcCoreDataClient（调 C 取数据/检查）
         self.sender = result_client    # AnalysisResultClient（调 S 写事件）
         self.cfg = config
+        self.store = model_store or ModelStore()   # 预测模型复用缓存（内存+磁盘）
+        self._version: dict = {}       # {task_id: config_version}，预测模型失效判断
+        self._register_model_loader()
 
     # ================= 预测链路 =================
 
-    def run_forecast(self, task) -> pb.ForecastResult:
+    def run_forecast(self, task, config_version: int = 0) -> pb.ForecastResult:
         now = int(time.time() * 1000)
         target_ids = list(task.target_sequence_ids)
         if not target_ids:
@@ -42,33 +47,30 @@ class AnalysisEngine:
                                          "预测任务没有目标序列")
         target = target_ids[0]
         try:
-            # ① 查 C 数据规模，够不够训练
+            # ① 查 C 数据规模，够不够训练（目标 + 特征全列）
             all_ids = list(dict.fromkeys(
                 list(task.target_sequence_ids) + list(task.feature_sequence_ids)))
             scales = {s.sequence_id: s for s in self.core.get_sequence_data_scale(all_ids)}
-            min_points = task.minimum_points or self.cfg["training"]["min_train_points"]
-            count = scales.get(target).point_count if target in scales else 0
-            logger.info(f"[engine] ①查数据规模：{target} 有 {count} 点（需要 {min_points}）")
-            if count < min_points:
+            need = self._min_train_points(task)
+            counts = {sid: scales.get(sid).point_count if sid in scales else 0
+                      for sid in all_ids}
+            if any(counts[sid] < need for sid in all_ids):
+                missing = [f"{sid}={counts[sid]}" for sid in all_ids
+                           if counts[sid] < need]
                 return self._forecast_result(task, pb.ANALYSIS_STATUS_DATA_NOT_READY,
-                                             f"数据不足：{target} 只有 {count} 点")
+                                             f"数据不足：{'，'.join(missing)}（需要 {need}）")
 
-            # ② 拉历史训练 AR 模型
-            start_ms = scales[target].start_time_ms
-            end_ms = scales[target].end_time_ms
-            cut_ms = start_ms + int((end_ms - start_ms) * self.cfg["training"]["train_ratio"])
-            chunk = self.core.get_history([target], end_time_ms=cut_ms)
-            series = [row[0] for row in chunk.values]
-            model = AutoregressiveModel(order=self.cfg["training"]["ar_order"])
-            model.fit(series)
-            logger.info(f"[engine] ②训练 AR 完成（{len(series)} 个点）")
+            # ② 预测模型复用：缓存命中就跳过训练，否则训练并保存
+            model = self._get_or_train_forecaster(task, all_ids, scales,
+                                                  config_version)
 
-            # ③ 取最近窗口，预测未来
-            window_size = self.cfg["inference"]["window_size"]
-            window = self.core.get_aligned_window([target], window_size)
-            history = [row[0] for row in window.values]
+            # ③ 取最近多元窗口，预测未来
+            ctx = self._context_length(task)
+            window = self.core.get_aligned_window(all_ids, ctx)
+            matrix = np.array(window.values, dtype=np.float32)
             horizon = task.forecast_horizon_steps or self.cfg["inference"]["horizon_steps"]
-            preds = model.forecast(history, horizon)
+            pred_map = model.forecast(matrix, steps=horizon)
+            preds = pred_map[target]
             step_ms = 3600_000
             if len(window.timestamps_ms) >= 2:
                 step_ms = window.timestamps_ms[-1] - window.timestamps_ms[-2]
@@ -103,6 +105,78 @@ class AnalysisEngine:
         except Exception as e:
             logger.info(f"[engine] 预测链路异常：{e}")
             return self._forecast_result(task, pb.ANALYSIS_STATUS_FAILED, f"预测失败：{e}")
+
+    # ================= PatchTST 预测模型复用 =================
+
+    def _register_model_loader(self) -> None:
+        """磁盘缓存加载：重建 PatchTSTForecaster 并从文件恢复。"""
+
+        def loader(key: str, path):
+            fc = PatchTSTForecaster(sequence_ids=[])
+            fc.load(path)
+            return fc
+
+        self.store.set_loader(loader)
+
+    def _min_train_points(self, task) -> int:
+        """训练最少点数 = context + prediction（用配置），任务给了 minimum_points 优先。"""
+        if task.minimum_points and task.minimum_points > 0:
+            return task.minimum_points
+        f = self.cfg.get("forecast_model", {})
+        return (int(f.get("context_length", 96))
+                + int(f.get("prediction_length", 24)))
+
+    def _context_length(self, task) -> int:
+        # ForecastTaskConfig 无 context_length（那是 AnomalyTaskConfig 的），用 getattr 兜底
+        ctx = getattr(task, "context_length", None) or 0
+        if ctx > 0:
+            return ctx
+        return int(self.cfg.get("forecast_model", {}).get("context_length", 96))
+
+    def _get_or_train_forecaster(self, task, all_ids, scales, config_version: int = 0):
+        """缓存命中返回模型；未命中训练 PatchTST 并存入 store。
+
+        key = task_id；config_version 变化时重训（简版失效逻辑）。
+        """
+        key = task.task_id
+        model = self.store.get(key)
+        if model is not None and self._model_config_fresh(key, config_version):
+            logger.info(f"[engine] ②命中预测模型缓存 task_id={key}，跳过训练")
+            return model
+
+        # 拉多元历史训练（前 train_ratio）
+        start_ms = min(s.start_time_ms for s in scales.values()
+                       if s.start_time_ms is not None)
+        end_ms = max(s.end_time_ms for s in scales.values()
+                     if s.end_time_ms is not None)
+        cut_ms = start_ms + int((end_ms - start_ms)
+                                * self.cfg["training"]["train_ratio"])
+        chunk = self.core.get_history(all_ids, end_time_ms=cut_ms)
+        history = np.array(chunk.values, dtype=np.float32)
+        logger.info(f"[engine] ②训练 PatchTST：{len(history)} 行 × {len(all_ids)} 列")
+
+        f = self.cfg.get("forecast_model", {})
+        fc = PatchTSTForecaster(
+            sequence_ids=all_ids,
+            context_length=int(f.get("context_length", 96)),
+            prediction_length=int(f.get("prediction_length", 24)),
+            patch_size=int(f.get("patch_size", 16)),
+            patch_stride=int(f.get("stride", 8)),
+            d_model=int(f.get("d_model", 64)),
+            n_heads=int(f.get("n_heads", 4)),
+            num_layers=int(f.get("num_layers", 2)),
+            epochs=int(f.get("epochs", 20)),
+            batch_size=int(f.get("batch_size", 64)),
+            learning_rate=float(f.get("learning_rate", 1e-3)),
+        )
+        fc.fit(history)
+        self._version[key] = config_version
+        self.store.save(key, fc)
+        return fc
+
+    def _model_config_fresh(self, key: str, config_version: int) -> bool:
+        """简版失效判断：任务 config_version 变了就重训。"""
+        return self._version.get(key, 0) == config_version
 
     # ================= 异常链路 =================
 
