@@ -50,7 +50,7 @@ public class TimeseriesSemanticController {
 
     @PostMapping(value = "/categories", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ApiResult<Void> saveCategory(@RequestBody CategorySaveRequest request) {
-        semanticService.saveCategory(request);
+        semanticService.createCategory(request);
         return returnSuccess("semantic category save success");
     }
 
@@ -80,7 +80,7 @@ public class TimeseriesSemanticController {
 
     @PostMapping(value = "/constraints", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ApiResult<Void> saveConstraint(@RequestBody ConstraintSaveRequest request) {
-        semanticService.saveConstraint(request);
+        semanticService.createConstraint(request);
         return returnSuccess("semantic constraint save success");
     }
 
@@ -110,7 +110,7 @@ public class TimeseriesSemanticController {
 
     @PostMapping(value = "/relations", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ApiResult<Void> saveRelation(@RequestBody RelationSaveRequest request) {
-        semanticService.saveRelation(request);
+        semanticService.createRelation(request);
         return returnSuccess("semantic relation save success");
     }
 

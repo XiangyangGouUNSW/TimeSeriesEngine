@@ -56,23 +56,9 @@ public class TimeseriesTaskContextResolver {
             }
         }
 
-        // constraint ids
-        if (task.getConstraintIds() != null) {
-            ctx.addAllConstraintIds(task.getConstraintIds());
-        }
-        // 也根据实例的 categoryId 自动补充启用约束
-        for (String seqId : seqIds) {
-            TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(seqId);
-            if (inst != null && inst.getCategoryId() != null) {
-                for (TimeseriesConstraint c : memoryCache.listConstraintsByCategoryId(inst.getCategoryId())) {
-                    if ("ENABLE".equalsIgnoreCase(c.getEffectiveStatus())
-                            && "CONFIRMED".equalsIgnoreCase(c.getConfirmStatus())
-                            && c.getConstraintId() != null) {
-                        ctx.addConstraintIds(c.getConstraintId());
-                    }
-                }
-            }
-        }
+        // constraint ids — 前端传入 + auto-discovered
+        Set<String> constraintIds = collectConstraintIds(seqIds, task.getConstraintIds());
+        ctx.addAllConstraintIds(constraintIds);
 
         // feature sequences from relations
         for (String seqId : seqIds) {
@@ -146,21 +132,8 @@ public class TimeseriesTaskContextResolver {
         }
 
         // constraint ids
-        if (task.getConstraintIds() != null) {
-            ctx.addAllConstraintIds(task.getConstraintIds());
-        }
-        for (String seqId : targetIds) {
-            TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(seqId);
-            if (inst != null && inst.getCategoryId() != null) {
-                for (TimeseriesConstraint c : memoryCache.listConstraintsByCategoryId(inst.getCategoryId())) {
-                    if ("ENABLE".equalsIgnoreCase(c.getEffectiveStatus())
-                            && "CONFIRMED".equalsIgnoreCase(c.getConfirmStatus())
-                            && c.getConstraintId() != null) {
-                        ctx.addConstraintIds(c.getConstraintId());
-                    }
-                }
-            }
-        }
+        Set<String> constraintIds = collectConstraintIds(targetIds, task.getConstraintIds());
+        ctx.addAllConstraintIds(constraintIds);
 
         ctx.setKnowledgeVersion(String.valueOf(System.currentTimeMillis()));
         return ctx.build();
@@ -190,5 +163,50 @@ public class TimeseriesTaskContextResolver {
             b.setSourceSequenceId(rel.getSourceSequences().iterator().next());
         }
         return b.build();
+    }
+
+    /**
+     * Collect constraint IDs matching the task's sequences.
+     * 1. Explicitly specified by the caller
+     * 2. Discovered via categoryId lookup
+     * 3. Discovered via variableMapping value match (cross-category constraints)
+     */
+    private Set<String> collectConstraintIds(List<String> seqIds, java.util.Collection<String> explicitIds) {
+        Set<String> result = new HashSet<>();
+        if (explicitIds != null) {
+            result.addAll(explicitIds);
+        }
+
+        Set<String> seqIdSet = new HashSet<>(seqIds);
+        for (TimeseriesConstraint c : memoryCache.listConstraints()) {
+            if (!"ENABLE".equalsIgnoreCase(c.getEffectiveStatus())
+                    || !"CONFIRMED".equalsIgnoreCase(c.getConfirmStatus())
+                    || c.getConstraintId() == null) {
+                continue;
+            }
+            // match by categoryId
+            boolean matched = false;
+            for (String seqId : seqIds) {
+                TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(seqId);
+                if (inst != null && c.getCategoryId() != null
+                        && c.getCategoryId().equals(inst.getCategoryId())) {
+                    matched = true;
+                    break;
+                }
+            }
+            // match by variableMapping values (cross-category)
+            if (!matched && c.getVariableMapping() != null) {
+                for (String mappedSeqId : c.getVariableMapping().values()) {
+                    if (seqIdSet.contains(mappedSeqId)) {
+                        matched = true;
+                        break;
+                    }
+                }
+            }
+            if (matched) {
+                result.add(c.getConstraintId());
+            }
+        }
+        return result;
     }
 }

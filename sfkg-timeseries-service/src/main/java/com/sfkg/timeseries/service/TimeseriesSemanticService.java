@@ -21,11 +21,15 @@ public interface TimeseriesSemanticService {
 
     String saveCategory(CategorySaveRequest request);
 
+    String createCategory(CategorySaveRequest request);
+
     void updateCategoryStatus(CategoryStatusUpdateRequest request);
 
     List<ConstraintVO> listConstraints(ConstraintQueryRequest request);
 
     String saveConstraint(ConstraintSaveRequest request);
+
+    String createConstraint(ConstraintSaveRequest request);
 
     void updateConstraintStatus(ConstraintStatusUpdateRequest request);
 
@@ -34,6 +38,8 @@ public interface TimeseriesSemanticService {
     List<RelationVO> listRelations(RelationQueryRequest request);
 
     String saveRelation(RelationSaveRequest request);
+
+    String createRelation(RelationSaveRequest request);
 
     void updateRelationStatus(RelationStatusUpdateRequest request);
 

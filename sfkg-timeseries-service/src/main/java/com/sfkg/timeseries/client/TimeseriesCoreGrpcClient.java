@@ -2,6 +2,7 @@ package com.sfkg.timeseries.client;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.config.GrpcClientProperties;
 import com.sfkg.timeseries.dto.HistoryDataQueryRequest;
 import com.sfkg.timeseries.dto.SyncResult;
@@ -45,6 +46,9 @@ import com.sfkg.timeseries.vo.HistoryDataVO;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -60,10 +64,13 @@ public class TimeseriesCoreGrpcClient {
 
     private final GrpcClientProperties grpcClientProperties;
     private final ObjectMapper objectMapper;
+    private final TimeseriesMemoryCache memoryCache;
 
-    public TimeseriesCoreGrpcClient(GrpcClientProperties grpcClientProperties, ObjectMapper objectMapper) {
+    public TimeseriesCoreGrpcClient(GrpcClientProperties grpcClientProperties, ObjectMapper objectMapper,
+                                    TimeseriesMemoryCache memoryCache) {
         this.grpcClientProperties = grpcClientProperties;
         this.objectMapper = objectMapper;
+        this.memoryCache = memoryCache;
     }
 
     // ── instance config ────────────────────────────────────────────────
@@ -163,31 +170,88 @@ public class TimeseriesCoreGrpcClient {
             return SyncResult.fail("relation is null");
         }
 
-        RuntimeRelationConfig.Builder relationBuilder = RuntimeRelationConfig.newBuilder()
-                .setRelationId(nullToEmpty(relation.getRelationId()))
-                .setTargetSequenceId(nullToEmpty(relation.getTargetSequenceId()))
-                .setRelationType(nullToEmpty(relation.getRelationType()))
-                .setConfidence(relation.getConfidence() != null ? relation.getConfidence().doubleValue() : 0.0)
-                .setEnabled("ENABLE".equalsIgnoreCase(relation.getEffectiveStatus()));
+        // Resolve source/target: category IDs → sequence IDs, grouped by dataSourceId
+        List<String> srcSeqIds = resolveToSequences(relation.getSourceSequences());
+        List<String> tgtSeqIds = resolveToSequences(
+                relation.getTargetSequenceId() != null ? List.of(relation.getTargetSequenceId()) : List.of());
 
-        if (relation.getSourceSequences() != null) {
-            for (String sourceSeqId : relation.getSourceSequences()) {
-                RuntimeRelationSource.Builder sourceBuilder = RuntimeRelationSource.newBuilder()
-                        .setSourceSequenceId(nullToEmpty(sourceSeqId))
-                        .setWeight(1.0);
-                long lag = parseLag(relation.getLagRange());
-                if (lag >= 0) {
-                    sourceBuilder.setFixedLag(lag);
+        // Group by dataSourceId
+        Map<String, List<String>> srcBySource = groupByDataSource(srcSeqIds);
+        Map<String, List<String>> tgtBySource = groupByDataSource(tgtSeqIds);
+
+        SyncRelationsRequest.Builder reqBuilder = SyncRelationsRequest.newBuilder();
+        int count = 0;
+        for (Map.Entry<String, List<String>> entry : srcBySource.entrySet()) {
+            String ds = entry.getKey();
+            List<String> tgtInDs = tgtBySource.getOrDefault(ds, List.of());
+            if (tgtInDs.isEmpty()) continue;
+
+            for (String src : entry.getValue()) {
+                for (String tgt : tgtInDs) {
+                    if (src.equals(tgt)) continue; // skip self-relation
+                    RuntimeRelationConfig.Builder rb = RuntimeRelationConfig.newBuilder()
+                            .setRelationId(nullToEmpty(relation.getRelationId()) + "_" + src + "_" + tgt)
+                            .setTargetSequenceId(nullToEmpty(tgt))
+                            .setRelationType(nullToEmpty(relation.getRelationType()))
+                            .setConfidence(relation.getConfidence() != null ? relation.getConfidence().doubleValue() : 0.0)
+                            .setEnabled("ENABLE".equalsIgnoreCase(relation.getEffectiveStatus()));
+                    long lag = parseLag(relation.getLagRange());
+                    if (lag >= 0) {
+                        rb.addSources(RuntimeRelationSource.newBuilder()
+                                .setSourceSequenceId(nullToEmpty(src))
+                                .setWeight(1.0)
+                                .setFixedLag(lag)
+                                .build());
+                    }
+                    reqBuilder.addItems(rb.build());
+                    count++;
                 }
-                relationBuilder.addSources(sourceBuilder.build());
             }
         }
 
-        SyncRelationsRequest req = SyncRelationsRequest.newBuilder()
-                .addItems(relationBuilder.build())
-                .build();
-        LOG.info("[{}] -> syncRelations relationId={} at {}", SERVICE_NAME, relation.getRelationId(), address);
-        return callCoreSync(address, stub -> stub.syncRelations(req), "syncRelations");
+        if (count == 0) {
+            LOG.warn("[{}] syncRelations relationId={}: no sequence pairs resolved, skip",
+                    SERVICE_NAME, relation.getRelationId());
+            return SyncResult.success();
+        }
+
+        LOG.info("[{}] -> syncRelations relationId={} expanded to {} pairs at {}",
+                SERVICE_NAME, relation.getRelationId(), count, address);
+        return callCoreSync(address, stub -> stub.syncRelations(reqBuilder.build()), "syncRelations");
+    }
+
+    /**
+     * If IDs are category IDs, expand to all sequences under that category.
+     */
+    private List<String> resolveToSequences(Collection<String> ids) {
+        if (ids == null || ids.isEmpty()) return List.of();
+        List<String> result = new ArrayList<>();
+        for (String id : ids) {
+            if (id == null || id.isBlank()) continue;
+            // Check if it's a category ID
+            if (memoryCache.getCategory(id).isPresent()) {
+                // Expand category → all sequence IDs
+                for (TimeseriesInstanceConfig inst : memoryCache.listInstanceConfigs()) {
+                    if (id.equals(inst.getCategoryId()) && inst.getSequenceId() != null) {
+                        result.add(inst.getSequenceId());
+                    }
+                }
+            } else {
+                // Treat as sequence ID directly
+                result.add(id);
+            }
+        }
+        return result;
+    }
+
+    private Map<String, List<String>> groupByDataSource(List<String> seqIds) {
+        Map<String, List<String>> map = new LinkedHashMap<>();
+        for (String seqId : seqIds) {
+            TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(seqId);
+            String ds = inst != null && inst.getDataSourceId() != null ? inst.getDataSourceId() : "_default";
+            map.computeIfAbsent(ds, k -> new ArrayList<>()).add(seqId);
+        }
+        return map;
     }
 
     private long parseLag(String lagRange) {

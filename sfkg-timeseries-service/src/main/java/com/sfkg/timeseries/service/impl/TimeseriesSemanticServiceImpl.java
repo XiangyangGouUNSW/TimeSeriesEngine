@@ -73,6 +73,21 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
 
     @Override
     public String saveCategory(CategorySaveRequest request) {
+        return doSaveCategory(request, true);
+    }
+
+    public String createCategory(CategorySaveRequest request) {
+        String categoryId = request != null ? request.getCategoryId() : null;
+        if (categoryId != null) {
+            cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
+            if (memoryCache.getCategory(categoryId).isPresent()) {
+                throw new BusinessException("category already exists: " + categoryId);
+            }
+        }
+        return doSaveCategory(request, false);
+    }
+
+    private String doSaveCategory(CategorySaveRequest request, boolean isUpdate) {
         cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
         String categoryId = request == null || request.getCategoryId() == null
                 ? generateId()
@@ -118,6 +133,21 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
 
     @Override
     public String saveConstraint(ConstraintSaveRequest request) {
+        return doSaveConstraint(request, true);
+    }
+
+    public String createConstraint(ConstraintSaveRequest request) {
+        String constraintId = request != null ? request.getConstraintId() : null;
+        if (constraintId != null) {
+            cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
+            if (memoryCache.getConstraint(constraintId).isPresent()) {
+                throw new BusinessException("constraint already exists: " + constraintId);
+            }
+        }
+        return doSaveConstraint(request, false);
+    }
+
+    private String doSaveConstraint(ConstraintSaveRequest request, boolean isUpdate) {
         if (request != null) {
             validateConstraintExpression(request.getConstraintExpression());
             validateVariableMapping(request.getVariableMapping());
@@ -194,6 +224,21 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
 
     @Override
     public String saveRelation(RelationSaveRequest request) {
+        return doSaveRelation(request, true);
+    }
+
+    public String createRelation(RelationSaveRequest request) {
+        String relationId = request != null ? request.getRelationId() : null;
+        if (relationId != null) {
+            cacheManager.ensureTableLoaded(CachedTable.RELATION);
+            if (memoryCache.getRelation(relationId).isPresent()) {
+                throw new BusinessException("relation already exists: " + relationId);
+            }
+        }
+        return doSaveRelation(request, false);
+    }
+
+    private String doSaveRelation(RelationSaveRequest request, boolean isUpdate) {
         validateRelationConfig(request);
         cacheManager.ensureTableLoaded(CachedTable.RELATION);
         String relationId = request == null || request.getRelationId() == null

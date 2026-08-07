@@ -4,6 +4,7 @@ import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
+import com.sfkg.timeseries.common.BusinessException;
 import com.sfkg.timeseries.dto.InstanceConfigQueryRequest;
 import com.sfkg.timeseries.dto.InstanceConfigSaveRequest;
 import com.sfkg.timeseries.dto.SyncResult;
@@ -40,6 +41,21 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
 
     @Override
     public String saveInstanceConfig(InstanceConfigSaveRequest request) {
+        return doSaveInstanceConfig(request, true);
+    }
+
+    public String createInstanceConfig(InstanceConfigSaveRequest request) {
+        String sequenceId = request != null ? request.getSequenceId() : null;
+        if (sequenceId != null) {
+            cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
+            if (memoryCache.getInstanceConfig(sequenceId).isPresent()) {
+                throw new BusinessException("instance already exists: " + sequenceId);
+            }
+        }
+        return doSaveInstanceConfig(request, false);
+    }
+
+    private String doSaveInstanceConfig(InstanceConfigSaveRequest request, boolean isUpdate) {
         cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
         String sequenceId = request == null || request.getSequenceId() == null
                 ? generateSequenceId()

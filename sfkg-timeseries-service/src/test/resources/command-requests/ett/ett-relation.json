@@ -1,8 +1,8 @@
 {
   "relationId": "ett-hufl-ot-lag",
   "relationName": "HUFL influences OT with 1h lag",
-  "sourceSequences": ["ETTh1_HUFL"],
-  "targetSequenceId": "ETTh1_OT",
+  "sourceSequences": ["HUFL"],
+  "targetSequenceId": "OT",
   "relationType": "CAUSAL",
   "lagRange": "1",
   "confidence": 0.85,

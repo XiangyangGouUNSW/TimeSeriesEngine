@@ -9,6 +9,8 @@ public interface TimeseriesInstanceService {
 
     String saveInstanceConfig(InstanceConfigSaveRequest request);
 
+    String createInstanceConfig(InstanceConfigSaveRequest request);
+
     List<InstanceConfigVO> queryInstanceConfigs(InstanceConfigQueryRequest request);
 
     void validateCategory(String categoryId);
