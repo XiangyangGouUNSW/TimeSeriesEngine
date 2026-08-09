@@ -1,15 +1,5 @@
 package com.sfkg.timeseries.service.impl;
 
-import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
-import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
-import com.sfkg.timeseries.common.BusinessException;
-import com.sfkg.timeseries.dto.HistoryDataQueryRequest;
-import com.sfkg.timeseries.dto.SyncResult;
-import com.sfkg.timeseries.dto.TimeseriesDataSaveRequest;
-import com.sfkg.timeseries.entity.TimeseriesDataPoint;
-import com.sfkg.timeseries.mapper.TimeseriesDataFileMapper;
-import com.sfkg.timeseries.service.TimeseriesDataService;
-import com.sfkg.timeseries.vo.HistoryDataVO;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -17,26 +7,37 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+
+import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
+import com.sfkg.timeseries.client.IngestBufferPool;
+import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
+import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.dto.HistoryDataQueryRequest;
+import com.sfkg.timeseries.dto.TimeseriesDataSaveRequest;
+import com.sfkg.timeseries.entity.TimeseriesDataPoint;
+import com.sfkg.timeseries.service.TimeseriesDataService;
+import com.sfkg.timeseries.vo.HistoryDataVO;
 
 @Service
 public class TimeseriesDataServiceImpl implements TimeseriesDataService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(TimeseriesDataServiceImpl.class);
 
-    private final TimeseriesDataFileMapper dataFileMapper;
     private final TimeseriesMemoryCache memoryCache;
     private final TimeseriesCoreGrpcClient coreGrpcClient;
+    private final IngestBufferPool ingestBufferPool;
 
     public TimeseriesDataServiceImpl(
-            TimeseriesDataFileMapper dataFileMapper,
             TimeseriesMemoryCache memoryCache,
-            TimeseriesCoreGrpcClient coreGrpcClient) {
-        this.dataFileMapper = dataFileMapper;
+            TimeseriesCoreGrpcClient coreGrpcClient,
+            IngestBufferPool ingestBufferPool) {
         this.memoryCache = memoryCache;
         this.coreGrpcClient = coreGrpcClient;
+        this.ingestBufferPool = ingestBufferPool;
     }
 
     @Override
@@ -44,16 +45,19 @@ public class TimeseriesDataServiceImpl implements TimeseriesDataService {
         if (request == null || request.getPoints() == null || request.getPoints().isEmpty()) {
             throw new BusinessException("ingest points are required");
         }
-        // Persist locally as TimeseriesDataPoint entries
-        List<TimeseriesDataPoint> localPoints = convertToDataPoints(request);
-        dataFileMapper.appendDataPoints(localPoints);
-        memoryCache.putTimeseriesDataPoints(localPoints);
 
-        // Forward to Core engine via gRPC ingestData
-        SyncResult syncResult = coreGrpcClient.ingestData(request);
-        if (!syncResult.isSuccess()) {
-            LOGGER.warn("timeseries core grpc ingest skipped or failed: {}", syncResult.getMessage());
+        // ── File / cache writes removed from ingest hot path ──────────
+        // (data is forwarded to Core via the buffer-pool; no local persistence for timeseries points)
+        // List<TimeseriesDataPoint> localPoints = convertToDataPoints(request);
+        // dataFileMapper.appendDataPoints(localPoints);
+        // memoryCache.putTimeseriesDataPoints(localPoints);
+
+        // Route each point through the hash-partitioned buffer pool
+        for (TimeseriesDataSaveRequest.IngestPointDTO point : request.getPoints()) {
+            int partition = ingestBufferPool.partition(point.getSequenceId());
+            ingestBufferPool.offer(point, partition);
         }
+
         return String.valueOf(request.getPoints().size());
     }
 
