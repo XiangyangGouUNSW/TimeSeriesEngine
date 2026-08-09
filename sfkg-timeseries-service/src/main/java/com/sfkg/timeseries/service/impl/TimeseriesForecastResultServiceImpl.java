@@ -1,5 +1,10 @@
 package com.sfkg.timeseries.service.impl;
 
+import java.time.LocalDateTime;
+import java.util.List;
+
+import org.springframework.stereotype.Service;
+
 import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
@@ -9,10 +14,6 @@ import com.sfkg.timeseries.entity.TimeseriesEvent;
 import com.sfkg.timeseries.mapper.TimeseriesEventMapper;
 import com.sfkg.timeseries.service.TimeseriesForecastResultService;
 import com.sfkg.timeseries.vo.ForecastResultVO;
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.UUID;
-import org.springframework.stereotype.Service;
 
 @Service
 public class TimeseriesForecastResultServiceImpl implements TimeseriesForecastResultService {
@@ -65,7 +66,7 @@ public class TimeseriesForecastResultServiceImpl implements TimeseriesForecastRe
         event.setEventTime(LocalDateTime.now());
 
         eventMapper.insert(event);
-        memoryCache.putEvent(event);
+        memoryCache.computeEvent(eventId, existing -> event);
         return eventId;
     }
 

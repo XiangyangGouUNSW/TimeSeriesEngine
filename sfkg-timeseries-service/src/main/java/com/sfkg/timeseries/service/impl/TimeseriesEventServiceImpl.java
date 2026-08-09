@@ -1,5 +1,15 @@
 package com.sfkg.timeseries.service.impl;
 
+import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+import org.springframework.beans.BeanUtils;
+import org.springframework.stereotype.Service;
+
 import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
@@ -10,14 +20,6 @@ import com.sfkg.timeseries.mapper.TimeseriesEventMapper;
 import com.sfkg.timeseries.service.TimeseriesEventService;
 import com.sfkg.timeseries.vo.EventDetailVO;
 import com.sfkg.timeseries.vo.EventListVO;
-import java.time.LocalDateTime;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.util.stream.Collectors;
-import org.springframework.beans.BeanUtils;
-import org.springframework.stereotype.Service;
 
 @Service
 public class TimeseriesEventServiceImpl implements TimeseriesEventService {
@@ -59,18 +61,19 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
                 ? generateEventId()
                 : request.getEventId();
 
-        TimeseriesEvent entity = memoryCache.getEvent(eventId)
-                .orElseGet(TimeseriesEvent::new);
-        if (request != null) {
-            BeanUtils.copyProperties(request, entity);
-        }
-        entity.setEventId(eventId);
-        if (entity.getEventTime() == null) {
-            entity.setEventTime(LocalDateTime.now());
-        }
+        TimeseriesEvent entity = memoryCache.computeEvent(eventId, existing -> {
+            TimeseriesEvent e = existing != null ? existing : new TimeseriesEvent();
+            if (request != null) {
+                BeanUtils.copyProperties(request, e);
+            }
+            e.setEventId(eventId);
+            if (e.getEventTime() == null) {
+                e.setEventTime(LocalDateTime.now());
+            }
+            return e;
+        });
 
         eventMapper.insert(entity);
-        memoryCache.putEvent(entity);
         return eventId;
     }
 
@@ -83,18 +86,23 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
         String eventId = entity.getEventId() != null
                 ? entity.getEventId()
                 : generateEventId();
-        entity.setEventId(eventId);
-        if (entity.getEventTime() == null) {
-            entity.setEventTime(LocalDateTime.now());
-        }
-        LocalDateTime now = LocalDateTime.now();
-        if (entity.getCreateTime() == null) {
-            entity.setCreateTime(now);
-        }
-        entity.setUpdateTime(now);
 
-        eventMapper.insert(entity);
-        memoryCache.putEvent(entity);
+        TimeseriesEvent merged = memoryCache.computeEvent(eventId, existing -> {
+            TimeseriesEvent e = existing != null ? existing : new TimeseriesEvent();
+            BeanUtils.copyProperties(entity, e);
+            e.setEventId(eventId);
+            if (e.getEventTime() == null) {
+                e.setEventTime(LocalDateTime.now());
+            }
+            LocalDateTime now = LocalDateTime.now();
+            if (e.getCreateTime() == null) {
+                e.setCreateTime(now);
+            }
+            e.setUpdateTime(now);
+            return e;
+        });
+
+        eventMapper.insert(merged);
         return eventId;
     }
 

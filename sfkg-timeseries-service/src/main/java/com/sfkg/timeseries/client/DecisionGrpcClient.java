@@ -24,9 +24,12 @@ public class DecisionGrpcClient {
     private static final String SERVICE_NAME = "timeseries-analysis";
 
     private final GrpcClientProperties grpcClientProperties;
+    private final GrpcChannelRegistry channelRegistry;
 
-    public DecisionGrpcClient(GrpcClientProperties grpcClientProperties) {
+    public DecisionGrpcClient(GrpcClientProperties grpcClientProperties,
+                              GrpcChannelRegistry channelRegistry) {
         this.grpcClientProperties = grpcClientProperties;
+        this.channelRegistry = channelRegistry;
     }
 
     public DiagnosisResultVO generateDiagnosisResult(DecisionContext context) {
@@ -41,7 +44,7 @@ public class DecisionGrpcClient {
         AnalysisDecisionRequest req = buildRequest(context);
         LOG.info("[{}] -> GenerateDiagnosis eventId={} at {}", SERVICE_NAME, context.getEventId(), address);
 
-        ManagedChannel channel = newChannel(address);
+        ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             AnalysisDecisionResult resp = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
                     .withDeadlineAfter(5, TimeUnit.SECONDS)
@@ -56,8 +59,6 @@ public class DecisionGrpcClient {
         } catch (StatusRuntimeException e) {
             LOG.warn("[{}] GenerateDiagnosis FAILED: {}", SERVICE_NAME, e.getStatus().getDescription());
             return new DiagnosisResultVO();
-        } finally {
-            channel.shutdown();
         }
     }
 
@@ -73,7 +74,7 @@ public class DecisionGrpcClient {
         AnalysisDecisionRequest req = buildRequest(context);
         LOG.info("[{}] -> GenerateSuggestion eventId={} at {}", SERVICE_NAME, context.getEventId(), address);
 
-        ManagedChannel channel = newChannel(address);
+        ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             AnalysisDecisionResult resp = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
                     .withDeadlineAfter(5, TimeUnit.SECONDS)
@@ -87,8 +88,6 @@ public class DecisionGrpcClient {
         } catch (StatusRuntimeException e) {
             LOG.warn("[{}] GenerateSuggestion FAILED: {}", SERVICE_NAME, e.getStatus().getDescription());
             return new DecisionSuggestionVO();
-        } finally {
-            channel.shutdown();
         }
     }
 
@@ -108,10 +107,6 @@ public class DecisionGrpcClient {
             if (summary != null) builder.setEventSummary(summary.toString());
         }
         return builder.build();
-    }
-
-    private ManagedChannel newChannel(String address) {
-        return ManagedChannelBuilder.forTarget(address).usePlaintext().build();
     }
 
     private static String nullToEmpty(String v) { return v != null ? v : ""; }

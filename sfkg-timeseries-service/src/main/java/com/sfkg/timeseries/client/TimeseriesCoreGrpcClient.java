@@ -65,12 +65,15 @@ public class TimeseriesCoreGrpcClient {
     private final GrpcClientProperties grpcClientProperties;
     private final ObjectMapper objectMapper;
     private final TimeseriesMemoryCache memoryCache;
+    private final GrpcChannelRegistry channelRegistry;
 
     public TimeseriesCoreGrpcClient(GrpcClientProperties grpcClientProperties, ObjectMapper objectMapper,
-                                    TimeseriesMemoryCache memoryCache) {
+                                    TimeseriesMemoryCache memoryCache,
+                                    GrpcChannelRegistry channelRegistry) {
         this.grpcClientProperties = grpcClientProperties;
         this.objectMapper = objectMapper;
         this.memoryCache = memoryCache;
+        this.channelRegistry = channelRegistry;
     }
 
     // ── instance config ────────────────────────────────────────────────
@@ -363,7 +366,7 @@ public class TimeseriesCoreGrpcClient {
     }
 
     private SyncResult callCoreIngest(String address, IngestDataRequest req) {
-        ManagedChannel channel = newChannel(address);
+        ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             IngestDataResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
                     .withDeadlineAfter(5, TimeUnit.SECONDS)
@@ -377,8 +380,6 @@ public class TimeseriesCoreGrpcClient {
         } catch (StatusRuntimeException e) {
             LOG.warn("[{}] <- ingestData FAILED: code={} desc={}", SERVICE_NAME, e.getStatus().getCode(), e.getStatus().getDescription());
             return SyncResult.fail(e.getStatus().getDescription());
-        } finally {
-            channel.shutdown();
         }
     }
 
@@ -407,7 +408,7 @@ public class TimeseriesCoreGrpcClient {
         QueryHistoryDataRequest req = reqBuilder.build();
         LOG.info("[{}] -> queryHistoryData seqs={} at {}", SERVICE_NAME, req.getSequenceIdsList(), address);
 
-        ManagedChannel channel = newChannel(address);
+        ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             QueryHistoryDataResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
                     .withDeadlineAfter(5, TimeUnit.SECONDS)
@@ -428,8 +429,6 @@ public class TimeseriesCoreGrpcClient {
         } catch (StatusRuntimeException e) {
             LOG.warn("[{}] queryHistoryData failed: code={} desc={}", SERVICE_NAME, e.getStatus().getCode(), e.getStatus().getDescription());
             return new HistoryDataVO();
-        } finally {
-            channel.shutdown();
         }
     }
 
@@ -470,7 +469,7 @@ public class TimeseriesCoreGrpcClient {
             b.setEndTime(request.getEndTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
         }
         LOG.info("[{}] -> queryHistoryOverview at {}", SERVICE_NAME, address);
-        ManagedChannel channel = newChannel(address);
+        ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             QueryHistoryOverviewResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
                     .withDeadlineAfter(5, TimeUnit.SECONDS)
@@ -495,8 +494,6 @@ public class TimeseriesCoreGrpcClient {
         } catch (StatusRuntimeException e) {
             LOG.warn("[{}] queryHistoryOverview failed: code={} desc={}", SERVICE_NAME, e.getStatus().getCode(), e.getStatus().getDescription());
             return Map.of("error", e.getStatus().getDescription());
-        } finally {
-            channel.shutdown();
         }
     }
 
@@ -516,7 +513,7 @@ public class TimeseriesCoreGrpcClient {
             b.setEndTime(request.getEndTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
         }
         LOG.info("[{}] -> queryWindowData at {}", SERVICE_NAME, address);
-        ManagedChannel channel = newChannel(address);
+        ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             QueryWindowDataResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
                     .withDeadlineAfter(5, TimeUnit.SECONDS)
@@ -551,8 +548,6 @@ public class TimeseriesCoreGrpcClient {
         } catch (StatusRuntimeException e) {
             LOG.warn("[{}] queryWindowData failed: code={} desc={}", SERVICE_NAME, e.getStatus().getCode(), e.getStatus().getDescription());
             return Map.of("error", e.getStatus().getDescription());
-        } finally {
-            channel.shutdown();
         }
     }
 
@@ -565,22 +560,9 @@ public class TimeseriesCoreGrpcClient {
 
     // ── internal helpers ───────────────────────────────────────────────
 
-    private ManagedChannel newChannel(String address) {
-        return ManagedChannelBuilder.forTarget(address).usePlaintext().build();
-    }
-
-    @FunctionalInterface
-    private interface CoreSyncCall {
-        SyncConfigResponse call(TimeseriesCoreServiceGrpc.TimeseriesCoreServiceBlockingStub stub);
-    }
-
-    @FunctionalInterface
-    private interface CoreLegacyCall {
-        SyncResponse call(TimeseriesCoreServiceGrpc.TimeseriesCoreServiceBlockingStub stub);
-    }
 
     private SyncResult callCoreSync(String address, CoreSyncCall callable, String operation) {
-        ManagedChannel channel = newChannel(address);
+        ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             SyncConfigResponse resp = callable.call(
                     TimeseriesCoreServiceGrpc.newBlockingStub(channel)
@@ -594,13 +576,11 @@ public class TimeseriesCoreGrpcClient {
         } catch (StatusRuntimeException e) {
             LOG.warn("[{}] <- {} FAILED: code={} desc={}", SERVICE_NAME, operation, e.getStatus().getCode(), e.getStatus().getDescription());
             return SyncResult.fail(e.getStatus().getDescription());
-        } finally {
-            channel.shutdown();
         }
     }
 
     private SyncResult callCoreLegacy(String address, CoreLegacyCall callable, String operation) {
-        ManagedChannel channel = newChannel(address);
+        ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             SyncResponse resp = callable.call(
                     TimeseriesCoreServiceGrpc.newBlockingStub(channel)
@@ -610,9 +590,17 @@ public class TimeseriesCoreGrpcClient {
         } catch (StatusRuntimeException e) {
             LOG.warn("[{}] <- {} FAILED: code={} desc={}", SERVICE_NAME, operation, e.getStatus().getCode(), e.getStatus().getDescription());
             return SyncResult.fail(e.getStatus().getDescription());
-        } finally {
-            channel.shutdown();
         }
+    }
+
+    @FunctionalInterface
+    private interface CoreSyncCall {
+        SyncConfigResponse call(TimeseriesCoreServiceGrpc.TimeseriesCoreServiceBlockingStub stub);
+    }
+
+    @FunctionalInterface
+    private interface CoreLegacyCall {
+        SyncResponse call(TimeseriesCoreServiceGrpc.TimeseriesCoreServiceBlockingStub stub);
     }
 
     private SyncResult notConfigured(String operation) {

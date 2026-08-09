@@ -1,5 +1,17 @@
 package com.sfkg.timeseries.service.impl;
 
+import java.math.BigDecimal;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+import org.springframework.beans.BeanUtils;
+import org.springframework.stereotype.Service;
+
 import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
@@ -25,17 +37,6 @@ import com.sfkg.timeseries.service.TimeseriesSemanticService;
 import com.sfkg.timeseries.vo.CategoryVO;
 import com.sfkg.timeseries.vo.ConstraintVO;
 import com.sfkg.timeseries.vo.RelationVO;
-import java.math.BigDecimal;
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.UUID;
-import java.util.stream.Collectors;
-import org.springframework.beans.BeanUtils;
-import org.springframework.stereotype.Service;
 
 @Service
 public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService {
@@ -93,15 +94,16 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 ? generateId()
                 : request.getCategoryId();
 
-        TimeseriesCategory entity = memoryCache.getCategory(categoryId)
-                .orElseGet(TimeseriesCategory::new);
-        if (request != null) {
-            BeanUtils.copyProperties(request, entity);
-        }
-        entity.setCategoryId(categoryId);
+        TimeseriesCategory entity = memoryCache.computeCategory(categoryId, existing -> {
+            TimeseriesCategory e = existing != null ? existing : new TimeseriesCategory();
+            if (request != null) {
+                BeanUtils.copyProperties(request, e);
+            }
+            e.setCategoryId(categoryId);
+            return e;
+        });
 
         categoryMapper.insert(entity);
-        memoryCache.putCategory(entity);
         syncSemanticToCore(categoryId);
         return categoryId;
     }
@@ -112,14 +114,15 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             return;
         }
         cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
-        TimeseriesCategory entity = memoryCache.getCategory(request.getCategoryId())
-                .orElseGet(TimeseriesCategory::new);
-        entity.setCategoryId(request.getCategoryId());
-        if (request.getConfirmStatus() != null) {
-            entity.setConfirmStatus(request.getConfirmStatus());
-        }
+        TimeseriesCategory entity = memoryCache.computeCategory(request.getCategoryId(), existing -> {
+            TimeseriesCategory e = existing != null ? existing : new TimeseriesCategory();
+            e.setCategoryId(request.getCategoryId());
+            if (request.getConfirmStatus() != null) {
+                e.setConfirmStatus(request.getConfirmStatus());
+            }
+            return e;
+        });
         categoryMapper.updateById(entity);
-        memoryCache.putCategory(entity);
     }
 
     @Override
@@ -157,27 +160,27 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 ? generateId()
                 : request.getConstraintId();
 
-        TimeseriesConstraint entity = memoryCache.getConstraint(constraintId)
-                .orElseGet(TimeseriesConstraint::new);
-        if (request != null) {
-            BeanUtils.copyProperties(request, entity);
-            // BeanUtils 无法转换 List<ConstraintTermDTO> → List<ConstraintTermItem>，需手动拷贝
-            if (request.getTerms() != null) {
-                entity.setTerms(request.getTerms().stream()
-                        .map(dto -> {
-                            TimeseriesConstraint.ConstraintTermItem item = new TimeseriesConstraint.ConstraintTermItem();
-                            item.setVariable(dto.getVariable());
-                            item.setCoefficient(dto.getCoefficient());
-                            item.setSampleOffset(dto.getSampleOffset());
-                            return item;
-                        })
-                        .collect(Collectors.toList()));
+        TimeseriesConstraint entity = memoryCache.computeConstraint(constraintId, existing -> {
+            TimeseriesConstraint e = existing != null ? existing : new TimeseriesConstraint();
+            if (request != null) {
+                BeanUtils.copyProperties(request, e);
+                if (request.getTerms() != null) {
+                    e.setTerms(request.getTerms().stream()
+                            .map(dto -> {
+                                TimeseriesConstraint.ConstraintTermItem item = new TimeseriesConstraint.ConstraintTermItem();
+                                item.setVariable(dto.getVariable());
+                                item.setCoefficient(dto.getCoefficient());
+                                item.setSampleOffset(dto.getSampleOffset());
+                                return item;
+                            })
+                            .collect(Collectors.toList()));
+                }
             }
-        }
-        entity.setConstraintId(constraintId);
+            e.setConstraintId(constraintId);
+            return e;
+        });
 
         constraintMapper.insert(entity);
-        memoryCache.putConstraint(entity);
         syncSemanticToCore(constraintId);
         return constraintId;
     }
@@ -188,17 +191,18 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             return;
         }
         cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
-        TimeseriesConstraint entity = memoryCache.getConstraint(request.getConstraintId())
-                .orElseGet(TimeseriesConstraint::new);
-        entity.setConstraintId(request.getConstraintId());
-        if (request.getConfirmStatus() != null) {
-            entity.setConfirmStatus(request.getConfirmStatus());
-        }
-        if (request.getEffectiveStatus() != null) {
-            entity.setEffectiveStatus(request.getEffectiveStatus());
-        }
+        TimeseriesConstraint entity = memoryCache.computeConstraint(request.getConstraintId(), existing -> {
+            TimeseriesConstraint e = existing != null ? existing : new TimeseriesConstraint();
+            e.setConstraintId(request.getConstraintId());
+            if (request.getConfirmStatus() != null) {
+                e.setConfirmStatus(request.getConfirmStatus());
+            }
+            if (request.getEffectiveStatus() != null) {
+                e.setEffectiveStatus(request.getEffectiveStatus());
+            }
+            return e;
+        });
         constraintMapper.updateById(entity);
-        memoryCache.putConstraint(entity);
         syncSemanticToCore(entity.getConstraintId());
     }
 
@@ -245,16 +249,17 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 ? generateId()
                 : request.getRelationId();
 
-        TimeseriesRelation entity = memoryCache.getRelation(relationId)
-                .orElseGet(TimeseriesRelation::new);
-        if (request != null) {
-            BeanUtils.copyProperties(request, entity);
-        }
-        entity.setRelationId(relationId);
-        entity.setTargetCategoryName(resolveCategoryName(entity.getTargetSequenceId()));
+        TimeseriesRelation entity = memoryCache.computeRelation(relationId, existing -> {
+            TimeseriesRelation e = existing != null ? existing : new TimeseriesRelation();
+            if (request != null) {
+                BeanUtils.copyProperties(request, e);
+            }
+            e.setRelationId(relationId);
+            e.setTargetCategoryName(resolveCategoryName(e.getTargetSequenceId()));
+            return e;
+        });
 
         relationMapper.insert(entity);
-        memoryCache.putRelation(entity);
         syncSemanticToCore(relationId);
         return relationId;
     }
@@ -265,17 +270,18 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             return;
         }
         cacheManager.ensureTableLoaded(CachedTable.RELATION);
-        TimeseriesRelation entity = memoryCache.getRelation(request.getRelationId())
-                .orElseGet(TimeseriesRelation::new);
-        entity.setRelationId(request.getRelationId());
-        if (request.getConfirmStatus() != null) {
-            entity.setConfirmStatus(request.getConfirmStatus());
-        }
-        if (request.getEffectiveStatus() != null) {
-            entity.setEffectiveStatus(request.getEffectiveStatus());
-        }
+        TimeseriesRelation entity = memoryCache.computeRelation(request.getRelationId(), existing -> {
+            TimeseriesRelation e = existing != null ? existing : new TimeseriesRelation();
+            e.setRelationId(request.getRelationId());
+            if (request.getConfirmStatus() != null) {
+                e.setConfirmStatus(request.getConfirmStatus());
+            }
+            if (request.getEffectiveStatus() != null) {
+                e.setEffectiveStatus(request.getEffectiveStatus());
+            }
+            return e;
+        });
         relationMapper.updateById(entity);
-        memoryCache.putRelation(entity);
         syncSemanticToCore(entity.getRelationId());
     }
 

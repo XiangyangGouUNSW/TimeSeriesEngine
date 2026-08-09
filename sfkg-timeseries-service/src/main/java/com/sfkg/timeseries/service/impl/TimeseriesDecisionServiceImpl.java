@@ -1,5 +1,10 @@
 package com.sfkg.timeseries.service.impl;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+import org.springframework.stereotype.Service;
+
 import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
@@ -12,9 +17,6 @@ import com.sfkg.timeseries.mapper.TimeseriesEventMapper;
 import com.sfkg.timeseries.service.TimeseriesDecisionService;
 import com.sfkg.timeseries.vo.DecisionSuggestionVO;
 import com.sfkg.timeseries.vo.DiagnosisResultVO;
-import java.util.LinkedHashMap;
-import java.util.Map;
-import org.springframework.stereotype.Service;
 
 @Service
 public class TimeseriesDecisionServiceImpl implements TimeseriesDecisionService {
@@ -79,18 +81,19 @@ public class TimeseriesDecisionServiceImpl implements TimeseriesDecisionService 
             return;
         }
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
-        TimeseriesEvent entity = memoryCache.getEvent(request.getEventId())
-                .orElseGet(TimeseriesEvent::new);
-        entity.setEventId(request.getEventId());
-        if (request.getDisposalResult() != null) {
-            entity.setDisposalResult(request.getDisposalResult());
-        }
-        if (request.getHandleStatus() != null) {
-            entity.setHandleStatus(request.getHandleStatus());
-        }
+        TimeseriesEvent entity = memoryCache.computeEvent(request.getEventId(), existing -> {
+            TimeseriesEvent e = existing != null ? existing : new TimeseriesEvent();
+            e.setEventId(request.getEventId());
+            if (request.getDisposalResult() != null) {
+                e.setDisposalResult(request.getDisposalResult());
+            }
+            if (request.getHandleStatus() != null) {
+                e.setHandleStatus(request.getHandleStatus());
+            }
+            return e;
+        });
 
         eventMapper.updateById(entity);
-        memoryCache.putEvent(entity);
     }
 
     @Override

@@ -1,5 +1,15 @@
 package com.sfkg.timeseries.service.impl;
 
+import java.util.Arrays;
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+import org.springframework.beans.BeanUtils;
+import org.springframework.stereotype.Service;
+
 import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
@@ -15,15 +25,6 @@ import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.mapper.TimeseriesAnomalyTaskMapper;
 import com.sfkg.timeseries.service.TimeseriesAnomalyTaskService;
 import com.sfkg.timeseries.vo.AnomalyTaskVO;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Objects;
-import java.util.Set;
-import java.util.UUID;
-import java.util.stream.Collectors;
-import org.springframework.beans.BeanUtils;
-import org.springframework.stereotype.Service;
 
 @Service
 public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskService {
@@ -76,15 +77,16 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
                 ? generateTaskId()
                 : request.getTaskId();
 
-        TimeseriesAnomalyTask entity = memoryCache.getAnomalyTask(taskId)
-                .orElseGet(TimeseriesAnomalyTask::new);
-        if (request != null) {
-            BeanUtils.copyProperties(request, entity);
-        }
-        entity.setTaskId(taskId);
+        TimeseriesAnomalyTask entity = memoryCache.computeAnomalyTask(taskId, existing -> {
+            TimeseriesAnomalyTask e = existing != null ? existing : new TimeseriesAnomalyTask();
+            if (request != null) {
+                BeanUtils.copyProperties(request, e);
+            }
+            e.setTaskId(taskId);
+            return e;
+        });
 
         anomalyTaskMapper.insert(entity);
-        memoryCache.putAnomalyTask(entity);
         // syncAnomalyTaskToCore(taskId);  // C端 SyncTaskStatus 暂不启用
         syncAnomalyTaskToAnomalyService(taskId);
         return taskId;
@@ -110,13 +112,14 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
             return;
         }
         cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
-        TimeseriesAnomalyTask entity = memoryCache.getAnomalyTask(request.getTaskId())
-                .orElseGet(TimeseriesAnomalyTask::new);
-        entity.setTaskId(request.getTaskId());
-        entity.setStatus(request.getStatus());
+        TimeseriesAnomalyTask entity = memoryCache.computeAnomalyTask(request.getTaskId(), existing -> {
+            TimeseriesAnomalyTask e = existing != null ? existing : new TimeseriesAnomalyTask();
+            e.setTaskId(request.getTaskId());
+            e.setStatus(request.getStatus());
+            return e;
+        });
 
         anomalyTaskMapper.updateById(entity);
-        memoryCache.putAnomalyTask(entity);
         // syncAnomalyTaskToCore(request.getTaskId());  // C端 SyncTaskStatus 暂不启用
         anomalyGrpcClient.updateAnomalyTaskStatus(request.getTaskId(), request.getStatus());
     }

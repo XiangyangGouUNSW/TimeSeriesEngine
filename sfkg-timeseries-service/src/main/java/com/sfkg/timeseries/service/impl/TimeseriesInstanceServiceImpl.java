@@ -1,5 +1,13 @@
 package com.sfkg.timeseries.service.impl;
 
+import java.util.List;
+import java.util.Objects;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+import org.springframework.beans.BeanUtils;
+import org.springframework.stereotype.Service;
+
 import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
@@ -7,19 +15,12 @@ import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
 import com.sfkg.timeseries.dto.InstanceConfigQueryRequest;
 import com.sfkg.timeseries.dto.InstanceConfigSaveRequest;
-import com.sfkg.timeseries.dto.SyncResult;
 import com.sfkg.timeseries.entity.TimeseriesCategory;
 import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.entity.TimeseriesRelation;
 import com.sfkg.timeseries.mapper.TimeseriesInstanceConfigMapper;
 import com.sfkg.timeseries.service.TimeseriesInstanceService;
 import com.sfkg.timeseries.vo.InstanceConfigVO;
-import java.util.List;
-import java.util.Objects;
-import java.util.UUID;
-import java.util.stream.Collectors;
-import org.springframework.beans.BeanUtils;
-import org.springframework.stereotype.Service;
 
 @Service
 public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService {
@@ -73,20 +74,21 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
                 ? generateSequenceId()
                 : request.getSequenceId();
 
-        TimeseriesInstanceConfig entity = memoryCache.getInstanceConfig(sequenceId)
-                .orElseGet(TimeseriesInstanceConfig::new);
-        if (request != null) {
-            BeanUtils.copyProperties(request, entity);
-        }
-        entity.setSequenceId(sequenceId);
-        if (entity.getId() == null) {
-            entity.setId(sequenceId);
-        }
-        entity.setCategoryName(resolveCategoryName(entity.getCategoryId()));
-        entity.setDeviceInstanceName(resolveDeviceInstanceName(entity.getDeviceInstanceId()));
+        TimeseriesInstanceConfig entity = memoryCache.computeInstanceConfig(sequenceId, existing -> {
+            TimeseriesInstanceConfig e = existing != null ? existing : new TimeseriesInstanceConfig();
+            if (request != null) {
+                BeanUtils.copyProperties(request, e);
+            }
+            e.setSequenceId(sequenceId);
+            if (e.getId() == null) {
+                e.setId(sequenceId);
+            }
+            e.setCategoryName(resolveCategoryName(e.getCategoryId()));
+            e.setDeviceInstanceName(resolveDeviceInstanceName(e.getDeviceInstanceId()));
+            return e;
+        });
 
         instanceConfigMapper.insert(entity);
-        memoryCache.putInstanceConfig(entity);
         coreGrpcClient.syncInstanceConfig(entity);
 
         // Re-sync relations that reference this instance's category (for category-level expansion)

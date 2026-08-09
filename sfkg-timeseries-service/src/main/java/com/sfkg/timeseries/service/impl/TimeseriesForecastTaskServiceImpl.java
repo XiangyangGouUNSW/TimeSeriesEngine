@@ -1,5 +1,14 @@
 package com.sfkg.timeseries.service.impl;
 
+import java.util.List;
+import java.util.Objects;
+import java.util.Set;
+import java.util.UUID;
+import java.util.stream.Collectors;
+
+import org.springframework.beans.BeanUtils;
+import org.springframework.stereotype.Service;
+
 import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
@@ -15,14 +24,6 @@ import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.mapper.TimeseriesForecastTaskMapper;
 import com.sfkg.timeseries.service.TimeseriesForecastTaskService;
 import com.sfkg.timeseries.vo.ForecastTaskVO;
-import java.util.Collection;
-import java.util.List;
-import java.util.Objects;
-import java.util.Set;
-import java.util.UUID;
-import java.util.stream.Collectors;
-import org.springframework.beans.BeanUtils;
-import org.springframework.stereotype.Service;
 
 @Service
 public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTaskService {
@@ -71,15 +72,16 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
                 ? generateTaskId()
                 : request.getTaskId();
 
-        TimeseriesForecastTask entity = memoryCache.getForecastTask(taskId)
-                .orElseGet(TimeseriesForecastTask::new);
-        if (request != null) {
-            BeanUtils.copyProperties(request, entity);
-        }
-        entity.setTaskId(taskId);
+        TimeseriesForecastTask entity = memoryCache.computeForecastTask(taskId, existing -> {
+            TimeseriesForecastTask e = existing != null ? existing : new TimeseriesForecastTask();
+            if (request != null) {
+                BeanUtils.copyProperties(request, e);
+            }
+            e.setTaskId(taskId);
+            return e;
+        });
 
         forecastTaskMapper.insert(entity);
-        memoryCache.putForecastTask(entity);
         syncForecastTaskToCore(taskId);
         syncForecastTaskToForecastService(taskId);
         return taskId;
@@ -105,13 +107,14 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
             return;
         }
         cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
-        TimeseriesForecastTask entity = memoryCache.getForecastTask(request.getTaskId())
-                .orElseGet(TimeseriesForecastTask::new);
-        entity.setTaskId(request.getTaskId());
-        entity.setStatus(request.getStatus());
+        TimeseriesForecastTask entity = memoryCache.computeForecastTask(request.getTaskId(), existing -> {
+            TimeseriesForecastTask e = existing != null ? existing : new TimeseriesForecastTask();
+            e.setTaskId(request.getTaskId());
+            e.setStatus(request.getStatus());
+            return e;
+        });
 
         forecastTaskMapper.updateById(entity);
-        memoryCache.putForecastTask(entity);
         syncForecastTaskToCore(request.getTaskId());
         forecastGrpcClient.updateForecastTaskStatus(request.getTaskId(), request.getStatus());
     }

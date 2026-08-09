@@ -35,11 +35,14 @@ public class AnomalyGrpcClient {
 
     private final GrpcClientProperties grpcClientProperties;
     private final TimeseriesTaskContextResolver contextResolver;
+    private final GrpcChannelRegistry channelRegistry;
 
     public AnomalyGrpcClient(GrpcClientProperties grpcClientProperties,
-                             TimeseriesTaskContextResolver contextResolver) {
+                             TimeseriesTaskContextResolver contextResolver,
+                             GrpcChannelRegistry channelRegistry) {
         this.grpcClientProperties = grpcClientProperties;
         this.contextResolver = contextResolver;
+        this.channelRegistry = channelRegistry;
     }
 
     public SyncResult syncAnomalyTask(TimeseriesAnomalyTask task) {
@@ -96,7 +99,7 @@ public class AnomalyGrpcClient {
                 .build();
 
         LOG.info("[{}] -> UpdateTaskStatus taskId={} status={} at {}", SERVICE_NAME, taskId, status, address);
-        ManagedChannel channel = newChannel(address);
+        ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             TaskAck ack = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
                     .withDeadlineAfter(5, TimeUnit.SECONDS)
@@ -106,8 +109,6 @@ public class AnomalyGrpcClient {
         } catch (StatusRuntimeException e) {
             LOG.warn("[{}] <- UpdateTaskStatus FAILED: {}", SERVICE_NAME, e.getStatus().getDescription());
             return SyncResult.fail(e.getStatus().getDescription());
-        } finally {
-            channel.shutdown();
         }
     }
 
@@ -132,7 +133,7 @@ public class AnomalyGrpcClient {
                 .build();
 
         LOG.info("[{}] -> QueryAnomalyResults taskId={} at {}", SERVICE_NAME, request.getTaskId(), address);
-        ManagedChannel channel = newChannel(address);
+        ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             QueryAnomalyResultsResponse resp = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
                     .withDeadlineAfter(5, TimeUnit.SECONDS)
@@ -152,15 +153,14 @@ public class AnomalyGrpcClient {
         } catch (StatusRuntimeException e) {
             LOG.warn("[{}] queryAnomalyResults failed: {}", SERVICE_NAME, e.getStatus().getDescription());
             return new AnomalyResultVO();
-        } finally {
-            channel.shutdown();
+
         }
     }
 
     // ── helpers ────────────────────────────────────────────────────────
 
     private SyncResult callSyncTask(String address, AnalysisSyncAnomalyTaskRequest req) {
-        ManagedChannel channel = newChannel(address);
+        ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             TaskAck ack = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
                     .withDeadlineAfter(5, TimeUnit.SECONDS)
@@ -171,13 +171,7 @@ public class AnomalyGrpcClient {
         } catch (StatusRuntimeException e) {
             LOG.warn("[{}] <- SyncAnomalyTask FAILED: {}", SERVICE_NAME, e.getStatus().getDescription());
             return SyncResult.fail(e.getStatus().getDescription());
-        } finally {
-            channel.shutdown();
         }
-    }
-
-    private ManagedChannel newChannel(String address) {
-        return ManagedChannelBuilder.forTarget(address).usePlaintext().build();
     }
 
     private RequestMeta newMeta() {

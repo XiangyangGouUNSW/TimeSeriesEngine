@@ -1,17 +1,5 @@
 package com.sfkg.timeseries.cache;
 
-import com.sfkg.timeseries.entity.TimeseriesAnomalyResult;
-import com.sfkg.timeseries.entity.TimeseriesAnomalyTask;
-import com.sfkg.timeseries.entity.TimeseriesCategory;
-import com.sfkg.timeseries.entity.TimeseriesConstraint;
-import com.sfkg.timeseries.dto.HistoryDataQueryRequest;
-import com.sfkg.timeseries.entity.TimeseriesDataPoint;
-import com.sfkg.timeseries.entity.TimeseriesEvent;
-import com.sfkg.timeseries.entity.TimeseriesForecastResult;
-import com.sfkg.timeseries.entity.TimeseriesForecastTask;
-import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
-import com.sfkg.timeseries.entity.TimeseriesRelation;
-import com.sfkg.timeseries.entity.TimeseriesSyncLog;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
@@ -22,7 +10,21 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
+
 import org.springframework.stereotype.Component;
+
+import com.sfkg.timeseries.dto.HistoryDataQueryRequest;
+import com.sfkg.timeseries.entity.TimeseriesAnomalyResult;
+import com.sfkg.timeseries.entity.TimeseriesAnomalyTask;
+import com.sfkg.timeseries.entity.TimeseriesCategory;
+import com.sfkg.timeseries.entity.TimeseriesConstraint;
+import com.sfkg.timeseries.entity.TimeseriesDataPoint;
+import com.sfkg.timeseries.entity.TimeseriesEvent;
+import com.sfkg.timeseries.entity.TimeseriesForecastResult;
+import com.sfkg.timeseries.entity.TimeseriesForecastTask;
+import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
+import com.sfkg.timeseries.entity.TimeseriesRelation;
+import com.sfkg.timeseries.entity.TimeseriesSyncLog;
 
 @Component
 public class TimeseriesMemoryCache {
@@ -50,6 +52,19 @@ public class TimeseriesMemoryCache {
     private final Map<String, TimeseriesEvent> eventsByEventId = new ConcurrentHashMap<>();
     private final Map<String, List<TimeseriesAnomalyResult>> anomalyResultsByTaskId = new ConcurrentHashMap<>();
     private final Map<String, List<TimeseriesForecastResult>> forecastResultsByTaskId = new ConcurrentHashMap<>();
+
+    // ── Concurrency locks (one per entity type to minimise contention) ─
+    private final Object instanceLock = new Object();
+    private final Object categoryLock = new Object();
+    private final Object constraintLock = new Object();
+    private final Object relationLock = new Object();
+    private final Object eventLock = new Object();
+    private final Object anomalyTaskLock = new Object();
+    private final Object forecastTaskLock = new Object();
+    private final Object anomalyResultLock = new Object();
+    private final Object forecastResultLock = new Object();
+    private final Object syncLogLock = new Object();
+    private final Object dataPointLock = new Object();
 
     public boolean isLoaded(CachedTable table) {
         return loadedTables.contains(table);
@@ -81,16 +96,39 @@ public class TimeseriesMemoryCache {
     }
 
     public void replaceInstanceConfigs(Collection<TimeseriesInstanceConfig> entities) {
-        replaceAll(instanceConfigs, entities);
-        rebuildInstanceIndex();
-        markLoaded(CachedTable.INSTANCE_CONFIG);
+        synchronized (instanceLock) {
+            replaceAll(instanceConfigs, entities);
+            rebuildInstanceIndex();
+            markLoaded(CachedTable.INSTANCE_CONFIG);
+        }
+    }
+
+    /**
+     * Atomically get-or-create + modify + store an InstanceConfig.
+     * The {@code updater} receives the existing entity (or {@code null} if absent)
+     * and must return the entity to store (must not be null).
+     */
+    public TimeseriesInstanceConfig computeInstanceConfig(String sequenceId,
+            java.util.function.Function<TimeseriesInstanceConfig, TimeseriesInstanceConfig> updater) {
+        synchronized (instanceLock) {
+            TimeseriesInstanceConfig existing = getInstanceConfig(sequenceId).orElse(null);
+            TimeseriesInstanceConfig result = updater.apply(existing);
+            if (result != null && result.getSequenceId() != null) {
+                upsert(instanceConfigs, item -> result.getSequenceId().equals(item.getSequenceId()), result);
+                instanceBySequenceId.put(result.getSequenceId(), result);
+                markLoaded(CachedTable.INSTANCE_CONFIG);
+            }
+            return result;
+        }
     }
 
     public void putInstanceConfig(TimeseriesInstanceConfig entity) {
         if (entity != null && entity.getSequenceId() != null) {
-            upsert(instanceConfigs, item -> entity.getSequenceId().equals(item.getSequenceId()), entity);
-            instanceBySequenceId.put(entity.getSequenceId(), entity);
-            markLoaded(CachedTable.INSTANCE_CONFIG);
+            synchronized (instanceLock) {
+                upsert(instanceConfigs, item -> entity.getSequenceId().equals(item.getSequenceId()), entity);
+                instanceBySequenceId.put(entity.getSequenceId(), entity);
+                markLoaded(CachedTable.INSTANCE_CONFIG);
+            }
         }
     }
 
@@ -105,14 +143,31 @@ public class TimeseriesMemoryCache {
     }
 
     public void replaceCategories(Collection<TimeseriesCategory> entities) {
-        replaceAll(categories, entities);
-        markLoaded(CachedTable.CATEGORY);
+        synchronized (categoryLock) {
+            replaceAll(categories, entities);
+            markLoaded(CachedTable.CATEGORY);
+        }
+    }
+
+    public TimeseriesCategory computeCategory(String categoryId,
+            java.util.function.Function<TimeseriesCategory, TimeseriesCategory> updater) {
+        synchronized (categoryLock) {
+            TimeseriesCategory existing = getCategory(categoryId).orElse(null);
+            TimeseriesCategory result = updater.apply(existing);
+            if (result != null && result.getCategoryId() != null) {
+                upsert(categories, item -> result.getCategoryId().equals(item.getCategoryId()), result);
+                markLoaded(CachedTable.CATEGORY);
+            }
+            return result;
+        }
     }
 
     public void putCategory(TimeseriesCategory entity) {
         if (entity != null && entity.getCategoryId() != null) {
-            upsert(categories, item -> entity.getCategoryId().equals(item.getCategoryId()), entity);
-            markLoaded(CachedTable.CATEGORY);
+            synchronized (categoryLock) {
+                upsert(categories, item -> entity.getCategoryId().equals(item.getCategoryId()), entity);
+                markLoaded(CachedTable.CATEGORY);
+            }
         }
     }
 
@@ -127,17 +182,36 @@ public class TimeseriesMemoryCache {
     }
 
     public void replaceConstraints(Collection<TimeseriesConstraint> entities) {
-        replaceAll(constraints, entities);
-        rebuildConstraintIndexes();
-        markLoaded(CachedTable.CONSTRAINT);
+        synchronized (constraintLock) {
+            replaceAll(constraints, entities);
+            rebuildConstraintIndexes();
+            markLoaded(CachedTable.CONSTRAINT);
+        }
+    }
+
+    public TimeseriesConstraint computeConstraint(String constraintId,
+            java.util.function.Function<TimeseriesConstraint, TimeseriesConstraint> updater) {
+        synchronized (constraintLock) {
+            TimeseriesConstraint existing = getConstraint(constraintId).orElse(null);
+            TimeseriesConstraint result = updater.apply(existing);
+            if (result != null && result.getConstraintId() != null) {
+                upsert(constraints, item -> result.getConstraintId().equals(item.getConstraintId()), result);
+                constraintByConstraintId.put(result.getConstraintId(), result);
+                rebuildConstraintsByCategoryId();
+                markLoaded(CachedTable.CONSTRAINT);
+            }
+            return result;
+        }
     }
 
     public void putConstraint(TimeseriesConstraint entity) {
         if (entity != null && entity.getConstraintId() != null) {
-            upsert(constraints, item -> entity.getConstraintId().equals(item.getConstraintId()), entity);
-            constraintByConstraintId.put(entity.getConstraintId(), entity);
-            rebuildConstraintsByCategoryId();
-            markLoaded(CachedTable.CONSTRAINT);
+            synchronized (constraintLock) {
+                upsert(constraints, item -> entity.getConstraintId().equals(item.getConstraintId()), entity);
+                constraintByConstraintId.put(entity.getConstraintId(), entity);
+                rebuildConstraintsByCategoryId();
+                markLoaded(CachedTable.CONSTRAINT);
+            }
         }
     }
 
@@ -152,18 +226,38 @@ public class TimeseriesMemoryCache {
     }
 
     public void replaceRelations(Collection<TimeseriesRelation> entities) {
-        replaceAll(relations, entities);
-        rebuildRelationIndexes();
-        markLoaded(CachedTable.RELATION);
+        synchronized (relationLock) {
+            replaceAll(relations, entities);
+            rebuildRelationIndexes();
+            markLoaded(CachedTable.RELATION);
+        }
+    }
+
+    public TimeseriesRelation computeRelation(String relationId,
+            java.util.function.Function<TimeseriesRelation, TimeseriesRelation> updater) {
+        synchronized (relationLock) {
+            TimeseriesRelation existing = getRelation(relationId).orElse(null);
+            TimeseriesRelation result = updater.apply(existing);
+            if (result != null && result.getRelationId() != null) {
+                upsert(relations, item -> result.getRelationId().equals(item.getRelationId()), result);
+                relationByRelationId.put(result.getRelationId(), result);
+                rebuildRelationsByTargetId();
+                rebuildRelationsBySourceId();
+                markLoaded(CachedTable.RELATION);
+            }
+            return result;
+        }
     }
 
     public void putRelation(TimeseriesRelation entity) {
         if (entity != null && entity.getRelationId() != null) {
-            upsert(relations, item -> entity.getRelationId().equals(item.getRelationId()), entity);
-            relationByRelationId.put(entity.getRelationId(), entity);
-            rebuildRelationsByTargetId();
-            rebuildRelationsBySourceId();
-            markLoaded(CachedTable.RELATION);
+            synchronized (relationLock) {
+                upsert(relations, item -> entity.getRelationId().equals(item.getRelationId()), entity);
+                relationByRelationId.put(entity.getRelationId(), entity);
+                rebuildRelationsByTargetId();
+                rebuildRelationsBySourceId();
+                markLoaded(CachedTable.RELATION);
+            }
         }
     }
 
@@ -178,19 +272,37 @@ public class TimeseriesMemoryCache {
     }
 
     public void replaceEvents(Collection<TimeseriesEvent> entities) {
-        replaceAll(events, entities);
-        eventsByEventId.clear();
-        if (entities != null) {
-            entities.forEach(e -> { if (e.getEventId() != null) eventsByEventId.put(e.getEventId(), e); });
+        synchronized (eventLock) {
+            replaceAll(events, entities);
+            eventsByEventId.clear();
+            if (entities != null) {
+                entities.forEach(e -> { if (e.getEventId() != null) eventsByEventId.put(e.getEventId(), e); });
+            }
+            markLoaded(CachedTable.EVENT);
         }
-        markLoaded(CachedTable.EVENT);
+    }
+
+    public TimeseriesEvent computeEvent(String eventId,
+            java.util.function.Function<TimeseriesEvent, TimeseriesEvent> updater) {
+        synchronized (eventLock) {
+            TimeseriesEvent existing = getEvent(eventId).orElse(null);
+            TimeseriesEvent result = updater.apply(existing);
+            if (result != null && result.getEventId() != null) {
+                upsert(events, item -> result.getEventId().equals(item.getEventId()), result);
+                eventsByEventId.put(result.getEventId(), result);
+                markLoaded(CachedTable.EVENT);
+            }
+            return result;
+        }
     }
 
     public void putEvent(TimeseriesEvent entity) {
         if (entity != null && entity.getEventId() != null) {
-            upsert(events, item -> entity.getEventId().equals(item.getEventId()), entity);
-            eventsByEventId.put(entity.getEventId(), entity);
-            markLoaded(CachedTable.EVENT);
+            synchronized (eventLock) {
+                upsert(events, item -> entity.getEventId().equals(item.getEventId()), entity);
+                eventsByEventId.put(entity.getEventId(), entity);
+                markLoaded(CachedTable.EVENT);
+            }
         }
     }
 
@@ -205,14 +317,31 @@ public class TimeseriesMemoryCache {
     }
 
     public void replaceAnomalyTasks(Collection<TimeseriesAnomalyTask> entities) {
-        replaceAll(anomalyTasks, entities);
-        markLoaded(CachedTable.ANOMALY_TASK);
+        synchronized (anomalyTaskLock) {
+            replaceAll(anomalyTasks, entities);
+            markLoaded(CachedTable.ANOMALY_TASK);
+        }
+    }
+
+    public TimeseriesAnomalyTask computeAnomalyTask(String taskId,
+            java.util.function.Function<TimeseriesAnomalyTask, TimeseriesAnomalyTask> updater) {
+        synchronized (anomalyTaskLock) {
+            TimeseriesAnomalyTask existing = getAnomalyTask(taskId).orElse(null);
+            TimeseriesAnomalyTask result = updater.apply(existing);
+            if (result != null && result.getTaskId() != null) {
+                upsert(anomalyTasks, item -> result.getTaskId().equals(item.getTaskId()), result);
+                markLoaded(CachedTable.ANOMALY_TASK);
+            }
+            return result;
+        }
     }
 
     public void putAnomalyTask(TimeseriesAnomalyTask entity) {
         if (entity != null && entity.getTaskId() != null) {
-            upsert(anomalyTasks, item -> entity.getTaskId().equals(item.getTaskId()), entity);
-            markLoaded(CachedTable.ANOMALY_TASK);
+            synchronized (anomalyTaskLock) {
+                upsert(anomalyTasks, item -> entity.getTaskId().equals(item.getTaskId()), entity);
+                markLoaded(CachedTable.ANOMALY_TASK);
+            }
         }
     }
 
@@ -227,14 +356,31 @@ public class TimeseriesMemoryCache {
     }
 
     public void replaceForecastTasks(Collection<TimeseriesForecastTask> entities) {
-        replaceAll(forecastTasks, entities);
-        markLoaded(CachedTable.FORECAST_TASK);
+        synchronized (forecastTaskLock) {
+            replaceAll(forecastTasks, entities);
+            markLoaded(CachedTable.FORECAST_TASK);
+        }
+    }
+
+    public TimeseriesForecastTask computeForecastTask(String taskId,
+            java.util.function.Function<TimeseriesForecastTask, TimeseriesForecastTask> updater) {
+        synchronized (forecastTaskLock) {
+            TimeseriesForecastTask existing = getForecastTask(taskId).orElse(null);
+            TimeseriesForecastTask result = updater.apply(existing);
+            if (result != null && result.getTaskId() != null) {
+                upsert(forecastTasks, item -> result.getTaskId().equals(item.getTaskId()), result);
+                markLoaded(CachedTable.FORECAST_TASK);
+            }
+            return result;
+        }
     }
 
     public void putForecastTask(TimeseriesForecastTask entity) {
         if (entity != null && entity.getTaskId() != null) {
-            upsert(forecastTasks, item -> entity.getTaskId().equals(item.getTaskId()), entity);
-            markLoaded(CachedTable.FORECAST_TASK);
+            synchronized (forecastTaskLock) {
+                upsert(forecastTasks, item -> entity.getTaskId().equals(item.getTaskId()), entity);
+                markLoaded(CachedTable.FORECAST_TASK);
+            }
         }
     }
 
@@ -249,16 +395,20 @@ public class TimeseriesMemoryCache {
     }
 
     public void replaceAnomalyResults(Collection<TimeseriesAnomalyResult> entities) {
-        replaceAll(anomalyResults, entities);
-        rebuildAnomalyResultsByTaskId();
-        markLoaded(CachedTable.ANOMALY_RESULT);
+        synchronized (anomalyResultLock) {
+            replaceAll(anomalyResults, entities);
+            rebuildAnomalyResultsByTaskId();
+            markLoaded(CachedTable.ANOMALY_RESULT);
+        }
     }
 
     public void putAnomalyResult(TimeseriesAnomalyResult entity) {
         if (entity != null && entity.getResultId() != null) {
-            upsert(anomalyResults, item -> entity.getResultId().equals(item.getResultId()), entity);
-            rebuildAnomalyResultsByTaskId();
-            markLoaded(CachedTable.ANOMALY_RESULT);
+            synchronized (anomalyResultLock) {
+                upsert(anomalyResults, item -> entity.getResultId().equals(item.getResultId()), entity);
+                rebuildAnomalyResultsByTaskId();
+                markLoaded(CachedTable.ANOMALY_RESULT);
+            }
         }
     }
 
@@ -267,16 +417,20 @@ public class TimeseriesMemoryCache {
     }
 
     public void replaceForecastResults(Collection<TimeseriesForecastResult> entities) {
-        replaceAll(forecastResults, entities);
-        rebuildForecastResultsByTaskId();
-        markLoaded(CachedTable.FORECAST_RESULT);
+        synchronized (forecastResultLock) {
+            replaceAll(forecastResults, entities);
+            rebuildForecastResultsByTaskId();
+            markLoaded(CachedTable.FORECAST_RESULT);
+        }
     }
 
     public void putForecastResult(TimeseriesForecastResult entity) {
         if (entity != null && entity.getResultId() != null) {
-            upsert(forecastResults, item -> entity.getResultId().equals(item.getResultId()), entity);
-            rebuildForecastResultsByTaskId();
-            markLoaded(CachedTable.FORECAST_RESULT);
+            synchronized (forecastResultLock) {
+                upsert(forecastResults, item -> entity.getResultId().equals(item.getResultId()), entity);
+                rebuildForecastResultsByTaskId();
+                markLoaded(CachedTable.FORECAST_RESULT);
+            }
         }
     }
 
@@ -285,14 +439,18 @@ public class TimeseriesMemoryCache {
     }
 
     public void replaceSyncLogs(Collection<TimeseriesSyncLog> entities) {
-        replaceAll(syncLogs, entities);
-        markLoaded(CachedTable.SYNC_LOG);
+        synchronized (syncLogLock) {
+            replaceAll(syncLogs, entities);
+            markLoaded(CachedTable.SYNC_LOG);
+        }
     }
 
     public void putSyncLog(TimeseriesSyncLog entity) {
         if (entity != null && entity.getId() != null) {
-            upsert(syncLogs, item -> entity.getId().equals(item.getId()), entity);
-            markLoaded(CachedTable.SYNC_LOG);
+            synchronized (syncLogLock) {
+                upsert(syncLogs, item -> entity.getId().equals(item.getId()), entity);
+                markLoaded(CachedTable.SYNC_LOG);
+            }
         }
     }
 
@@ -301,36 +459,42 @@ public class TimeseriesMemoryCache {
     }
 
     public void replaceTimeseriesDataPoints(Collection<TimeseriesDataPoint> points) {
-        replaceAll(dataPoints, points);
-        markLoaded(CachedTable.TIMESERIES_DATA);
+        synchronized (dataPointLock) {
+            replaceAll(dataPoints, points);
+            markLoaded(CachedTable.TIMESERIES_DATA);
+        }
     }
 
     public void replaceTimeseriesDataPoints(String sequenceId, Collection<TimeseriesDataPoint> points) {
-        if (sequenceId == null) {
-            replaceTimeseriesDataPoints(points);
-            return;
+        synchronized (dataPointLock) {
+            if (sequenceId == null) {
+                replaceTimeseriesDataPoints(points);
+                return;
+            }
+            dataPoints.removeIf(point -> equalsValue(sequenceId, point.getSequenceId()));
+            if (points != null) {
+                dataPoints.addAll(points);
+            }
+            markLoaded(CachedTable.TIMESERIES_DATA);
         }
-        dataPoints.removeIf(point -> equalsValue(sequenceId, point.getSequenceId()));
-        if (points != null) {
-            dataPoints.addAll(points);
-        }
-        markLoaded(CachedTable.TIMESERIES_DATA);
     }
 
     public void putTimeseriesDataPoints(Collection<TimeseriesDataPoint> points) {
         if (points == null || points.isEmpty()) {
             return;
         }
-        for (TimeseriesDataPoint point : points) {
-            if (point != null && point.getSequenceId() != null && point.getTimestamp() != null) {
-                upsert(
-                        dataPoints,
-                        item -> point.getSequenceId().equals(item.getSequenceId())
-                                && point.getTimestamp().equals(item.getTimestamp()),
-                        point);
+        synchronized (dataPointLock) {
+            for (TimeseriesDataPoint point : points) {
+                if (point != null && point.getSequenceId() != null && point.getTimestamp() != null) {
+                    upsert(
+                            dataPoints,
+                            item -> point.getSequenceId().equals(item.getSequenceId())
+                                    && point.getTimestamp().equals(item.getTimestamp()),
+                            point);
+                }
             }
+            markLoaded(CachedTable.TIMESERIES_DATA);
         }
-        markLoaded(CachedTable.TIMESERIES_DATA);
     }
 
     public List<TimeseriesDataPoint> listTimeseriesDataPoints(HistoryDataQueryRequest request) {

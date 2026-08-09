@@ -5,6 +5,18 @@ spring:
 server:
   port: 8080
 
+  # ── Explicit REST (Tomcat) capacity configuration ──────────────
+  # These are Spring Boot native properties — 100% reliable.
+  # Override via env: SERVER_TOMCAT_THREADS_MAX, etc.
+  tomcat:
+    threads:
+      max: ${SERVER_TOMCAT_THREADS_MAX:200}              # 最大工作线程
+      min-spare: ${SERVER_TOMCAT_THREADS_MIN_SPARE:10}   # 最小空闲线程
+    max-connections: ${SERVER_TOMCAT_MAX_CONNECTIONS:8192}   # 最大并发连接
+    accept-count: ${SERVER_TOMCAT_ACCEPT_COUNT:100}          # 线程满时等待队列
+    connection-timeout: ${SERVER_TOMCAT_CONNECTION_TIMEOUT:30000}  # 连接超时(ms)
+
+# ── Application config ──────────────────────────────────────────
 timeseries:
   local-store-dir: ${TIMESERIES_LOCAL_STORE_DIR:data}
   local-data-file: ${TIMESERIES_LOCAL_DATA_FILE:data/timeseries-data.jsonl}

@@ -34,11 +34,14 @@ public class ForecastGrpcClient {
 
     private final GrpcClientProperties grpcClientProperties;
     private final TimeseriesTaskContextResolver contextResolver;
+    private final GrpcChannelRegistry channelRegistry;
 
     public ForecastGrpcClient(GrpcClientProperties grpcClientProperties,
-                              TimeseriesTaskContextResolver contextResolver) {
+                              TimeseriesTaskContextResolver contextResolver,
+                              GrpcChannelRegistry channelRegistry) {
         this.grpcClientProperties = grpcClientProperties;
         this.contextResolver = contextResolver;
+        this.channelRegistry = channelRegistry;
     }
 
     public SyncResult syncForecastTask(TimeseriesForecastTask task) {
@@ -80,7 +83,7 @@ public class ForecastGrpcClient {
                 .build();
 
         LOG.info("[{}] -> SyncForecastTask taskId={} at {}", SERVICE_NAME, task.getTaskId(), address);
-        ManagedChannel channel = newChannel(address);
+        ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             TaskAck ack = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
                     .withDeadlineAfter(5, TimeUnit.SECONDS)
@@ -90,8 +93,6 @@ public class ForecastGrpcClient {
         } catch (StatusRuntimeException e) {
             LOG.warn("[{}] <- SyncForecastTask FAILED: {}", SERVICE_NAME, e.getStatus().getDescription());
             return SyncResult.fail(e.getStatus().getDescription());
-        } finally {
-            channel.shutdown();
         }
     }
 
@@ -114,7 +115,7 @@ public class ForecastGrpcClient {
                 .setStatus(protoStatus)
                 .build();
         LOG.info("[{}] -> UpdateTaskStatus taskId={} status={} at {}", SERVICE_NAME, taskId, status, address);
-        ManagedChannel channel = newChannel(address);
+        ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             TaskAck ack = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
                     .withDeadlineAfter(5, TimeUnit.SECONDS)
@@ -123,8 +124,6 @@ public class ForecastGrpcClient {
         } catch (StatusRuntimeException e) {
             LOG.warn("[{}] <- UpdateTaskStatus FAILED: {}", SERVICE_NAME, e.getStatus().getDescription());
             return SyncResult.fail(e.getStatus().getDescription());
-        } finally {
-            channel.shutdown();
         }
     }
 
@@ -146,7 +145,7 @@ public class ForecastGrpcClient {
                         .build())
                 .build();
         LOG.info("[{}] -> QueryForecastResults taskId={} at {}", SERVICE_NAME, request.getTaskId(), address);
-        ManagedChannel channel = newChannel(address);
+        ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             QueryForecastResultsResponse resp = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
                     .withDeadlineAfter(5, TimeUnit.SECONDS)
@@ -160,16 +159,10 @@ public class ForecastGrpcClient {
         } catch (StatusRuntimeException e) {
             LOG.warn("[{}] queryForecastResults failed: {}", SERVICE_NAME, e.getStatus().getDescription());
             return new ForecastResultVO();
-        } finally {
-            channel.shutdown();
         }
     }
 
     // ── helpers ────────────────────────────────────────────────────────
-
-    private ManagedChannel newChannel(String address) {
-        return ManagedChannelBuilder.forTarget(address).usePlaintext().build();
-    }
 
     private RequestMeta newMeta() {
         return RequestMeta.newBuilder()
