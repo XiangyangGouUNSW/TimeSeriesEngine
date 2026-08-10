@@ -134,32 +134,87 @@ public class TimeseriesCoreGrpcClient {
         if (constraint == null) {
             return SyncResult.fail("constraint is null");
         }
-        ConstraintRule.Builder ruleBuilder = ConstraintRule.newBuilder()
-                .setConstraintId(nullToEmpty(constraint.getConstraintId()))
-                .setLowerBound(constraint.getLowerBound() != null ? constraint.getLowerBound() : 0.0)
-                .setUpperBound(constraint.getUpperBound() != null ? constraint.getUpperBound() : 0.0);
-        if (constraint.getVariableMapping() != null) {
-            ruleBuilder.putAllVariableMapping(constraint.getVariableMapping());
-        }
-        if (constraint.getTerms() != null) {
-            for (TimeseriesConstraint.ConstraintTermItem term : constraint.getTerms()) {
-                ruleBuilder.addTerms(ConstraintTerm.newBuilder()
-                        .setVariable(nullToEmpty(term.getVariable()))
-                        .setCoefficient(term.getCoefficient() != null ? term.getCoefficient() : 0.0)
-                        .setSampleOffset(term.getSampleOffset() != null ? term.getSampleOffset() : 0L)
-                        .build());
-            }
-        }
+
         boolean enabled = "ENABLE".equalsIgnoreCase(constraint.getEffectiveStatus());
-        RuntimeConstraintConfig item = RuntimeConstraintConfig.newBuilder()
-                .setRule(ruleBuilder.build())
-                .setEnabled(enabled)
-                .build();
+        Map<String, String> rawMapping = constraint.getVariableMapping() != null
+                ? constraint.getVariableMapping() : Map.of();
+
+        // Expand categoryId → sequenceIds, grouped by deviceInstanceId
+        List<RuntimeConstraintConfig> items = expandConstraintRules(
+                constraint.getConstraintId(), rawMapping, enabled,
+                constraint.getLowerBound(), constraint.getUpperBound(),
+                constraint.getTerms());
+
         SyncConstraintsRequest req = SyncConstraintsRequest.newBuilder()
-                .addItems(item)
+                .addAllItems(items)
                 .build();
-        LOG.info("[{}] -> syncConstraints constraintId={} at {}", SERVICE_NAME, constraint.getConstraintId(), address);
+        LOG.info("[{}] -> syncConstraints constraintId={} expanded to {} rules at {}",
+                SERVICE_NAME, constraint.getConstraintId(), items.size(), address);
         return callCoreSync(address, stub -> stub.syncConstraints(req), "syncConstraints");
+    }
+
+    private List<RuntimeConstraintConfig> expandConstraintRules(
+            String constraintId, Map<String, String> rawMapping, boolean enabled,
+            Double lowerBound, Double upperBound,
+            List<TimeseriesConstraint.ConstraintTermItem> terms) {
+
+        // Expand each variable's value: categoryId → sequenceId list
+        Map<String, List<String>> expandedByVar = new LinkedHashMap<>();
+        for (Map.Entry<String, String> e : rawMapping.entrySet()) {
+            List<String> seqIds = resolveToSequences(
+                    e.getValue() != null ? List.of(e.getValue()) : List.of());
+            expandedByVar.put(e.getKey(), seqIds);
+        }
+
+        // Group by deviceInstanceId: find the common device ID for each combination
+        // For simplicity: take the first variable's device groups as the key
+        String firstVar = expandedByVar.keySet().stream().findFirst().orElse(null);
+        Map<String, Map<String, String>> deviceRules = new LinkedHashMap<>(); // deviceId → var→seqId
+
+        if (firstVar != null && !expandedByVar.get(firstVar).isEmpty()) {
+            for (String seqId : expandedByVar.get(firstVar)) {
+                TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(seqId);
+                String deviceId = inst != null && inst.getDeviceInstanceId() != null
+                        ? inst.getDeviceInstanceId() : "_default";
+                Map<String, String> varMap = new LinkedHashMap<>();
+                varMap.put(firstVar, seqId);
+                // Match other variables to same device
+                for (Map.Entry<String, List<String>> ve : expandedByVar.entrySet()) {
+                    if (ve.getKey().equals(firstVar)) continue;
+                    String match = ve.getValue().stream()
+                            .filter(s -> {
+                                TimeseriesInstanceConfig i = memoryCache.getInstanceBySequenceId(s);
+                                return i != null && deviceId.equals(i.getDeviceInstanceId());
+                            })
+                            .findFirst().orElse(null);
+                    if (match != null) varMap.put(ve.getKey(), match);
+                }
+                deviceRules.computeIfAbsent(deviceId, k -> new LinkedHashMap<>()).putAll(varMap);
+            }
+        } else {
+            // No expansion — use raw mapping as-is
+            deviceRules.put("_default", new LinkedHashMap<>(rawMapping));
+        }
+
+        List<RuntimeConstraintConfig> items = new ArrayList<>();
+        for (Map<String, String> varMap : deviceRules.values()) {
+            ConstraintRule.Builder rb = ConstraintRule.newBuilder()
+                    .setConstraintId(nullToEmpty(constraintId))
+                    .setLowerBound(lowerBound != null ? lowerBound : 0.0)
+                    .setUpperBound(upperBound != null ? upperBound : 0.0)
+                    .putAllVariableMapping(varMap);
+            if (terms != null) {
+                for (TimeseriesConstraint.ConstraintTermItem term : terms) {
+                    rb.addTerms(ConstraintTerm.newBuilder()
+                            .setVariable(nullToEmpty(term.getVariable()))
+                            .setCoefficient(term.getCoefficient() != null ? term.getCoefficient() : 0.0)
+                            .setSampleOffset(term.getSampleOffset() != null ? term.getSampleOffset() : 0L)
+                            .build());
+                }
+            }
+            items.add(RuntimeConstraintConfig.newBuilder().setRule(rb.build()).setEnabled(enabled).build());
+        }
+        return items;
     }
 
     // ── relation config ────────────────────────────────────────────────

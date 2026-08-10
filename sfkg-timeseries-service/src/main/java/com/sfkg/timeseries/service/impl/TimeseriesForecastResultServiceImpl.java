@@ -5,7 +5,6 @@ import java.util.List;
 
 import org.springframework.stereotype.Service;
 
-import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.ForecastGrpcClient;
@@ -36,12 +35,7 @@ public class TimeseriesForecastResultServiceImpl implements TimeseriesForecastRe
 
     @Override
     public ForecastResultVO queryForecastResults(ForecastResultQueryRequest request) {
-        cacheManager.ensureTableLoaded(CachedTable.EVENT);
-        return memoryCache.listEvents().stream()
-                .filter(event -> matches(request, event))
-                .findFirst()
-                .map(event -> toVO(request, event))
-                .orElseGet(() -> forecastGrpcClient.queryForecastResult(request));
+        return forecastGrpcClient.queryForecastResult(request);
     }
 
     @Override

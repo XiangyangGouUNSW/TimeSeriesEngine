@@ -339,6 +339,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             throw new BusinessException("variable mapping must not be empty");
         }
         cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
+        cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
         for (Map.Entry<String, String> entry : variableMapping.entrySet()) {
             if (entry.getKey() == null || entry.getKey().isBlank()) {
                 throw new BusinessException("variable name must not be empty in mapping");
@@ -346,9 +347,8 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             if (entry.getValue() == null || entry.getValue().isBlank()) {
                 throw new BusinessException("sequenceId must not be empty for variable: " + entry.getKey());
             }
-            TimeseriesInstanceConfig instance = memoryCache.getInstanceBySequenceId(entry.getValue());
-            if (instance == null) {
-                throw new BusinessException("mapped sequence not found: " + entry.getValue()
+            if (!isValidSequenceOrCategory(entry.getValue())) {
+                throw new BusinessException("mapped sequence or category not found: " + entry.getValue()
                         + " for variable: " + entry.getKey());
             }
         }

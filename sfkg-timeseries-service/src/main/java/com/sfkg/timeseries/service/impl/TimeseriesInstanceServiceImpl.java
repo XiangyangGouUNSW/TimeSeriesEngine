@@ -16,6 +16,7 @@ import com.sfkg.timeseries.common.BusinessException;
 import com.sfkg.timeseries.dto.InstanceConfigQueryRequest;
 import com.sfkg.timeseries.dto.InstanceConfigSaveRequest;
 import com.sfkg.timeseries.entity.TimeseriesCategory;
+import com.sfkg.timeseries.entity.TimeseriesConstraint;
 import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.entity.TimeseriesRelation;
 import com.sfkg.timeseries.mapper.TimeseriesInstanceConfigMapper;
@@ -104,6 +105,13 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
                 }
                 if (matches) {
                     coreGrpcClient.syncRelationConfig(rel);
+                }
+            }
+            // Re-sync constraints whose variableMapping references this categoryId
+            cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
+            for (TimeseriesConstraint c : memoryCache.listConstraints()) {
+                if (c.getVariableMapping() != null && c.getVariableMapping().containsValue(entity.getCategoryId())) {
+                    coreGrpcClient.syncConstraintConfig(c);
                 }
             }
         }
