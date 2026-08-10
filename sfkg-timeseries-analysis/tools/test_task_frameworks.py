@@ -2,7 +2,7 @@
 
 不连任何服务，纯逻辑验证。
   - TaskRegistry：注册=ENABLED、更新保留状态、启停/删除真正生效；
-  - run_anomaly 检测类型解析：组合 / 只约束 / 只模型 / 空默认 / 未知方法记日志；
+  - run_anomaly 检测类型解析：约束(迁C)过滤 / 只约束不参与 / 只模型 / 空默认 / 未知方法记日志；
   - ResultRepository：put/latest/history、超 maxlen 丢最旧。
 
 用法（sfkg 环境）：
@@ -104,20 +104,21 @@ def _anomaly_task(task_id: str, methods: list[str]):
 
 def test_methods_parsing() -> None:
     print("\n[检测类型解析]")
-    # 组合：约束 + 模型
+    # 组合：约束(迁C，P过滤掉) + 模型
     eng, seen = _parse_engine()
     eng.run_anomaly(_anomaly_task("t-combo", ["CONSTRAINT_CHECK", "CAUSAL_PATTERN"]))
-    assert eng.core.constraint_calls == 1, "组合检测应调约束检查"
+    assert eng.core.constraint_calls == 0, "约束检查已迁 C，P 不应再调 check_constraints"
     assert seen == [["CAUSAL_PATTERN"]], f"模型方法应只剩 CAUSAL_PATTERN，实际 {seen}"
-    _ok("组合：约束检查 + 模型检测")
+    _ok("组合：CONSTRAINT_CHECK 被过滤，只跑模型")
 
-    # 只约束：不取实时窗口、不跑模型
+    # 只约束：P 不参与（S 直接下发 C）→ 不取窗口、不跑模型、无 finding
     eng, seen = _parse_engine()
-    eng.run_anomaly(_anomaly_task("t-constraint", ["CONSTRAINT_CHECK"]))
-    assert eng.core.constraint_calls == 1
+    res = eng.run_anomaly(_anomaly_task("t-constraint", ["CONSTRAINT_CHECK"]))
+    assert eng.core.constraint_calls == 0
     assert eng.core.window_calls == 0, "只约束不应取实时窗口"
     assert seen == [], "只约束不应跑模型"
-    _ok("只约束：不取窗口、不跑模型")
+    assert res.findings == [], "只约束 P 不产 finding（C 自检测自写 S）"
+    _ok("只约束：P 不参与，不取窗口、不跑模型")
 
     # 只模型：不调约束检查
     eng, seen = _parse_engine()
@@ -127,12 +128,12 @@ def test_methods_parsing() -> None:
     assert seen == [["CAUSAL_PATTERN"]]
     _ok("只模型：不调约束检查")
 
-    # 空 methods → 默认组合
+    # 空 methods → 默认只跑模型（DEFAULT_METHODS 已去掉 CONSTRAINT_CHECK）
     eng, seen = _parse_engine()
     eng.run_anomaly(_anomaly_task("t-empty", []))
-    assert eng.core.constraint_calls == 1, "空 methods 应默认走约束检查"
+    assert eng.core.constraint_calls == 0
     assert seen == [["CAUSAL_PATTERN"]], "空 methods 应默认走 CAUSAL_PATTERN"
-    _ok("空 methods → 默认组合")
+    _ok("空 methods → 默认 CAUSAL_PATTERN")
 
 
 def test_unknown_method() -> None:

@@ -41,8 +41,8 @@ class ModelStore:
         with self._lock:
             self._models[key] = model
         self._model_dir.mkdir(parents=True, exist_ok=True)
+        p = self._path(key)
         if hasattr(model, "save"):
-            p = self._path(key)
             tmp = p.with_name(p.name + ".tmp")
             try:
                 model.save(tmp)

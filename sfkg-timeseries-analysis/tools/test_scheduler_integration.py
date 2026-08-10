@@ -2,7 +2,7 @@
 
 自包含：在测试内起假 C（端口 50052，避免和正在跑的 50051 冲突）。
 验证：
-  1. Sync 注册异常任务（组合检测）→ Scheduler 周期跑 → Query 拿到结果；
+  1. Sync 注册异常任务（模型检测）→ Scheduler 周期跑 → Query 拿到结果；
   2. 预测任务：首训一次，之后每周期复用（日志"跳过训练"）；
   3. UpdateTaskStatus(DISABLED) 后该任务不再执行；
   4. 结果仓库保留最近多条历史。
@@ -68,10 +68,11 @@ class FakeSender:
 
 
 def _anomaly_task(task_id):
+    # 约束检查已迁 C（S 直接下发 C），P 的异常任务只含模型检测方法
     return pb.AnomalyTaskConfig(
-        task_id=task_id, task_name="调度器-组合检测",
+        task_id=task_id, task_name="调度器-异常检测",
         sequence_ids=[TARGET],
-        methods=["CONSTRAINT_CHECK", "CAUSAL_PATTERN"],
+        methods=["CAUSAL_PATTERN"],
         semantic_context=pb.SemanticContext(constraint_ids=["demo-constraint-001"]),
     )
 
@@ -122,7 +123,7 @@ def main() -> None:
         servicer = AnalysisServicer(registry=registry, repository=repository,
                                     engine=engine)
 
-        # 1. 注册异常任务（组合检测）
+        # 1. 注册异常任务（模型检测）
         ack = servicer.SyncAnomalyTask(
             pb.AnalysisSyncAnomalyTaskRequest(
                 task=_anomaly_task("task-sched-anomaly-001")), None)
@@ -139,16 +140,17 @@ def main() -> None:
         # 启动调度器（后台线程）
         scheduler.start()
 
-        # 3. 异常任务周期执行 → 结果可查（假 C 每次约束检查都返回违规 → 有 finding）
+        # 3. 异常任务周期执行 → 结果可查。
+        #    单序列下 GCAD 无自变量不产出 finding，但模型腿应真实跑通（GCAD 首训入 store）
         ok = wait_until(lambda: repository.latest("task-sched-anomaly-001") is not None,
                         15, "异常任务出结果")
         assert ok, "异常任务应在调度周期内出结果"
         a_res = repository.latest("task-sched-anomaly-001")
         assert a_res.status == pb.ANALYSIS_STATUS_SUCCESS
-        assert any(f.anomaly_type == "CONSTRAINT_CHECK" for f in a_res.findings), \
-            "组合检测应含约束违反 finding"
-        print(f"[3] 异常任务出结果 ✓ findings={len(a_res.findings)} 条，"
-              f"类型 {sorted({f.anomaly_type for f in a_res.findings})}")
+        assert engine.store.get("task-sched-anomaly-001:CAUSAL_PATTERN") is not None, \
+            "GCAD 模型应已首训并存 store"
+        print(f"[3] 异常任务出结果 ✓ status=SUCCESS，"
+              f"findings={len(a_res.findings)} 条，GCAD 已入 store")
 
         # 4. 预测任务：首训（数据达标自动训）→ 出结果
         ok = wait_until(lambda: repository.latest("task-sched-forecast-001") is not None,

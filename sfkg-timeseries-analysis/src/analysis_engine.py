@@ -26,8 +26,8 @@ from training_loop import ModelStore
 
 logger = logging.getLogger(__name__)
 
-# 异常检测类型：methods 空时的默认组合（约束 + 模式偏移都检测）
-DEFAULT_METHODS = ["CONSTRAINT_CHECK", "CAUSAL_PATTERN"]
+# 异常检测类型：methods 空时的默认组合（实时约束检查已迁 C，默认只做模式偏移检测）
+DEFAULT_METHODS = ["CAUSAL_PATTERN"]
 
 
 class AnalysisEngine:
@@ -198,35 +198,21 @@ class AnalysisEngine:
 
     def run_anomaly(self, task) -> pb.AnomalyResult:
         now = int(time.time() * 1000)
-        findings = []   # 收集所有异常（约束 + 模式偏离）
+        findings = []   # 收集异常（模型检测）
 
-        # 检测类型显式化：methods 决定检什么（约束 / 模型 / 组合）
+        # 检测类型显式化：methods 决定检什么（异常约束检查已迁 C，P 只做模型方法）
         methods = list(task.methods) or DEFAULT_METHODS
-        do_constraint = "CONSTRAINT_CHECK" in methods
         model_methods = [m for m in methods if m != "CONSTRAINT_CHECK"]
-        logger.info("[engine] 任务 %s 检测类型：methods=%s → 约束=%s，模型=%s",
-                    task.task_id, methods, do_constraint, model_methods)
+        logger.info("[engine] 任务 %s 检测类型：methods=%s → 模型=%s",
+                    task.task_id, methods, model_methods)
         try:
             # ① 取 C 实时窗口（仅模型检测需要实时数据）
             if model_methods:
                 window = self.core.get_real_time_window(list(task.sequence_ids))
                 logger.info(f"[engine] ①取实时窗口：{len(window.sequences)} 条序列")
 
-            # ② 调 C 约束检查（仅 methods 含 CONSTRAINT_CHECK 时）
-            if do_constraint:
-                constraint_ids = list(task.semantic_context.constraint_ids)
-                logger.info("[engine] 任务 %s 收到的 constraint_ids = %s",
-                            task.task_id, constraint_ids)
-                satisfied, violations = self.core.check_constraints(
-                    constraint_ids, sequence_ids=list(task.sequence_ids))
-                logger.info(f"[engine] ②调 C 约束检查：satisfied={satisfied}，违规 {len(violations)} 条")
-                for v in violations:
-                    findings.append(pb.AnomalyFinding(
-                        anomaly_type="CONSTRAINT_CHECK", severity="HIGH",
-                        description=f"违反约束 {v.constraint_id}，实际值 {v.evaluated_value}",
-                        score=v.evaluated_value))
-
-            # ③ 模型检测（模式偏离异常；无模型方法则跳过）
+            # ② 模型检测（模式偏离异常；无模型方法则跳过）
+            #    （实时约束检查由 S 直接下发 C，C 自检测自写 S，P 不再参与）
             if model_methods:
                 for f in self._run_anomaly_models(task, model_methods):
                     finding = pb.AnomalyFinding(
@@ -234,19 +220,24 @@ class AnalysisEngine:
                         description=f["description"])
                     if f.get("score") is not None:
                         finding.score = f["score"]
+                    if f.get("time") is not None:
+                        finding.detected_time_ms = f["time"]
                     findings.append(finding)
 
-            # ④ 有异常 → 调 S 写异常
-            if findings:
+            # ③ 逐点写异常（老师确认 08-10）：一个异常点一个事件，不聚合。
+            #    每个点用自己的时间戳（模型取 index→窗口时间，兜底 now）。
+            for f in findings:
+                ts = getattr(f, "detected_time_ms", None) or now
                 ok = self.sender.send_event(
                     event_type=pb.ANOMALY_EVENT_TYPE_ANOMALY,
-                    event_time_ms=now,
+                    event_time_ms=ts,
                     sequence_ids=list(task.sequence_ids),
-                    values=[f.score for f in findings if f.score is not None],
+                    values=[f.score] if f.score is not None else [],
                     severity=pb.SEVERITY_HIGH,
-                    source=pb.ANOMALY_SOURCE_CONSTRAINT_CHECK,
+                    source=pb.ANOMALY_SOURCE_MODEL_ANOMALY_DETECTION,
                 )
-                logger.info(f"[engine] ④调 S 写异常：{'成功' if ok else '失败（S 未起/连不上）'}")
+                if not ok:
+                    logger.info("[engine] ③逐点写 S 异常失败：点 %s（S 未起/连不上）", ts)
 
             return pb.AnomalyResult(
                 task_id=task.task_id, run_id=f"run-{now}",
@@ -317,14 +308,21 @@ class AnalysisEngine:
 
             # 仅当有待训方法时才拉历史数据（fit 用）；窗口每周期都要（detect 用）
             history = self._get_history_matrix(seq_ids) if to_train else None
-            window = self._get_window_matrix(seq_ids)
+            window = self.core.get_aligned_window(
+                seq_ids, self.cfg["inference"]["window_size"])
+            matrix = np.array(window.values, dtype=np.float32)
+            times = window.timestamps_ms
             for method, model in ready.items():
                 if method in to_train:
                     model.fit(history)
                     self.store.save(f"{task.task_id}:{method}", model)
                     logger.info("[engine] 首训异常模型 %s（key=%s:%s）",
                                 method, task.task_id, method)
-                detected = model.detect(window)
+                detected = model.detect(matrix)
+                for f in detected:
+                    idx = f.get("index")
+                    if idx is not None and 0 <= idx < len(times):
+                        f["time"] = times[idx]   # 逐点写：index → 真实时间戳
                 if detected:
                     logger.info(f"[engine] 模型 {method} 检出 {len(detected)} 条模式偏离")
                 findings += detected
@@ -398,12 +396,6 @@ class AnalysisEngine:
         """从 C 拉历史数据，转成 [time, seq_count] 矩阵。"""
         chunk = self.core.get_history(seq_ids)
         return np.array(chunk.values, dtype=float)
-
-    def _get_window_matrix(self, seq_ids) -> np.ndarray:
-        """取最近窗口，转成 [time, seq_count] 矩阵。"""
-        window = self.core.get_aligned_window(
-            seq_ids, self.cfg["inference"]["window_size"])
-        return np.array(window.values, dtype=float)
 
     # ================= 工具 =================
 
