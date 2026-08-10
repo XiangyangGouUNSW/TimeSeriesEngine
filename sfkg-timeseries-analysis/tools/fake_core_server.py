@@ -71,6 +71,14 @@ class FakeCoreService(pb_grpc.TimeseriesCoreServiceServicer):
     def _ok():
         return pb.OperationResult(code=pb.OPERATION_CODE_OK)
 
+    @staticmethod
+    def _value_of(v) -> float | None:
+        """TimeseriesValue（oneof）→ float；非数值类型返回 None。"""
+        kind = v.WhichOneof("kind")
+        if kind in ("double_value", "int64_value", "bool_value"):
+            return float(getattr(v, kind))
+        return None
+
     def queryHistoryOverview(self, request, context):
         ids = list(request.sequence_ids) if request.sequence_ids else list(self._columns.keys())
         names = [self._col(sid) for sid in ids]
@@ -138,6 +146,122 @@ class FakeCoreService(pb_grpc.TimeseriesCoreServiceServicer):
                 sequences=sequences,
             ),
         )
+
+    def alignWindowData(self, request, context):
+        """对齐：分桶 + 聚合 + 缺失填充，返回统一时间轴的 AlignedWindowData。
+
+        对应 C 端 alignWindowData。source 两种都支持：
+          request.data          调用方直接给窗口；
+          request.window_query  让 C 先读自己的热窗口再对齐（P 端默认走这个）。
+        """
+        if request.HasField("data"):
+            window = request.data
+        elif request.HasField("window_query"):
+            window = self.queryWindowData(request.window_query, context).data
+        else:
+            return pb.AlignWindowDataResponse(
+                operation=pb.OperationResult(
+                    code=pb.OPERATION_CODE_INVALID_ARGUMENT,
+                    message="alignWindowData 需要 data 或 window_query"),
+            )
+
+        interval = request.config.bucket_interval
+        if interval <= 0:
+            return pb.AlignWindowDataResponse(
+                operation=pb.OperationResult(
+                    code=pb.OPERATION_CODE_INVALID_ARGUMENT,
+                    message="bucket_interval 必须 > 0"),
+            )
+
+        # 每条序列的原始点 {time: float}（非数值被 _value_of 过滤成 None）
+        raw = {}
+        for seq in window.sequences:
+            raw[seq.sequence_id] = {p.time: v for p in seq.points
+                                    if (v := self._value_of(p.value)) is not None}
+
+        # 对齐配置：按 sequence_id 找聚合/填充，缺省 LAST / LINEAR
+        agg_map = {sc.sequence_id: sc.aggregation for sc in request.config.sequences}
+        fill_map = {sc.sequence_id: sc.fill_method for sc in request.config.sequences}
+        seq_ids = [seq.sequence_id for seq in window.sequences]
+
+        # 统一时间轴：全部原始点覆盖范围，按 interval 分桶
+        all_times = sorted({t for pts in raw.values() for t in pts})
+        if not all_times:
+            return pb.AlignWindowDataResponse(
+                operation=self._ok(),
+                aligned_data=pb.AlignedWindowData(
+                    window_start_time=0, window_end_time=0),
+            )
+        t0, t1 = all_times[0], all_times[-1]
+        buckets = list(range(t0, t1 + 1, interval))
+
+        # 每条序列：先按桶聚合，再对缺失桶填充
+        aligned = {}
+        for sid in seq_ids:
+            pts = raw.get(sid, {})
+            agg = agg_map.get(sid, pb.BUCKET_AGGREGATION_LAST)
+            fill = fill_map.get(sid, pb.GAP_FILL_METHOD_LINEAR)
+            bucket_vals = []
+            for b in buckets:
+                vals = [v for t, v in pts.items() if b <= t < b + interval]
+                bucket_vals.append(self._aggregate(vals, agg) if vals else None)
+            aligned[sid] = self._fill_gaps(bucket_vals, fill)
+
+        samples = []
+        for i, b in enumerate(buckets):
+            sample = pb.AlignedSample(time=b)
+            sample.values.extend(
+                pb.AlignedValue(sequence_id=sid,
+                                value=pb.TimeseriesValue(double_value=aligned[sid][i]))
+                for sid in seq_ids if aligned[sid][i] is not None)
+            samples.append(sample)
+        return pb.AlignWindowDataResponse(
+            operation=self._ok(),
+            aligned_data=pb.AlignedWindowData(
+                window_start_time=t0, window_end_time=t1, samples=samples),
+        )
+
+    @staticmethod
+    def _aggregate(vals: list[float], agg) -> float:
+        """桶内聚合：LAST 缺省；数值聚合先过滤非有限值。"""
+        finite = [v for v in vals if np.isfinite(v)]
+        use = finite if finite else vals
+        if agg == pb.BUCKET_AGGREGATION_FIRST:
+            return use[0]
+        if agg == pb.BUCKET_AGGREGATION_AVERAGE:
+            return float(np.mean(use))
+        if agg == pb.BUCKET_AGGREGATION_MAXIMUM:
+            return float(np.max(use))
+        if agg == pb.BUCKET_AGGREGATION_MINIMUM:
+            return float(np.min(use))
+        return use[-1]                      # LAST 或 UNSPECIFIED
+
+    @staticmethod
+    def _fill_gaps(vals: list[float | None], fill) -> list[float | None]:
+        """对缺失桶做填充：LINEAR 缺省；PREVIOUS/NEXT/NEAR 就近取值。"""
+        known = [(i, v) for i, v in enumerate(vals) if v is not None]
+        if len(known) == len(vals):         # 没有缺失，直接返回
+            return vals
+        out = list(vals)
+        for i in range(len(out)):
+            if out[i] is not None:
+                continue
+            prev_j = max((j for j, _ in known if j < i), default=None)
+            nxt_j = min((j for j, _ in known if j > i), default=None)
+            prev = out[prev_j] if prev_j is not None else None
+            nxt = out[nxt_j] if nxt_j is not None else None
+            if fill == pb.GAP_FILL_METHOD_PREVIOUS:
+                out[i] = prev if prev is not None else nxt
+            elif fill == pb.GAP_FILL_METHOD_NEXT:
+                out[i] = nxt if nxt is not None else prev
+            elif fill == pb.GAP_FILL_METHOD_NEAR:
+                nearest = min((abs(j - i), v) for j, v in known)
+                out[i] = nearest[1]
+            elif prev_j is not None and nxt_j is not None:   # LINEAR
+                out[i] = prev + (nxt - prev) * (i - prev_j) / (nxt_j - prev_j)
+            else:
+                out[i] = prev if prev is not None else nxt
+        return out
 
     def computeBasicStatistics(self, request, context):
         """相关性向量：因变量(DEPENDENT) 与每个自变量(INDEPENDENT) 的 Pearson 相关。

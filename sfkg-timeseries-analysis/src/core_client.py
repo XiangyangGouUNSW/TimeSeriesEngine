@@ -57,7 +57,6 @@ class CoreDataClient:
         self,
         target_sequence_id: str,
         independent_sequence_ids: list[str],
-        relation_id: str | None = None,
     ) -> dict[str, float] | None:
         """相关性先验：因变量与每个自变量的相关系数 {independent_id: coef}。
 

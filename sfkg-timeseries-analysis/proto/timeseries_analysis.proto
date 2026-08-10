@@ -23,6 +23,7 @@ service TimeseriesAnalysisService {
 
 service AnalysisResultReceiverService {
   rpc ReceiveAnomalyResult (AnomalyResultMessage) returns (google.protobuf.Empty);
+  rpc ReceiveForecastResult (ForecastResultMessage) returns (google.protobuf.Empty);
 }
 
 // ── Enums ─────────────────────────────────────────────────────────
@@ -87,6 +88,20 @@ message AnomalyResultMessage {
   repeated double values = 4;
   Severity severity = 5;
   AnomalySource source = 6;
+}
+
+// ── Forecast result receiver message ──────────────────────────────
+
+message ForecastResultMessage {
+  string task_id = 1;
+  string run_id = 2;
+  int64 generated_at_ms = 3;
+  AnalysisStatus status = 4;
+  string message = 5;
+  repeated int64 timestamps_ms = 6;
+  repeated string sequence_ids = 7;
+  repeated double values = 8;
+  string model_version = 10;
 }
 
 // ── Task sync messages ────────────────────────────────────────────

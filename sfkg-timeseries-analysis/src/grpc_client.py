@@ -3,7 +3,7 @@
 实现 CoreDataClient 的方法：
   get_sequence_data_scale       → queryHistoryOverview（数据规模）
   get_history                   → queryHistoryData + raw_points_to_aligned（历史数据，训练用）
-  get_aligned_real_time_window  → queryWindowData 实时窗口对齐（检测/预测输入）
+  get_aligned_real_time_window  → alignWindowData（C 端对齐，检测/预测输入）
   check_constraints             → checkConstraints（约束检查，仅预测预警用）
 
 用法：config.yaml 的 core.provider 改成 "grpc" 后，main.py 自动用这个类。
@@ -39,6 +39,7 @@ class GrpcCoreDataClient(CoreDataClient):
         )
         self._stub = pb_grpc.TimeseriesCoreServiceStub(channel)
         self._timeout = timeout_seconds
+        self._bucket_cache: dict = {}   # frozenset(sequence_ids) -> 采样周期 ms
 
     # ---- 工具 ----
 
@@ -121,23 +122,78 @@ class GrpcCoreDataClient(CoreDataClient):
         )
         return resp.data
 
-    def get_aligned_real_time_window(self, sequence_ids: list[str]) -> AlignedWindow:
-        """取 C 实时窗口（queryWindowData）并对齐成 [时间×序列] 矩阵。
+    def get_aligned_real_time_window(
+        self,
+        sequence_ids: list[str],
+        bucket_interval_ms: int | None = None,
+    ) -> AlignedWindow:
+        """取 C 实时窗口并对齐成 [时间×序列] 矩阵（检测/预测输入）。
 
-        检测/预测的输入窗口（训练才用历史 get_history）。C 返回最近一个热窗口，
-        行数由 C 决定（queryWindowData 无窗口大小参数），P 端按模型需要取尾部。
-        这里只负责「取实时窗口 + 对齐」，不做行数截断。
+        对齐由 C 端 alignWindowData 完成（分桶、聚合、缺失填充、lag 调整），
+        P 不做对齐。window_query 让 C 先读自己的热窗口再对齐；返回统一时间轴的
+        AlignedWindowData，这里只转成模型要的矩阵（行=时间，列=sequence_ids）。
+        行数由 C 的窗口和 bucket_interval 决定，引擎按模型需要取尾部。
+        bucket_interval_ms 缺省时从历史概览推断采样周期（取最粗的），并缓存。
         """
-        data = self.get_real_time_window(sequence_ids)   # WindowData
-        points = []
-        for seq in data.sequences:
-            for p in seq.points:
-                value = p.value
-                kind = value.WhichOneof("kind")
-                if kind is None:
-                    continue
-                points.append((p.time, seq.sequence_id, getattr(value, kind)))
-        timestamps, rows = raw_points_to_aligned(points, sequence_ids)
+        if bucket_interval_ms is None:
+            bucket_interval_ms = self._infer_bucket_interval(sequence_ids)
+        config = pb.AlignmentConfig(
+            bucket_interval=bucket_interval_ms,
+            sequences=[
+                pb.SequenceAlignmentConfig(
+                    sequence_id=sid,
+                    aggregation=pb.BUCKET_AGGREGATION_LAST,
+                    fill_method=pb.GAP_FILL_METHOD_LINEAR,
+                )
+                for sid in sequence_ids
+            ],
+        )
+        resp = self._call(
+            self._stub.alignWindowData,
+            pb.AlignWindowDataRequest(
+                window_query=pb.QueryWindowDataRequest(
+                    sequence_ids=list(sequence_ids)),
+                config=config,
+            ),
+        )
+        return self._aligned_to_window(resp.aligned_data, sequence_ids)
+
+    def _infer_bucket_interval(self, sequence_ids: list[str]) -> int:
+        """从历史概览推断采样周期（平均间隔，取最粗的），并缓存。"""
+        key = frozenset(sequence_ids)
+        if key in self._bucket_cache:
+            return self._bucket_cache[key]
+        intervals = []
+        for s in self.get_sequence_data_scale(sequence_ids):
+            if (s.point_count and s.point_count > 1
+                    and s.start_time_ms is not None and s.end_time_ms is not None):
+                intervals.append((s.end_time_ms - s.start_time_ms) / (s.point_count - 1))
+        if not intervals:
+            raise CoreDataException("推断不出采样间隔，无法对齐实时窗口")
+        bucket = int(max(intervals))
+        self._bucket_cache[key] = bucket
+        return bucket
+
+    def _aligned_to_window(
+        self, aligned, sequence_ids: list[str]) -> AlignedWindow:
+        """C 的 AlignedWindowData（统一时间轴）→ AlignedWindow（行=时间，列=序列）。
+
+        对齐已由 C 完成，这里只是把「按时间组织的多值样本」摆成模型要的矩阵。
+        """
+        timestamps: list[int] = []
+        rows: list[list[float]] = []
+        for sample in aligned.samples:
+            by_id = {v.sequence_id: v.value for v in sample.values}
+            row = []
+            for sid in sequence_ids:
+                v = by_id.get(sid)
+                kind = v.WhichOneof("kind") if v is not None else None
+                if kind in ("double_value", "int64_value", "bool_value"):
+                    row.append(float(getattr(v, kind)))
+                else:
+                    row.append(float("nan"))   # string / 缺失值
+            timestamps.append(sample.time)
+            rows.append(row)
         return AlignedWindow(
             timestamps_ms=timestamps,
             sequence_ids=sequence_ids,
@@ -160,13 +216,12 @@ class GrpcCoreDataClient(CoreDataClient):
         self,
         target_sequence_id: str,
         independent_sequence_ids: list[str],
-        relation_id: str | None = None,
     ) -> dict[str, float] | None:
         """调 C 的 computeBasicStatistics 拿相关性向量（GCAD 的相关性先验）。
 
         因变量/自变量通过 alignment_config 的角色（DEPENDENT/INDEPENDENT）告诉 C，
-        relation_id 指定对应的时序关联；C 用窗口数据算因变量与每个自变量的
-        Pearson 相关系数。返回 {independent_sequence_id: coefficient}。
+        C 按角色匹配已注册关系（按 category_id），用窗口数据算因变量与每个
+        自变量的 Pearson 相关系数。返回 {independent_sequence_id: coefficient}。
         """
         alignment_config = pb.AlignmentConfig(
             sequences=[
@@ -179,7 +234,6 @@ class GrpcCoreDataClient(CoreDataClient):
             ],
         )
         request = pb.ComputeStatisticsRequest(
-            relation_id=relation_id or "",
             alignment_config=alignment_config,
             window_query=pb.QueryWindowDataRequest(
                 sequence_ids=[target_sequence_id] + list(independent_sequence_ids)),
