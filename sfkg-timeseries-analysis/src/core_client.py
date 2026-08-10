@@ -44,12 +44,13 @@ class CoreDataClient:
     ) -> HistoricalDataChunk:
         raise NotImplementedError
 
-    def get_aligned_window(
-        self,
-        sequence_ids: list[str],
-        window_size: int,
-        end_time_ms: int | None = None,
-    ) -> AlignedWindow:
+    def get_aligned_real_time_window(self, sequence_ids: list[str]) -> AlignedWindow:
+        """取 C 实时窗口（queryWindowData）并对齐成 [时间×序列] 矩阵。
+
+        这是模型 detect / 预测的输入；训练才用 get_history（历史数据）。
+        返回 AlignedWindow（时间升序、缺失值 NaN）。窗口行数由 C 端决定
+        （queryWindowData 无窗口大小参数），P 端按模型需要取尾部。
+        """
         raise NotImplementedError
 
     def get_correlation_vector(
@@ -215,29 +216,30 @@ class MockCoreDataClient(CoreDataClient):
             is_last_chunk=True,
         )
 
-    def get_aligned_window(
+    def get_aligned_real_time_window(
         self,
         sequence_ids: list[str],
-        window_size: int,
-        end_time_ms: int | None = None,
+        window_rows: int = 500,
     ) -> AlignedWindow:
-        # 1. 先用 overview 知道总范围，算出平均采样间隔
-        ov = self.query_history_overview(sequence_ids)
-        end = end_time_ms if end_time_ms is not None else ov.last_time_ms
-        # 2. 往前推一个足够大的范围（2 倍余量），拉原始点
-        span = 0
-        for s in ov.series:
-            if s.point_count > 1 and s.first_time_ms is not None:
-                interval = (s.last_time_ms - s.first_time_ms) / (s.point_count - 1)
-                span = max(span, int(interval * window_size * 2) + 1)
-        start = end - span if span else (ov.first_time_ms or 0)
-        points = self.query_history_data(sequence_ids, start, end)
-        # 3. 拼对齐表，取最后 window_size 行
+        """假实时窗口：取每条序列最后 window_rows 行（模拟 C 的热窗口）。
+
+        对应 C 的 queryWindowData：P 传 sequence_ids，C 返回最近一个热窗口，
+        P 对齐成 [时间×序列] 矩阵。行数由 C 决定（这里固定 window_rows），
+        引擎按模型需要取尾部。
+        """
+        names = [self._col(sid) for sid in sequence_ids]
+        n = len(self._timestamps_ms)
+        idx = list(range(max(0, n - window_rows), n))
+        points = [
+            (self._timestamps_ms[i], sid, self._columns[name][i])
+            for i in idx
+            for sid, name in zip(sequence_ids, names)
+        ]
         timestamps, rows = raw_points_to_aligned(points, sequence_ids)
         return AlignedWindow(
-            timestamps_ms=timestamps[-window_size:],
+            timestamps_ms=timestamps,
             sequence_ids=sequence_ids,
-            values=rows[-window_size:],
+            values=rows,
         )
 
     # ---- 演示专用：取某时刻之后的真实值（用来和预测对比） ----

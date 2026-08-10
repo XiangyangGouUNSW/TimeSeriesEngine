@@ -1,11 +1,10 @@
 """GrpcCoreDataClient：通过 gRPC 访问真正的 C 端（sfkg-timeseries-core）。
 
 实现 CoreDataClient 的方法：
-  get_sequence_data_scale → queryHistoryOverview（数据规模）
-  get_history             → queryHistoryData + raw_points_to_aligned（历史数据）
-  get_aligned_window      → queryHistoryData 拉末尾拼（窗口）
-  get_real_time_window    → queryWindowData（实时窗口，异常检测输入）
-  check_constraints       → checkConstraints（约束检查，异常/预测共用）
+  get_sequence_data_scale       → queryHistoryOverview（数据规模）
+  get_history                   → queryHistoryData + raw_points_to_aligned（历史数据，训练用）
+  get_aligned_real_time_window  → queryWindowData 实时窗口对齐（检测/预测输入）
+  check_constraints             → checkConstraints（约束检查，仅预测预警用）
 
 用法：config.yaml 的 core.provider 改成 "grpc" 后，main.py 自动用这个类。
 """
@@ -111,34 +110,8 @@ class GrpcCoreDataClient(CoreDataClient):
             is_last_chunk=True,
         )
 
-    def get_aligned_window(
-        self,
-        sequence_ids: list[str],
-        window_size: int,
-        end_time_ms: int | None = None,
-    ) -> AlignedWindow:
-        # 暂时用历史数据拉末尾一段拼（等 C 的 queryWindowData 做好再换）
-        scales = self.get_sequence_data_scale(sequence_ids)
-        ends = [s.end_time_ms for s in scales if s.end_time_ms is not None]
-        end = end_time_ms if end_time_ms is not None else (max(ends) if ends else None)
-        if end is None:
-            raise CoreDataException("查询不到数据范围，无法取窗口")
-        # 按平均采样间隔推一个足够大的范围（2 倍余量）
-        span = 0
-        for s in scales:
-            if s.point_count > 1 and s.start_time_ms is not None and s.end_time_ms is not None:
-                interval = (s.end_time_ms - s.start_time_ms) / (s.point_count - 1)
-                span = max(span, int(interval * window_size * 2) + 1)
-        start = end - span if span else end - 3600_000 * window_size
-        chunk = self.get_history(sequence_ids, start_time_ms=start, end_time_ms=end)
-        return AlignedWindow(
-            timestamps_ms=chunk.timestamps_ms[-window_size:],
-            sequence_ids=sequence_ids,
-            values=chunk.values[-window_size:],
-        )
-
     def get_real_time_window(self, sequence_ids: list[str]):
-        """调 C 的 queryWindowData 取实时窗口（异常检测的模型输入）。
+        """调 C 的 queryWindowData 取实时窗口（检测/预测的模型输入）。
 
         返回 C 的 WindowData（按序列组织的原始点，未对齐）。
         """
@@ -148,29 +121,38 @@ class GrpcCoreDataClient(CoreDataClient):
         )
         return resp.data
 
-    def check_constraints(
-        self,
-        constraint_ids: list[str],
-        sequence_ids: list[str] | None = None,
-        aligned_data=None,
-    ):
-        """调 C 的 checkConstraints 做约束检查。
+    def get_aligned_real_time_window(self, sequence_ids: list[str]) -> AlignedWindow:
+        """取 C 实时窗口（queryWindowData）并对齐成 [时间×序列] 矩阵。
 
-        - 异常检测：传 sequence_ids，让 C 检查它自己的实时窗口；
-        - 预测预警：传 aligned_data（把预测值包成 AlignedWindowData），
-          让 C 检查未来预测值是否会违反约束。
-        constraint_ids: 本次要检查的约束 ID 列表（来自任务配置的 semantic_context）。
-        返回 (satisfied, violations)。
+        检测/预测的输入窗口（训练才用历史 get_history）。C 返回最近一个热窗口，
+        行数由 C 决定（queryWindowData 无窗口大小参数），P 端按模型需要取尾部。
+        这里只负责「取实时窗口 + 对齐」，不做行数截断。
         """
-        if aligned_data is not None:
-            request = pb.CheckConstraintsRequest(
-                constraint_ids=list(constraint_ids), aligned_data=aligned_data)
-        else:
-            request = pb.CheckConstraintsRequest(
-                constraint_ids=list(constraint_ids),
-                window_query=pb.QueryWindowDataRequest(
-                    sequence_ids=list(sequence_ids or [])),
-            )
+        data = self.get_real_time_window(sequence_ids)   # WindowData
+        points = []
+        for seq in data.sequences:
+            for p in seq.points:
+                value = p.value
+                kind = value.WhichOneof("kind")
+                if kind is None:
+                    continue
+                points.append((p.time, seq.sequence_id, getattr(value, kind)))
+        timestamps, rows = raw_points_to_aligned(points, sequence_ids)
+        return AlignedWindow(
+            timestamps_ms=timestamps,
+            sequence_ids=sequence_ids,
+            values=rows,
+        )
+
+    def check_constraints(self, constraint_ids: list[str], aligned_data):
+        """调 C 的 checkConstraints 检查预测值是否违反约束（仅预测预警用）。
+
+        aligned_data: 把预测值包成 AlignedWindowData（P 端 _build_aligned 生成），
+        C 检查这些未来值是否会违反约束。返回 (satisfied, violations)。
+        实时约束检查已迁 C（C 自执行、违规 C 直接写 S），不再有 window_query 分支。
+        """
+        request = pb.CheckConstraintsRequest(
+            constraint_ids=list(constraint_ids), aligned_data=aligned_data)
         resp = self._call(self._stub.checkConstraints, request)
         return resp.satisfied, list(resp.violations)
 

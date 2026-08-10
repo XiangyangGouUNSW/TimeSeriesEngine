@@ -11,8 +11,15 @@ core 指定的两个模型：
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 from sklearn.cluster import DBSCAN
+from threadpoolctl import threadpool_limits
+
+# 80 核机器上 sklearn/numpy 默认开满 OpenMP 线程，小矩阵反而被线程调度拖到
+# 60s+ 不收敛。训练一律限线程数，避免和 gRPC 服务线程争抢 CPU（生产并发是硬性要求）。
+_MAX_THREADS = int(os.environ.get("SFKG_MAX_THREADS", "4"))
 
 
 class AnomalyModel:
@@ -42,7 +49,8 @@ class DbscanAnomalyModel(AnomalyModel):
         history = np.asarray(history, dtype=float)
         if history.ndim == 1:
             history = history.reshape(-1, 1)
-        model = DBSCAN(eps=self.eps, min_samples=self.min_samples).fit(history)
+        with threadpool_limits(limits=_MAX_THREADS):
+            model = DBSCAN(eps=self.eps, min_samples=self.min_samples).fit(history)
         # 正常点 = 所有被分进簇的点（核心点 + 边界点），排除噪声(-1)。
         # 注意：这不是"严格核心点"（严格核心点要用 model.core_sample_indices_），
         # 而是"非噪声点"——正常区域的完整形态（含边缘），检测更宽容。
@@ -133,7 +141,8 @@ class GcadAnomalyModel(AnomalyModel):
         # lasso 稀疏回归：只有真正影响因变量的自变量有非零系数
         from sklearn.linear_model import Lasso
         lasso = Lasso(alpha=self.alpha, max_iter=3000, tol=1e-4)
-        lasso.fit(X, y)
+        with threadpool_limits(limits=_MAX_THREADS):
+            lasso.fit(X, y)
         self._coef = np.concatenate([lasso.coef_, [lasso.intercept_]])
         residuals = np.abs(y - lasso.predict(X))
         self._threshold = float(np.quantile(residuals, self.residual_quantile))

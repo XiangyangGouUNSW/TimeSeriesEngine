@@ -11,11 +11,16 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# 80 核机器上 torch 默认开满 OpenMP 线程，训练反而被线程调度拖慢；
+# 训练限线程数，避免和 gRPC 服务线程争抢 CPU（生产并发是硬性要求）。
+_TRAIN_THREADS = int(os.environ.get("SFKG_MAX_THREADS", "4"))
 
 try:
     import torch
@@ -63,6 +68,7 @@ class PatchTSTForecaster:
         切滑动窗口样本 (x: [context, C] -> y: [prediction, C])，
         GPU 训练 N 个 epoch，MSELoss。
         """
+        torch.set_num_threads(_TRAIN_THREADS)
         X = np.asarray(history_matrix, dtype=np.float32)
         if X.ndim != 2:
             raise ValueError(f"history_matrix 应为 [T, C]，实际 {X.shape}")

@@ -68,20 +68,16 @@ def test_registry() -> None:
 # ================= 检测类型解析 =================
 
 class FakeCore:
-    """只实现 run_anomaly 用到的两个 C 调用；约束结果全部"满足"。
+    """只实现 run_anomaly 用到的 C 调用；约束结果全部"满足"。
 
     result_client 用 None（无异常时不会写 S 事件）。
+    窗口获取在 _run_anomaly_models 内（本测试 stub 掉，真路径由 gcad 集成测试覆盖）。
     """
 
     def __init__(self):
         self.constraint_calls = 0
-        self.window_calls = 0
 
-    def get_real_time_window(self, seq_ids):
-        self.window_calls += 1
-        return types.SimpleNamespace(sequences=[])
-
-    def check_constraints(self, constraint_ids, sequence_ids=None, aligned_data=None):
+    def check_constraints(self, constraint_ids, aligned_data=None):
         self.constraint_calls += 1
         return True, []
 
@@ -111,20 +107,18 @@ def test_methods_parsing() -> None:
     assert seen == [["CAUSAL_PATTERN"]], f"模型方法应只剩 CAUSAL_PATTERN，实际 {seen}"
     _ok("组合：CONSTRAINT_CHECK 被过滤，只跑模型")
 
-    # 只约束：P 不参与（S 直接下发 C）→ 不取窗口、不跑模型、无 finding
+    # 只约束：P 不参与（S 直接下发 C）→ 不跑模型、无 finding
     eng, seen = _parse_engine()
     res = eng.run_anomaly(_anomaly_task("t-constraint", ["CONSTRAINT_CHECK"]))
     assert eng.core.constraint_calls == 0
-    assert eng.core.window_calls == 0, "只约束不应取实时窗口"
     assert seen == [], "只约束不应跑模型"
     assert res.findings == [], "只约束 P 不产 finding（C 自检测自写 S）"
-    _ok("只约束：P 不参与，不取窗口、不跑模型")
+    _ok("只约束：P 不参与，不跑模型、无 finding")
 
-    # 只模型：不调约束检查
+    # 只模型：不调约束检查，模型方法完整传给检测
     eng, seen = _parse_engine()
     eng.run_anomaly(_anomaly_task("t-model", ["CAUSAL_PATTERN"]))
     assert eng.core.constraint_calls == 0, "只模型不应调约束检查"
-    assert eng.core.window_calls == 1
     assert seen == [["CAUSAL_PATTERN"]]
     _ok("只模型：不调约束检查")
 

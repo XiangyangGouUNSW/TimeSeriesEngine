@@ -30,11 +30,7 @@ data:
     - "ETTh1_LULL"
 
 training:
-  min_train_points: 1000       # 数据规模门槛：点数达到就开始训练
-  poll_interval_seconds: 3     # 轮询间隔（演示用短一点）
-  max_poll_attempts: 5         # 最多轮询几次
-  ar_order: 5                  # 自回归阶数 p（AR 基线/演示用）
-  train_ratio: 0.8             # 用前 80% 的数据训练
+  train_ratio: 0.8             # 用前 80% 的数据训练（训练门槛看任务 minimum_points）
 
 forecast_model:
   type: "patchtst"             # 预测模型：PatchTST（SOTA Transformer 类）
@@ -50,10 +46,8 @@ forecast_model:
   learning_rate: 0.001         # 学习率
 
 inference:
-  window_size: 100             # 推理时取最近多少行当输入
+  window_size: 100             # 异常检测：取实时窗口最近多少行当输入
   horizon_steps: 24            # 预测未来多少步
-  pretend_today_ratio: 0.97    # 演示：假装"现在是"数据集的 97% 位置，
-                               # 留最后 3% 当真实值，用来对比预测准不准
 
 scheduler:
   interval_seconds: 10         # 固定周期触发间隔：每 N 秒跑一次所有 ENABLED 任务

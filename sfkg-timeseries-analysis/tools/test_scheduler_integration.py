@@ -46,7 +46,7 @@ INTERVAL = 1.0     # 调度周期（测试里调短，加速验证）
 
 def _cfg():
     return {
-        "training": {"train_ratio": 0.8, "min_train_points": 1000},
+        "training": {"train_ratio": 0.8},
         "forecast_model": {
             "type": "patchtst", "context_length": 96, "prediction_length": 24,
             "patch_size": 16, "patch_stride": 8, "d_model": 64, "n_heads": 4,

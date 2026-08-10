@@ -35,8 +35,13 @@ import timeseries_core_pb2_grpc as pb_grpc
 class FakeCoreService(pb_grpc.TimeseriesCoreServiceServicer):
     """只实现 P 端要用的两个接口，别的都会返回 UNIMPLEMENTED。"""
 
-    def __init__(self, csv_path: str, seq_prefix: str = "ETTh1"):
+    def __init__(self, csv_path: str, seq_prefix: str = "ETTh1",
+                 window_rows: int = 500):
+        """window_rows: queryWindowData 假实时窗口返回最近多少行（模拟 C 热窗口）。
+        行数由 C 端决定（请求里没有窗口大小参数），P 端对齐后按模型需要取尾部。
+        """
         self._prefix = seq_prefix
+        self._window_rows = window_rows
         self._timestamps_ms, self._columns = self._load_csv(csv_path)
 
     def _load_csv(self, path: str):
@@ -111,10 +116,10 @@ class FakeCoreService(pb_grpc.TimeseriesCoreServiceServicer):
         )
 
     def queryWindowData(self, request, context):
-        """假实时窗口：返回每条序列最后 3 个点（模拟热窗口）。"""
+        """假实时窗口：返回每条序列最近 window_rows 个点（模拟 C 的热窗口）。"""
         names = [self._col(sid) for sid in request.sequence_ids]
         n = len(self._timestamps_ms)
-        idx = list(range(max(0, n - 3), n))
+        idx = list(range(max(0, n - self._window_rows), n))
         sequences = []
         for sid, name in zip(request.sequence_ids, names):
             points = [

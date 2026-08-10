@@ -36,15 +36,6 @@ class AlignedWindow:
 
 
 @dataclass
-class ForecastOutput:
-    """推理输出。"""
-    sequence_id: str
-    timestamps_ms: list[int]            # 未来每个时刻
-    values: list[float]                 # 每个时刻的预测值
-    window_last_time_ms: int            # 最后一个输入点的时间（算误差用）
-
-
-@dataclass
 class HistorySeriesSummary:
     """一条序列的历史数据规模摘要（对应 C 端 overview.series）。"""
     sequence_id: str

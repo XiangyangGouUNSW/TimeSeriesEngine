@@ -19,7 +19,6 @@ import numpy as np
 import timeseries_analysis_pb2 as pb        # P↔S 的消息（ForecastResult/AnomalyResult）
 import timeseries_core_pb2 as cpb           # P↔C 的消息（AlignedWindowData）
 
-from ar_model import AutoregressiveModel
 from anomaly_models import build_anomaly_model
 from patchtst_forecaster import PatchTSTForecaster
 from training_loop import ModelStore
@@ -68,17 +67,18 @@ class AnalysisEngine:
             # ② 预测模型复用：缓存命中就跳过训练，否则训练并保存
             model = self._get_or_train_forecaster(task, all_ids, scales)
 
-            # ③ 取最近多元窗口，预测未来
+            # ③ 取实时窗口（对齐成矩阵）预测未来。训练才用历史，推理一律实时窗口
             ctx = self._context_length(task)
-            window = self.core.get_aligned_window(all_ids, ctx)
-            matrix = np.array(window.values, dtype=np.float32)
+            window = self.core.get_aligned_real_time_window(all_ids)
+            times = window.timestamps_ms[-ctx:]
+            matrix = np.array(window.values[-ctx:], dtype=np.float32)
             horizon = task.forecast_horizon_steps or self.cfg["inference"]["horizon_steps"]
             pred_map = model.forecast(matrix, steps=horizon)
             preds = pred_map[target]
             step_ms = 3600_000
-            if len(window.timestamps_ms) >= 2:
-                step_ms = window.timestamps_ms[-1] - window.timestamps_ms[-2]
-            last_ts = window.timestamps_ms[-1]
+            if len(times) >= 2:
+                step_ms = times[-1] - times[-2]
+            last_ts = times[-1]
             out_ts = [last_ts + step_ms * (i + 1) for i in range(horizon)]
             logger.info(f"[engine] ③预测 {target} 未来 {horizon} 步，前 3 个值 {[round(v,2) for v in preds[:3]]}")
 
@@ -206,13 +206,8 @@ class AnalysisEngine:
         logger.info("[engine] 任务 %s 检测类型：methods=%s → 模型=%s",
                     task.task_id, methods, model_methods)
         try:
-            # ① 取 C 实时窗口（仅模型检测需要实时数据）
-            if model_methods:
-                window = self.core.get_real_time_window(list(task.sequence_ids))
-                logger.info(f"[engine] ①取实时窗口：{len(window.sequences)} 条序列")
-
-            # ② 模型检测（模式偏离异常；无模型方法则跳过）
-            #    （实时约束检查由 S 直接下发 C，C 自检测自写 S，P 不再参与）
+            # ① 模型检测（模式偏离异常；无模型方法则跳过）。
+            #    推理输入 = 实时窗口对齐矩阵（见 _run_anomaly_models ③）；训练才用历史。
             if model_methods:
                 for f in self._run_anomaly_models(task, model_methods):
                     finding = pb.AnomalyFinding(
@@ -266,53 +261,55 @@ class AnalysisEngine:
         if not seq_ids or not model_methods:
             return []
         findings = []
-        try:
-            # 语义上下文 → 因变量/自变量（列索引），各方法共用一套
-            target_id, source_ids = self._extract_roles(task, seq_ids)
-            target_index = seq_ids.index(target_id) if target_id in seq_ids else None
-            source_indices = [seq_ids.index(sid) for sid in source_ids if sid in seq_ids]
-            # 相关性先验：调 C 失败就降级为 None（模型用不上先验）
-            corr_prior = None
-            if target_id and source_ids:
-                try:
-                    corr_prior = self._get_correlation_prior(target_id, source_ids, seq_ids)
-                except Exception as e:
-                    logger.info(f"[engine] 拿相关性先验失败，降级为不用先验：{e}")
-            # 互耦对：从语义上下文 relations 识别（MUTUAL_COUPLING 方法用）
-            coupled_pairs = self._extract_coupled_pairs(task, seq_ids)
 
-            # 方法 → 模型：缓存命中直接复用；未命中才建模型待训
-            ready: dict[str, object] = {}
-            to_train: list[str] = []
-            for method in model_methods:
-                key = f"{task.task_id}:{method}"
-                model = self.store.get(key)
-                if model is not None:
-                    ready[method] = model
-                    continue
-                model = build_anomaly_model(
-                    method,
-                    target_index=target_index,
-                    source_indices=source_indices,
-                    correlation_prior=corr_prior,
-                    coupled_pairs=coupled_pairs,
-                )
-                if model is None:
-                    logger.warning("[engine] 未知检测方法 %s，跳过", method)
-                    continue
+        # ① 语义上下文 → 因变量/自变量（列索引）、相关性先验、互耦对
+        target_id, source_ids = self._extract_roles(task, seq_ids)
+        target_index = seq_ids.index(target_id) if target_id in seq_ids else None
+        source_indices = [seq_ids.index(sid) for sid in source_ids if sid in seq_ids]
+        corr_prior = None
+        if target_id and source_ids:
+            try:
+                corr_prior = self._get_correlation_prior(target_id, source_ids, seq_ids)
+            except Exception as e:
+                logger.info(f"[engine] 拿相关性先验失败，降级为不用先验：{e}")
+        coupled_pairs = self._extract_coupled_pairs(task, seq_ids)
+
+        # ② 方法 → 模型：缓存命中直接复用；未命中才建模型待训
+        ready: dict[str, object] = {}
+        to_train: list[str] = []
+        for method in model_methods:
+            key = f"{task.task_id}:{method}"
+            model = self.store.get(key)
+            if model is not None:
                 ready[method] = model
-                to_train.append(method)
+                continue
+            model = build_anomaly_model(
+                method,
+                target_index=target_index,
+                source_indices=source_indices,
+                correlation_prior=corr_prior,
+                coupled_pairs=coupled_pairs,
+            )
+            if model is None:
+                logger.warning("[engine] 未知检测方法 %s，跳过", method)
+                continue
+            ready[method] = model
+            to_train.append(method)
 
-            if not ready:
-                return []
+        if not ready:
+            return []
 
-            # 仅当有待训方法时才拉历史数据（fit 用）；窗口每周期都要（detect 用）
-            history = self._get_history_matrix(seq_ids) if to_train else None
-            window = self.core.get_aligned_window(
-                seq_ids, self.cfg["inference"]["window_size"])
-            matrix = np.array(window.values, dtype=np.float32)
-            times = window.timestamps_ms
-            for method, model in ready.items():
+        # ③ 拉数据：训练用历史矩阵；检测用实时窗口对齐矩阵（统一 [时间×序列]）。
+        #    C 不可达/无数据 → 异常向上抛，run_anomaly 报 FAILED（而不是"没检出"）。
+        history = self._get_history_matrix(seq_ids) if to_train else None
+        window = self.core.get_aligned_real_time_window(seq_ids)
+        ws = int(self.cfg["inference"]["window_size"])
+        matrix = np.array(window.values[-ws:], dtype=np.float32)
+        times = window.timestamps_ms[-ws:]
+
+        # ④ 逐模型训练/检测：单模型异常不影响其他模型
+        for method, model in ready.items():
+            try:
                 if method in to_train:
                     model.fit(history)
                     self.store.save(f"{task.task_id}:{method}", model)
@@ -326,8 +323,8 @@ class AnalysisEngine:
                 if detected:
                     logger.info(f"[engine] 模型 {method} 检出 {len(detected)} 条模式偏离")
                 findings += detected
-        except Exception as e:
-            logger.info(f"[engine] 模型检测异常：{e}")
+            except Exception as e:
+                logger.info(f"[engine] 模型 {method} 检测异常：{e}")
         return findings
 
     def _extract_roles(self, task, seq_ids) -> tuple[str | None, list[str]]:
@@ -405,7 +402,7 @@ class AnalysisEngine:
             task_id=task.task_id, run_id=f"run-{int(time.time()*1000)}",
             generated_at_ms=int(time.time()*1000), status=status, message=message,
             timestamps_ms=timestamps or [], sequence_ids=sequence_ids or [],
-            values=values or [], risk_findings=[], model_version="ar-shell-v1")
+            values=values or [], risk_findings=[], model_version="patchtst-shell-v1")
 
     def _build_aligned(self, target, timestamps, preds):
         """把预测值包成 C 端认识的 AlignedWindowData（供 checkConstraints）。"""
