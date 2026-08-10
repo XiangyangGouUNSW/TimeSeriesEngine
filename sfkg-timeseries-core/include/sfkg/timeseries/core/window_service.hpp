@@ -26,6 +26,11 @@ public:
         const TimeseriesBatch& data,
         std::int64_t window_size);
 
+    // Replaces a derived sequence in memory only. It never reaches storage.
+    OperationResult replaceDerivedSequence(
+        const SequenceId& sequence_id,
+        const TimeseriesBatch& data);
+
     WindowQueryResult queryWindowData(
         const WindowQuery& query) const;
 

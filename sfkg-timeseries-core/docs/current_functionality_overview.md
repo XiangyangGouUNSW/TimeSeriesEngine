@@ -70,6 +70,21 @@ Core 通过以下 gRPC 接口接收配置，并保存在内存注册表中：
 长度。不同任务需要不同窗口长度时，当前建议使用不同 Core 实例；按 `task_id`
 在同一 Core 内维护多份窗口配置尚未实现。
 
+### 3.5 派生序列配置
+
+`syncDerivedSeriesConfigs` 用于注册由已有连续数值序列计算得到的派生序列。当前
+支持两种公式：
+
+- 线性组合：`bias + c1 * source1 + c2 * source2 + ...`；
+- 二叉表达式树：常量、序列叶子，以及加减乘除运算节点，可以表达多个变量的组合。
+
+Core 会检查来源序列已经注册为连续数值序列，并在配置同步成功后立即根据当前热窗口
+计算。后续 `ingestData` 更新热窗口时也会自动刷新派生结果。不同来源的时间点不完全
+一致时，连续序列在相邻点之间采用线性插值；没有足够邻点时该时刻暂不产生结果。
+
+派生序列只保存在内存热窗口中，不写入 TDengine 原始数据超级表，也不会出现在历史
+查询结果中。派生序列 ID 不能与原始实例序列 ID 冲突。
+
 ## 4. 数据接入和存储
 
 ### 4.1 完整接入流程
@@ -82,6 +97,7 @@ gRPC 请求
   → 序列解析与数据类型校验
   → TDengine 原始数据写入
   → 内存热窗口更新
+  → 刷新派生序列热窗口视图
   → 检查当前窗口中的已启用约束
   → 有违反时调用统一服务的 ReceiveConstraintResult
   → 返回总结果和各阶段结果
@@ -93,6 +109,7 @@ gRPC 请求
 - `storage_result`：TDengine 写入结果；
 - `window_result`：热窗口更新结果；
 - `constraint_notification_result`：约束检查及异常通知结果；没有违反时不发送通知；
+- `derived_result`：派生序列热窗口刷新结果；派生结果不落盘；
 - `operation`：综合结果。
 
 当前写入和窗口更新是同一请求线程中的两个独立操作，不是数据库事务；一处成功、
@@ -245,7 +262,7 @@ gRPC 请求
 
 | 分类 | 接口 |
 | --- | --- |
-| 配置同步 | `syncInstanceConfigs`、`syncWindowConfig`、`syncConstraints`、`syncRelations` |
+| 配置同步 | `syncInstanceConfigs`、`syncWindowConfig`、`syncConstraints`、`syncRelations`、`syncDerivedSeriesConfigs` |
 | 数据接入 | `ingestData`、`ingestAndResolveData` |
 | 存储和窗口 | `writeRawData`、`buildTimeWindow`、`queryWindowData` |
 | 数据处理 | `alignWindowData`、`computeBasicStatistics`、`checkConstraints` |

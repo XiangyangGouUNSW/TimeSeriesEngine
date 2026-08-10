@@ -40,6 +40,9 @@ public:
     OperationResult upsertRelations(
         const RuntimeConfigSnapshot<RuntimeRelationConfig>& snapshot);
 
+    OperationResult upsertDerivedSeriesConfigs(
+        const RuntimeConfigSnapshot<RuntimeDerivedSeriesConfig>& snapshot);
+
     std::optional<RuntimeInstanceConfig> findInstance(
         const SequenceId& sequence_id) const;
     std::optional<SequenceId> resolveSequenceId(
@@ -47,6 +50,7 @@ public:
         const std::string& external_sequence_id) const;
     std::optional<RuntimeRelationConfig> findRelation(
         const std::string& relation_id) const;
+    std::vector<RuntimeDerivedSeriesConfig> allDerivedSeries() const;
     ConstraintLookupResult lookupConstraints(
         const std::vector<std::string>& constraint_ids) const;
     std::vector<ConstraintRule> enabledConstraints(
@@ -69,6 +73,8 @@ private:
         constraints_;
     std::unordered_map<std::string, RuntimeRelationConfig>
         relations_;
+    std::unordered_map<SequenceId, RuntimeDerivedSeriesConfig>
+        derived_series_;
 };
 
 }  // namespace sfkg::timeseries::core

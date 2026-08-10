@@ -464,9 +464,153 @@ bool fromProto(
     const pb::RuntimeWindowConfig& source,
     RuntimeWindowConfig* target,
     std::string* error) {
-    (void)error;
+    if (source.window_size() <= 0) {
+        *error = "window_size must be positive";
+        return false;
+    }
     target->window_size = source.window_size();
     return true;
+}
+
+bool fromProto(
+    const pb::LinearTerm& source,
+    DerivedLinearTerm* target,
+    std::string* error) {
+    if (source.sequence_id().empty()) {
+        *error = "derived linear term sequence_id must not be empty";
+        return false;
+    }
+    if (!std::isfinite(source.coefficient())) {
+        *error = "derived linear term coefficient must be finite";
+        return false;
+    }
+    target->sequence_id = source.sequence_id();
+    target->coefficient = source.coefficient();
+    return true;
+}
+
+bool fromProto(
+    const pb::LinearCombinationConfig& source,
+    DerivedLinearCombination* target,
+    std::string* error) {
+    if (source.terms().empty()) {
+        *error = "derived linear combination must contain at least one term";
+        return false;
+    }
+    if (!std::isfinite(source.bias())) {
+        *error = "derived linear combination bias must be finite";
+        return false;
+    }
+    target->terms.clear();
+    target->terms.reserve(source.terms_size());
+    for (const auto& term : source.terms()) {
+        DerivedLinearTerm converted;
+        if (!fromProto(term, &converted, error)) {
+            return false;
+        }
+        target->terms.push_back(std::move(converted));
+    }
+    target->bias = source.bias();
+    return true;
+}
+
+bool fromProto(
+    const pb::DerivedExpression& source,
+    DerivedExpression* target,
+    std::string* error) {
+    switch (source.node_case()) {
+        case pb::DerivedExpression::kSequenceId:
+            if (source.sequence_id().empty()) {
+                *error = "derived expression sequence_id must not be empty";
+                return false;
+            }
+            target->kind = DerivedExpression::NodeKind::Sequence;
+            target->sequence_id = source.sequence_id();
+            return true;
+        case pb::DerivedExpression::kConstant:
+            if (!std::isfinite(source.constant())) {
+                *error = "derived expression constant must be finite";
+                return false;
+            }
+            target->kind = DerivedExpression::NodeKind::Constant;
+            target->constant = source.constant();
+            return true;
+        case pb::DerivedExpression::kBinary: {
+            target->kind = DerivedExpression::NodeKind::Binary;
+            switch (source.binary().operator_()) {
+                case pb::DERIVED_OPERATOR_ADD:
+                    target->binary.operation = DerivedOperator::Add;
+                    break;
+                case pb::DERIVED_OPERATOR_SUBTRACT:
+                    target->binary.operation = DerivedOperator::Subtract;
+                    break;
+                case pb::DERIVED_OPERATOR_MULTIPLY:
+                    target->binary.operation = DerivedOperator::Multiply;
+                    break;
+                case pb::DERIVED_OPERATOR_DIVIDE:
+                    target->binary.operation = DerivedOperator::Divide;
+                    break;
+                case pb::DERIVED_OPERATOR_UNSPECIFIED:
+                default:
+                    *error = "derived binary operator is unspecified";
+                    return false;
+            }
+            if (!source.binary().has_left() || !source.binary().has_right()) {
+                *error = "derived binary expression requires left and right";
+                return false;
+            }
+            target->binary.left = std::make_shared<DerivedExpression>();
+            target->binary.right = std::make_shared<DerivedExpression>();
+            if (!fromProto(
+                    source.binary().left(), target->binary.left.get(), error) ||
+                !fromProto(
+                    source.binary().right(), target->binary.right.get(), error)) {
+                return false;
+            }
+            return true;
+        }
+        case pb::DerivedExpression::NODE_NOT_SET:
+            *error = "derived expression node is not set";
+            return false;
+    }
+    *error = "unknown derived expression node";
+    return false;
+}
+
+bool fromProto(
+    const pb::DerivedSeriesConfig& source,
+    RuntimeDerivedSeriesConfig* target,
+    std::string* error) {
+    if (source.derived_sequence_id().empty()) {
+        *error = "derived_sequence_id must not be empty";
+        return false;
+    }
+    target->derived_sequence_id = source.derived_sequence_id();
+    target->enabled = source.enabled();
+    switch (source.formula_case()) {
+        case pb::DerivedSeriesConfig::kLinearCombination: {
+            DerivedLinearCombination formula;
+            if (!fromProto(
+                    source.linear_combination(), &formula, error)) {
+                return false;
+            }
+            target->formula = std::move(formula);
+            return true;
+        }
+        case pb::DerivedSeriesConfig::kExpression: {
+            DerivedExpression formula;
+            if (!fromProto(source.expression(), &formula, error)) {
+                return false;
+            }
+            target->formula = std::move(formula);
+            return true;
+        }
+        case pb::DerivedSeriesConfig::FORMULA_NOT_SET:
+            *error = "derived series formula is not set";
+            return false;
+    }
+    *error = "unknown derived series formula";
+    return false;
 }
 
 WindowQuery fromProto(const pb::QueryWindowDataRequest& source) {

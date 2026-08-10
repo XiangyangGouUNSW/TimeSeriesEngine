@@ -3,6 +3,7 @@
 本目录是时序数据核心服务，负责运行时配置接收、数据接入与冷热双写、内存窗口、约束检查、历史数据查询，以及通过 Protobuf/gRPC 向统一服务提供接口。
 
 跨模块接口以 [proto/timeseries_core.proto](proto/timeseries_core.proto) 为准。
+调用方简明说明见 [docs/external_grpc_api_overview.md](docs/external_grpc_api_overview.md)。
 
 ## 当前实现范围
 
@@ -159,8 +160,9 @@ ss -lntp | grep ':50051'
 1. `syncInstanceConfigs` 同步实例配置；
 2. `syncWindowConfig` 同步任务窗口长度；未同步时 Core 默认使用 3 天；
 3. `syncConstraints`、`syncRelations` 同步约束和关联关系；
-4. 调用 `ingestData` 或 `ingestAndResolveData` 接入数据；
-5. 调用窗口、约束检查或历史查询接口。
+4. 如有需要，调用 `syncDerivedSeriesConfigs` 同步派生序列公式；
+5. 调用 `ingestData` 或 `ingestAndResolveData` 接入数据；
+6. 调用窗口、约束检查或历史查询接口。
 
 `queryHistoryData` 的 `granularity` 单位为毫秒。未设置时返回原始点；设置后
 按时间桶聚合，每个序列每个时间桶返回最后一个值。返回结果仍按时间升序，

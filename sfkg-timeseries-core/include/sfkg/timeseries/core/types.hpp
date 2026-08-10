@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -231,6 +232,53 @@ struct RuntimeRelationConfig {
 // service may replace it at runtime; an instance starts with the default.
 struct RuntimeWindowConfig {
     Timestamp window_size{kDefaultWindowSizeMs};
+};
+
+enum class DerivedOperator {
+    Unspecified,
+    Add,
+    Subtract,
+    Multiply,
+    Divide
+};
+
+struct DerivedExpression;
+
+struct DerivedBinaryExpression {
+    DerivedOperator operation{DerivedOperator::Unspecified};
+    std::shared_ptr<DerivedExpression> left;
+    std::shared_ptr<DerivedExpression> right;
+};
+
+struct DerivedExpression {
+    enum class NodeKind {
+        Sequence,
+        Constant,
+        Binary
+    };
+
+    NodeKind kind{NodeKind::Sequence};
+    SequenceId sequence_id;
+    double constant{};
+    DerivedBinaryExpression binary;
+};
+
+struct DerivedLinearTerm {
+    SequenceId sequence_id;
+    double coefficient{};
+};
+
+struct DerivedLinearCombination {
+    std::vector<DerivedLinearTerm> terms;
+    double bias{};
+};
+
+using DerivedFormula = std::variant<DerivedLinearCombination, DerivedExpression>;
+
+struct RuntimeDerivedSeriesConfig {
+    SequenceId derived_sequence_id;
+    bool enabled{false};
+    DerivedFormula formula;
 };
 
 template <typename T>

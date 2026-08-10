@@ -36,6 +36,33 @@ OperationResult WindowService::buildTimeWindow(
     return updateWindow(data, window_size);
 }
 
+OperationResult WindowService::replaceDerivedSequence(
+    const SequenceId& sequence_id,
+    const TimeseriesBatch& data) {
+    if (sequence_id.empty()) {
+        return internal::invalidArgument(
+            "derived sequence_id must not be empty");
+    }
+    for (const auto& point : data.points) {
+        if (point.sequence_id != sequence_id) {
+            return internal::invalidArgument(
+                "derived point sequence_id does not match output sequence");
+        }
+    }
+
+    std::lock_guard lock(mutex_);
+    sequence_windows_.erase(sequence_id);
+    auto& output = sequence_windows_[sequence_id];
+    for (const auto& point : data.points) {
+        output[point.time] = point;
+    }
+    if (output.empty()) {
+        sequence_windows_.erase(sequence_id);
+    }
+    pruneExpiredPoints();
+    return internal::ok(data.points.size(), "derived hot window replaced");
+}
+
 OperationResult WindowService::updateWindow(
     const TimeseriesBatch& data,
     std::optional<std::int64_t> window_size_override) {

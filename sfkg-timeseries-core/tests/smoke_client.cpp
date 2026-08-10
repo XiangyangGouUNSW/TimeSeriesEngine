@@ -176,6 +176,25 @@ int run(int argc, char* argv[]) {
     }
 
     {
+        pb::SyncDerivedSeriesConfigsRequest request;
+        pb::SyncConfigResponse response;
+        ::grpc::ClientContext context;
+        auto* item = request.add_items();
+        item->set_derived_sequence_id("temperature-derived");
+        item->set_enabled(true);
+        auto* linear = item->mutable_linear_combination();
+        linear->set_bias(1.0);
+        auto* term = linear->add_terms();
+        term->set_sequence_id("temperature-1");
+        term->set_coefficient(2.0);
+        const auto status = stub->syncDerivedSeriesConfigs(
+            &context, request, &response);
+        passed &= check(
+            "syncDerivedSeriesConfigs", status, response.operation(),
+            pb::OPERATION_CODE_OK);
+    }
+
+    {
         pb::IngestDataRequest request;
         pb::IngestDataResponse response;
         ::grpc::ClientContext context;
@@ -195,6 +214,28 @@ int run(int argc, char* argv[]) {
         passed &= check(
             "ingestData", status, response.operation(),
             pb::OPERATION_CODE_OK);
+        passed &= response.has_derived_result() &&
+            response.derived_result().code() == pb::OPERATION_CODE_OK;
+    }
+
+    {
+        pb::QueryWindowDataRequest request;
+        pb::QueryWindowDataResponse response;
+        ::grpc::ClientContext context;
+        request.add_sequence_ids("temperature-derived");
+        const auto status = stub->queryWindowData(
+            &context, request, &response);
+        const bool has_derived_point =
+            response.data().sequences_size() == 1 &&
+            response.data().sequences(0).points_size() == 2 &&
+            response.data().sequences(0).points(0).value().double_value() ==
+                51.0;
+        const bool query_passed =
+            status.ok() && response.operation().code() == pb::OPERATION_CODE_OK &&
+            has_derived_point;
+        std::cout << (query_passed ? "[PASS] " : "[FAIL] ")
+                  << "queryDerivedWindowData\n";
+        passed &= query_passed;
     }
 
     {

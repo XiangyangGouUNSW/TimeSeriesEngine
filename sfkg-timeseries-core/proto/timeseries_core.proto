@@ -13,6 +13,8 @@ service TimeseriesCoreService {
       returns (SyncConfigResponse);
   rpc syncWindowConfig(SyncWindowConfigRequest)
       returns (SyncConfigResponse);
+  rpc syncDerivedSeriesConfigs(SyncDerivedSeriesConfigsRequest)
+      returns (SyncConfigResponse);
 
   // Production ingest entry: resolve once, persist to cold storage, then
   // update the hot window inside Core.
@@ -272,6 +274,51 @@ message SyncWindowConfigRequest {
   RuntimeWindowConfig config = 1;
 }
 
+message LinearTerm {
+  string sequence_id = 1;
+  double coefficient = 2;
+}
+
+message LinearCombinationConfig {
+  repeated LinearTerm terms = 1;
+  double bias = 2;
+}
+
+enum DerivedOperator {
+  DERIVED_OPERATOR_UNSPECIFIED = 0;
+  DERIVED_OPERATOR_ADD = 1;
+  DERIVED_OPERATOR_SUBTRACT = 2;
+  DERIVED_OPERATOR_MULTIPLY = 3;
+  DERIVED_OPERATOR_DIVIDE = 4;
+}
+
+message DerivedExpression {
+  oneof node {
+    string sequence_id = 1;
+    double constant = 2;
+    DerivedBinaryExpression binary = 3;
+  }
+}
+
+message DerivedBinaryExpression {
+  DerivedOperator operator = 1;
+  DerivedExpression left = 2;
+  DerivedExpression right = 3;
+}
+
+message DerivedSeriesConfig {
+  string derived_sequence_id = 1;
+  bool enabled = 2;
+  oneof formula {
+    LinearCombinationConfig linear_combination = 3;
+    DerivedExpression expression = 4;
+  }
+}
+
+message SyncDerivedSeriesConfigsRequest {
+  repeated DerivedSeriesConfig items = 1;
+}
+
 message SyncConfigResponse {
   OperationResult operation = 1;
 }
@@ -294,6 +341,9 @@ message IngestDataResponse {
   OperationResult constraint_notification_result = 6;
   // Set only when return_resolved_data is true.
   TimeseriesBatch resolved_data = 5;
+  // Derived sequences are updated in the hot window only and are not persisted
+  // to TDengine.
+  OperationResult derived_result = 7;
 }
 
 message ConstraintResultMessage {

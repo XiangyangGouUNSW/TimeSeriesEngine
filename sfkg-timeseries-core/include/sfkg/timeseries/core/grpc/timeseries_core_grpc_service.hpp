@@ -6,6 +6,7 @@
 #include "sfkg/timeseries/core/alignment_service.hpp"
 #include "sfkg/timeseries/core/constraint_check_engine.hpp"
 #include "sfkg/timeseries/core/grpc/constraint_result_receiver_client.hpp"
+#include "sfkg/timeseries/core/derived_series_service.hpp"
 #include "sfkg/timeseries/core/history_query_service.hpp"
 #include "sfkg/timeseries/core/ingest_service.hpp"
 #include "sfkg/timeseries/core/runtime_config_registry.hpp"
@@ -38,6 +39,7 @@ public:
           constraint_engine_(constraint_engine),
           history_service_(history_service),
           config_registry_(config_registry),
+          derived_series_service_(config_registry, window_service),
           constraint_result_receiver_(constraint_result_receiver) {}
 
     ::grpc::Status syncInstanceConfigs(
@@ -55,6 +57,10 @@ public:
     ::grpc::Status syncWindowConfig(
         ::grpc::ServerContext* context,
         const pb::SyncWindowConfigRequest* request,
+        pb::SyncConfigResponse* response) override;
+    ::grpc::Status syncDerivedSeriesConfigs(
+        ::grpc::ServerContext* context,
+        const pb::SyncDerivedSeriesConfigsRequest* request,
         pb::SyncConfigResponse* response) override;
 
     ::grpc::Status ingestData(
@@ -107,6 +113,7 @@ private:
     ConstraintCheckEngine& constraint_engine_;
     HistoryQueryService& history_service_;
     RuntimeConfigRegistry& config_registry_;
+    DerivedSeriesService derived_series_service_;
     ConstraintResultReceiverClient& constraint_result_receiver_;
 };
 

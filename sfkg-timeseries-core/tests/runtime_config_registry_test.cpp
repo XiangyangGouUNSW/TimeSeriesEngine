@@ -139,6 +139,19 @@ int main() {
     result = registry.upsertRelations({{relation}});
     assert(result.code == OperationCode::Ok);
 
+    RuntimeDerivedSeriesConfig derived;
+    derived.derived_sequence_id = "temperature-pressure-sum";
+    derived.enabled = true;
+    derived.formula = DerivedLinearCombination{
+        {{"temperature-1", 1.0}, {"pressure-1", 1.0}}, 0.0};
+    result = registry.upsertDerivedSeriesConfigs({{derived}});
+    assert(result.code == OperationCode::InvalidArgument);
+
+    derived.formula = DerivedLinearCombination{{{"temperature-1", 1.0}}, 0.0};
+    result = registry.upsertDerivedSeriesConfigs({{derived}});
+    assert(result.code == OperationCode::Ok);
+    assert(registry.allDerivedSeries().size() == 1);
+
     result = registry.replaceInstanceConfigs({{temperature, temperature}});
     assert(result.code == OperationCode::InvalidArgument);
     assert(registry.findInstance("temperature-1").has_value());

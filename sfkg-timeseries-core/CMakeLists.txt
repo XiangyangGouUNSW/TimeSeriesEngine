@@ -46,6 +46,7 @@ endif()
 add_library(sfkg_timeseries_domain
     src/alignment_service.cpp
     src/constraint_check_engine.cpp
+    src/derived_series_service.cpp
     src/history_query_service.cpp
     src/ingest_service.cpp
     src/runtime_config_registry.cpp
@@ -188,6 +189,13 @@ if(SFKG_BUILD_TESTS)
         PRIVATE sfkg_timeseries_domain)
     add_test(NAME statistics_service_test
         COMMAND statistics_service_test)
+
+    add_executable(derived_series_service_test
+        tests/derived_series_service_test.cpp)
+    target_link_libraries(derived_series_service_test
+        PRIVATE sfkg_timeseries_domain)
+    add_test(NAME derived_series_service_test
+        COMMAND derived_series_service_test)
 
     if(SFKG_BUILD_GRPC)
         add_executable(runtime_instance_config_proto_test

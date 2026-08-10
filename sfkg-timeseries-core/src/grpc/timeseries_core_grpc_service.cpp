@@ -76,49 +76,62 @@ bool isSuccessful(OperationCode code) {
 OperationResult combineIngestResults(
     const OperationResult& resolve,
     const OperationResult& storage,
-    const OperationResult& window) {
+    const OperationResult& window,
+    const OperationResult& derived) {
     if (!isSuccessful(resolve.code)) {
         return resolve;
     }
     const bool storage_succeeded = isSuccessful(storage.code);
     const bool window_succeeded = isSuccessful(window.code);
+    const bool derived_succeeded = isSuccessful(derived.code);
 
-    if (!storage_succeeded && !window_succeeded) {
+    if (!storage_succeeded && !window_succeeded && !derived_succeeded) {
         return internal::makeOperationResult(
             storage.code,
             0,
             resolve.failed_count + resolve.success_count,
-            "cold storage and hot window writes failed; cold: " +
-                storage.message + "; hot: " + window.message);
+            "cold storage, hot window and derived refresh failed; cold: " +
+                storage.message + "; hot: " + window.message +
+                "; derived: " + derived.message);
     }
     if (!storage_succeeded) {
         return internal::makeOperationResult(
             OperationCode::PartialSuccess,
-            window.success_count,
-            resolve.failed_count + storage.failed_count,
-            "hot window updated but cold storage failed: " +
+            window.success_count + derived.success_count,
+            resolve.failed_count + storage.failed_count + derived.failed_count,
+            "hot window/derived refresh completed but cold storage failed: " +
                 storage.message);
     }
     if (!window_succeeded) {
         return internal::makeOperationResult(
             OperationCode::PartialSuccess,
             storage.success_count,
-            resolve.failed_count + window.failed_count,
-            "cold storage succeeded but hot window update failed: " +
-                window.message);
+            resolve.failed_count + window.failed_count + derived.failed_count,
+            "cold storage succeeded but hot window update failed; derived "
+            "refresh was skipped: " + window.message);
+    }
+    if (!derived_succeeded) {
+        return internal::makeOperationResult(
+            OperationCode::PartialSuccess,
+            storage.success_count + window.success_count,
+            resolve.failed_count + derived.failed_count,
+            "cold storage and hot window updated but derived refresh failed: " +
+                derived.message);
     }
     if (resolve.code == OperationCode::PartialSuccess ||
         storage.code == OperationCode::PartialSuccess ||
-        window.code == OperationCode::PartialSuccess) {
+        window.code == OperationCode::PartialSuccess ||
+        derived.code == OperationCode::PartialSuccess) {
         return internal::makeOperationResult(
             OperationCode::PartialSuccess,
             resolve.success_count,
             resolve.failed_count + storage.failed_count + window.failed_count,
-            "cold storage and hot window writes completed with partial "
-            "success");
+            "cold storage, hot window and derived refresh completed with "
+            "partial success");
     }
     return internal::ok(
-        resolve.success_count, "ingest data stored and hot window updated");
+        resolve.success_count,
+        "ingest data stored, hot window updated and derived windows refreshed");
 }
 
 bool validTimeRange(
@@ -389,6 +402,47 @@ OperationResult withConstraintNotificationFailure(
     });
 }
 
+::grpc::Status TimeseriesCoreGrpcService::syncDerivedSeriesConfigs(
+    ::grpc::ServerContext* context,
+    const pb::SyncDerivedSeriesConfigsRequest* request,
+    pb::SyncConfigResponse* response) {
+    (void)context;
+    return guardedCall("syncDerivedSeriesConfigs", response, [&] {
+        RuntimeConfigSnapshot<RuntimeDerivedSeriesConfig> snapshot;
+        snapshot.items.reserve(request->items_size());
+        std::string error;
+        for (const auto& item : request->items()) {
+            RuntimeDerivedSeriesConfig converted;
+            if (!conversion::fromProto(item, &converted, &error)) {
+                conversion::toProto(
+                    internal::invalidArgument(error),
+                    response->mutable_operation());
+                return ::grpc::Status::OK;
+            }
+            snapshot.items.push_back(std::move(converted));
+        }
+
+        const auto configured =
+            config_registry_.upsertDerivedSeriesConfigs(snapshot);
+        if (!isSuccessful(configured.code)) {
+            conversion::toProto(configured, response->mutable_operation());
+            return ::grpc::Status::OK;
+        }
+        const auto refreshed = derived_series_service_.refresh();
+        if (!isSuccessful(refreshed.code)) {
+            auto result = refreshed;
+            if (!result.message.empty()) {
+                result.message = "derived configuration synchronized, but " +
+                    result.message;
+            }
+            conversion::toProto(result, response->mutable_operation());
+            return ::grpc::Status::OK;
+        }
+        conversion::toProto(configured, response->mutable_operation());
+        return ::grpc::Status::OK;
+    });
+}
+
 ::grpc::Status TimeseriesCoreGrpcService::ingestData(
     ::grpc::ServerContext* context,
     const pb::IngestDataRequest* request,
@@ -400,6 +454,7 @@ OperationResult withConstraintNotificationFailure(
                 "points must not be empty");
             conversion::toProto(invalid, response->mutable_operation());
             conversion::toProto(invalid, response->mutable_resolve_result());
+            conversion::toProto(invalid, response->mutable_derived_result());
             return ::grpc::Status::OK;
         }
 
@@ -413,6 +468,8 @@ OperationResult withConstraintNotificationFailure(
                 conversion::toProto(invalid, response->mutable_operation());
                 conversion::toProto(
                     invalid, response->mutable_resolve_result());
+                conversion::toProto(
+                    invalid, response->mutable_derived_result());
                 return ::grpc::Status::OK;
             }
             input.push_back(std::move(converted));
@@ -425,6 +482,7 @@ OperationResult withConstraintNotificationFailure(
 
         OperationResult storage_result;
         OperationResult window_result;
+        OperationResult derived_result;
         if (isSuccessful(resolved.operation.code)) {
             // First version: attempt both destinations independently in the
             // request thread. This is a logical dual write, not an atomic
@@ -436,22 +494,32 @@ OperationResult withConstraintNotificationFailure(
             storage_result = storage_service_.writeRawData(resolved.resolved_data);
             window_result = window_service_.buildTimeWindow(
                 resolved.resolved_data);
+            if (isSuccessful(window_result.code)) {
+                derived_result = derived_series_service_.refresh();
+            } else {
+                derived_result = failedPrecondition(
+                    "derived refresh skipped because hot window update failed");
+            }
         } else {
             storage_result = failedPrecondition(
                 "storage skipped because ingest resolution did not succeed");
             window_result = failedPrecondition(
                 "window update skipped because ingest resolution did not succeed");
+            derived_result = failedPrecondition(
+                "derived refresh skipped because ingest resolution did not succeed");
         }
 
         conversion::toProto(
             storage_result, response->mutable_storage_result());
         conversion::toProto(
             window_result, response->mutable_window_result());
+        conversion::toProto(
+            derived_result, response->mutable_derived_result());
 
         OperationResult constraint_notification_result = internal::ok(
             0, "constraint check skipped because hot window update failed");
         OperationResult ingest_result = combineIngestResults(
-            resolved.operation, storage_result, window_result);
+            resolved.operation, storage_result, window_result, derived_result);
         if (isSuccessful(window_result.code)) {
             const auto enabled_rules =
                 config_registry_.allEnabledConstraints();

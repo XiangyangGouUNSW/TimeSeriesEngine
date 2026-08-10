@@ -69,6 +69,22 @@ bool fromProto(
     const pb::RuntimeWindowConfig& source,
     RuntimeWindowConfig* target,
     std::string* error);
+bool fromProto(
+    const pb::LinearTerm& source,
+    DerivedLinearTerm* target,
+    std::string* error);
+bool fromProto(
+    const pb::LinearCombinationConfig& source,
+    DerivedLinearCombination* target,
+    std::string* error);
+bool fromProto(
+    const pb::DerivedExpression& source,
+    DerivedExpression* target,
+    std::string* error);
+bool fromProto(
+    const pb::DerivedSeriesConfig& source,
+    RuntimeDerivedSeriesConfig* target,
+    std::string* error);
 
 WindowQuery fromProto(const pb::QueryWindowDataRequest& source);
 HistoryQuery fromProto(const pb::QueryHistoryDataRequest& source);

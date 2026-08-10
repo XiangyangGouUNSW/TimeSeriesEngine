@@ -35,6 +35,132 @@ bool validSeriesKind(SeriesKind kind) {
     return false;
 }
 
+bool continuousNumeric(const RuntimeInstanceConfig& config) {
+    if (config.series_kind != SeriesKind::Continuous) {
+        return false;
+    }
+    return config.data_type == "double" || config.data_type == "float" ||
+        config.data_type == "continuous" || config.data_type == "int" ||
+        config.data_type == "int64" || config.data_type == "integer";
+}
+
+bool validDerivedOperator(DerivedOperator operation) {
+    return operation == DerivedOperator::Add ||
+        operation == DerivedOperator::Subtract ||
+        operation == DerivedOperator::Multiply ||
+        operation == DerivedOperator::Divide;
+}
+
+bool containsSequenceLeaf(const DerivedExpression& expression) {
+    switch (expression.kind) {
+        case DerivedExpression::NodeKind::Sequence:
+            return true;
+        case DerivedExpression::NodeKind::Constant:
+            return false;
+        case DerivedExpression::NodeKind::Binary:
+            return (expression.binary.left &&
+                    containsSequenceLeaf(*expression.binary.left)) ||
+                (expression.binary.right &&
+                 containsSequenceLeaf(*expression.binary.right));
+    }
+    return false;
+}
+
+bool validateDerivedExpression(
+    const DerivedExpression& expression,
+    const std::unordered_map<SequenceId, RuntimeInstanceConfig>& instances,
+    std::string* error) {
+    switch (expression.kind) {
+        case DerivedExpression::NodeKind::Sequence: {
+            if (expression.sequence_id.empty()) {
+                *error = "derived expression sequence_id must not be empty";
+                return false;
+            }
+            const auto found = instances.find(expression.sequence_id);
+            if (found == instances.end() || !continuousNumeric(found->second)) {
+                *error = "derived expression sequence must be registered as a "
+                    "continuous numeric sequence: " + expression.sequence_id;
+                return false;
+            }
+            return true;
+        }
+        case DerivedExpression::NodeKind::Constant:
+            if (!std::isfinite(expression.constant)) {
+                *error = "derived expression constant must be finite";
+                return false;
+            }
+            return true;
+        case DerivedExpression::NodeKind::Binary:
+            if (!validDerivedOperator(expression.binary.operation) ||
+                !expression.binary.left || !expression.binary.right) {
+                *error = "derived binary expression is incomplete or invalid";
+                return false;
+            }
+            return validateDerivedExpression(
+                       *expression.binary.left, instances, error) &&
+                validateDerivedExpression(
+                    *expression.binary.right, instances, error);
+    }
+    *error = "unknown derived expression node";
+    return false;
+}
+
+bool validateDerivedConfig(
+    const RuntimeDerivedSeriesConfig& item,
+    const std::unordered_map<SequenceId, RuntimeInstanceConfig>& instances,
+    std::string* error) {
+    if (item.derived_sequence_id.empty()) {
+        *error = "derived_sequence_id must not be empty";
+        return false;
+    }
+    if (instances.find(item.derived_sequence_id) != instances.end()) {
+        *error = "derived sequence_id conflicts with an instance sequence: " +
+            item.derived_sequence_id;
+        return false;
+    }
+
+    if (const auto* linear = std::get_if<DerivedLinearCombination>(
+            &item.formula);
+        linear != nullptr) {
+        if (linear->terms.empty() || !std::isfinite(linear->bias)) {
+            *error = "derived linear combination must contain finite terms and bias";
+            return false;
+        }
+        std::unordered_set<SequenceId> seen;
+        for (const auto& term : linear->terms) {
+            if (term.sequence_id.empty() || !std::isfinite(term.coefficient)) {
+                *error = "derived linear term is invalid";
+                return false;
+            }
+            const auto found = instances.find(term.sequence_id);
+            if (found == instances.end() || !continuousNumeric(found->second)) {
+                *error = "derived linear term must reference a registered "
+                    "continuous numeric sequence: " + term.sequence_id;
+                return false;
+            }
+            if (!seen.emplace(term.sequence_id).second) {
+                *error = "duplicate derived linear term sequence: " +
+                    term.sequence_id;
+                return false;
+            }
+        }
+        return true;
+    }
+
+    if (const auto* expression = std::get_if<DerivedExpression>(
+            &item.formula);
+        expression != nullptr) {
+        if (!containsSequenceLeaf(*expression)) {
+            *error = "derived expression must reference at least one sequence";
+            return false;
+        }
+        return validateDerivedExpression(*expression, instances, error);
+    }
+
+    *error = "derived formula is not set";
+    return false;
+}
+
 }  // namespace
 
 OperationResult RuntimeConfigRegistry::replaceInstanceConfigs(
@@ -353,6 +479,29 @@ OperationResult RuntimeConfigRegistry::upsertRelations(
     return internal::ok(count, "relation configuration incrementally synchronized");
 }
 
+OperationResult RuntimeConfigRegistry::upsertDerivedSeriesConfigs(
+    const RuntimeConfigSnapshot<RuntimeDerivedSeriesConfig>& snapshot) {
+    std::unique_lock lock(mutex_);
+    auto derived_series = derived_series_;
+    std::unordered_set<SequenceId> seen_ids;
+    for (const auto& item : snapshot.items) {
+        if (!seen_ids.emplace(item.derived_sequence_id).second) {
+            return internal::invalidArgument(
+                "duplicate derived_sequence_id in incremental update: " +
+                item.derived_sequence_id);
+        }
+        std::string error;
+        if (!validateDerivedConfig(item, instance_configs_, &error)) {
+            return internal::invalidArgument(error);
+        }
+        derived_series[item.derived_sequence_id] = item;
+    }
+    const auto count = snapshot.items.size();
+    derived_series_.swap(derived_series);
+    return internal::ok(
+        count, "derived series configuration incrementally synchronized");
+}
+
 std::optional<RuntimeInstanceConfig> RuntimeConfigRegistry::findInstance(
     const SequenceId& sequence_id) const {
     // Copy the result while holding a shared lock; callers do not retain
@@ -387,6 +536,23 @@ std::optional<RuntimeRelationConfig> RuntimeConfigRegistry::findRelation(
         return std::nullopt;
     }
     return found->second;
+}
+
+std::vector<RuntimeDerivedSeriesConfig>
+RuntimeConfigRegistry::allDerivedSeries() const {
+    std::shared_lock lock(mutex_);
+    std::vector<RuntimeDerivedSeriesConfig> result;
+    result.reserve(derived_series_.size());
+    for (const auto& [sequence_id, config] : derived_series_) {
+        (void)sequence_id;
+        result.push_back(config);
+    }
+    std::sort(
+        result.begin(), result.end(),
+        [](const auto& left, const auto& right) {
+            return left.derived_sequence_id < right.derived_sequence_id;
+        });
+    return result;
 }
 
 ConstraintLookupResult RuntimeConfigRegistry::lookupConstraints(
