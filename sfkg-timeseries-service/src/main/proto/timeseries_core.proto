@@ -274,3 +274,15 @@ message EventMessage {
   string create_user = 17;
   string update_user = 18;
 }
+
+// ── Constraint result receiver (Core → Service) ───────────────────
+
+service TimeseriesConstraintResultReceiverService {
+  rpc ReceiveConstraintResult (ConstraintResultMessage) returns (SyncResponse);
+}
+
+message ConstraintResultMessage {
+  int64 check_time_ms = 1;
+  repeated string violated_constraint_ids = 2;
+  repeated string sequence_ids = 3;
+}
