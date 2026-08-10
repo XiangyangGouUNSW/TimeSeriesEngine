@@ -47,13 +47,16 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
     }
 
     public String createInstanceConfig(InstanceConfigSaveRequest request) {
-        String sequenceId = request != null ? request.getSequenceId() : null;
-        if (sequenceId != null) {
-            cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
-            if (memoryCache.getInstanceConfig(sequenceId).isPresent()) {
-                throw new BusinessException("instance already exists: " + sequenceId);
+        cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
+        // check duplicate by instanceName if provided
+        if (request != null && request.getInstanceName() != null && !request.getInstanceName().isBlank()) {
+            boolean dup = memoryCache.listInstanceConfigs().stream()
+                    .anyMatch(e -> request.getInstanceName().equals(e.getInstanceName()));
+            if (dup) {
+                throw new BusinessException("instance already exists: " + request.getInstanceName());
             }
         }
+        // sequenceId optional — auto-generate if not provided
         return doSaveInstanceConfig(request, false);
     }
 

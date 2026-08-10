@@ -173,24 +173,24 @@ public class TimeseriesCoreGrpcClient {
             return SyncResult.fail("relation is null");
         }
 
-        // Resolve source/target: category IDs → sequence IDs, grouped by dataSourceId
+        // Resolve source/target: category IDs → sequence IDs, grouped by deviceInstanceId
         List<String> srcSeqIds = resolveToSequences(relation.getSourceSequences());
         List<String> tgtSeqIds = resolveToSequences(
                 relation.getTargetSequenceId() != null ? List.of(relation.getTargetSequenceId()) : List.of());
 
-        // Group by dataSourceId
-        Map<String, List<String>> srcBySource = groupByDataSource(srcSeqIds);
-        Map<String, List<String>> tgtBySource = groupByDataSource(tgtSeqIds);
+        // Group by deviceInstanceId — only pair sequences on the same device
+        Map<String, List<String>> srcByDevice = groupByDeviceInstanceId(srcSeqIds);
+        Map<String, List<String>> tgtByDevice = groupByDeviceInstanceId(tgtSeqIds);
 
         SyncRelationsRequest.Builder reqBuilder = SyncRelationsRequest.newBuilder();
         int count = 0;
-        for (Map.Entry<String, List<String>> entry : srcBySource.entrySet()) {
-            String ds = entry.getKey();
-            List<String> tgtInDs = tgtBySource.getOrDefault(ds, List.of());
-            if (tgtInDs.isEmpty()) continue;
+        for (Map.Entry<String, List<String>> entry : srcByDevice.entrySet()) {
+            String deviceId = entry.getKey();
+            List<String> tgtInDevice = tgtByDevice.getOrDefault(deviceId, List.of());
+            if (tgtInDevice.isEmpty()) continue;
 
             for (String src : entry.getValue()) {
-                for (String tgt : tgtInDs) {
+                for (String tgt : tgtInDevice) {
                     if (src.equals(tgt)) continue; // skip self-relation
                     RuntimeRelationConfig.Builder rb = RuntimeRelationConfig.newBuilder()
                             .setRelationId(nullToEmpty(relation.getRelationId()) + "_" + src + "_" + tgt)
@@ -247,12 +247,12 @@ public class TimeseriesCoreGrpcClient {
         return result;
     }
 
-    private Map<String, List<String>> groupByDataSource(List<String> seqIds) {
+    private Map<String, List<String>> groupByDeviceInstanceId(List<String> seqIds) {
         Map<String, List<String>> map = new LinkedHashMap<>();
         for (String seqId : seqIds) {
             TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(seqId);
-            String ds = inst != null && inst.getDataSourceId() != null ? inst.getDataSourceId() : "_default";
-            map.computeIfAbsent(ds, k -> new ArrayList<>()).add(seqId);
+            String deviceId = inst != null && inst.getDeviceInstanceId() != null ? inst.getDeviceInstanceId() : "_default";
+            map.computeIfAbsent(deviceId, k -> new ArrayList<>()).add(seqId);
         }
         return map;
     }

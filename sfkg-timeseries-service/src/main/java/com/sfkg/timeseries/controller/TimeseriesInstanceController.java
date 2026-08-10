@@ -27,9 +27,9 @@ public class TimeseriesInstanceController {
     }
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<Void> createInstanceConfig(@RequestBody InstanceConfigSaveRequest request) {
-        instanceService.createInstanceConfig(request);
-        return returnSuccess("timeseries instance create success");
+    public ApiResult<String> createInstanceConfig(@RequestBody InstanceConfigSaveRequest request) {
+        String sequenceId = instanceService.createInstanceConfig(request);
+        return returnSuccess("timeseries instance create success", sequenceId);
     }
 
     @PutMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)

@@ -15,6 +15,8 @@ import org.springframework.stereotype.Service;
 import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
+import com.sfkg.timeseries.client.AnomalyGrpcClient;
+import com.sfkg.timeseries.client.ForecastGrpcClient;
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
 import com.sfkg.timeseries.dto.CategoryQueryRequest;
@@ -26,8 +28,10 @@ import com.sfkg.timeseries.dto.ConstraintStatusUpdateRequest;
 import com.sfkg.timeseries.dto.RelationQueryRequest;
 import com.sfkg.timeseries.dto.RelationSaveRequest;
 import com.sfkg.timeseries.dto.RelationStatusUpdateRequest;
+import com.sfkg.timeseries.entity.TimeseriesAnomalyTask;
 import com.sfkg.timeseries.entity.TimeseriesCategory;
 import com.sfkg.timeseries.entity.TimeseriesConstraint;
+import com.sfkg.timeseries.entity.TimeseriesForecastTask;
 import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.entity.TimeseriesRelation;
 import com.sfkg.timeseries.mapper.TimeseriesCategoryMapper;
@@ -47,6 +51,8 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
     private final TimeseriesMemoryCache memoryCache;
     private final TimeseriesCacheManager cacheManager;
     private final TimeseriesCoreGrpcClient coreGrpcClient;
+    private final AnomalyGrpcClient anomalyGrpcClient;
+    private final ForecastGrpcClient forecastGrpcClient;
 
     public TimeseriesSemanticServiceImpl(
             TimeseriesCategoryMapper categoryMapper,
@@ -54,13 +60,17 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             TimeseriesRelationMapper relationMapper,
             TimeseriesMemoryCache memoryCache,
             TimeseriesCacheManager cacheManager,
-            TimeseriesCoreGrpcClient coreGrpcClient) {
+            TimeseriesCoreGrpcClient coreGrpcClient,
+            AnomalyGrpcClient anomalyGrpcClient,
+            ForecastGrpcClient forecastGrpcClient) {
         this.categoryMapper = categoryMapper;
         this.constraintMapper = constraintMapper;
         this.relationMapper = relationMapper;
         this.memoryCache = memoryCache;
         this.cacheManager = cacheManager;
         this.coreGrpcClient = coreGrpcClient;
+        this.anomalyGrpcClient = anomalyGrpcClient;
+        this.forecastGrpcClient = forecastGrpcClient;
     }
 
     @Override
@@ -204,6 +214,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         });
         constraintMapper.updateById(entity);
         syncSemanticToCore(entity.getConstraintId());
+        reSyncTasksForConstraint(entity.getConstraintId());
     }
 
     @Override
@@ -283,6 +294,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         });
         relationMapper.updateById(entity);
         syncSemanticToCore(entity.getRelationId());
+        reSyncTasksForRelation(entity.getRelationId());
     }
 
     @Override
@@ -515,5 +527,74 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         if (id == null || id.isBlank()) return false;
         return memoryCache.getInstanceBySequenceId(id) != null
                 || memoryCache.getCategory(id).isPresent();
+    }
+
+    private void reSyncTasksForConstraint(String constraintId) {
+        if (constraintId == null) return;
+        cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
+        cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
+        for (TimeseriesAnomalyTask task : memoryCache.listAnomalyTasks()) {
+            if (task.getConstraintIds() != null && task.getConstraintIds().contains(constraintId)) {
+                anomalyGrpcClient.syncAnomalyTask(task);
+            }
+        }
+        for (TimeseriesForecastTask task : memoryCache.listForecastTasks()) {
+            if (task.getConstraintIds() != null && task.getConstraintIds().contains(constraintId)) {
+                forecastGrpcClient.syncForecastTask(task);
+            }
+        }
+    }
+
+    private void reSyncTasksForRelation(String relationId) {
+        if (relationId == null) return;
+        cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
+        cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
+        cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
+        TimeseriesRelation rel = memoryCache.getRelation(relationId).orElse(null);
+        if (rel == null) return;
+        Set<String> affectedSeqIds = resolveAffectedSequenceIds(rel);
+        for (TimeseriesAnomalyTask task : memoryCache.listAnomalyTasks()) {
+            if (task.getSequenceIds() != null && !java.util.Collections.disjoint(task.getSequenceIds(), affectedSeqIds)) {
+                anomalyGrpcClient.syncAnomalyTask(task);
+            }
+        }
+        for (TimeseriesForecastTask task : memoryCache.listForecastTasks()) {
+            if (task.getForecastObjects() != null && !java.util.Collections.disjoint(task.getForecastObjects(), affectedSeqIds)) {
+                forecastGrpcClient.syncForecastTask(task);
+            }
+        }
+    }
+
+    /**
+     * Resolve all sequence IDs affected by a relation (sources + targets, categories expanded).
+     */
+    private Set<String> resolveAffectedSequenceIds(TimeseriesRelation rel) {
+        Set<String> ids = new HashSet<>();
+        if (rel.getSourceSequences() != null) {
+            for (String src : rel.getSourceSequences()) {
+                if (memoryCache.getCategory(src).isPresent()) {
+                    for (TimeseriesInstanceConfig inst : memoryCache.listInstanceConfigs()) {
+                        if (src.equals(inst.getCategoryId()) && inst.getSequenceId() != null) {
+                            ids.add(inst.getSequenceId());
+                        }
+                    }
+                } else {
+                    ids.add(src);
+                }
+            }
+        }
+        String tgt = rel.getTargetSequenceId();
+        if (tgt != null) {
+            if (memoryCache.getCategory(tgt).isPresent()) {
+                for (TimeseriesInstanceConfig inst : memoryCache.listInstanceConfigs()) {
+                    if (tgt.equals(inst.getCategoryId()) && inst.getSequenceId() != null) {
+                        ids.add(inst.getSequenceId());
+                    }
+                }
+            } else {
+                ids.add(tgt);
+            }
+        }
+        return ids;
     }
 }
