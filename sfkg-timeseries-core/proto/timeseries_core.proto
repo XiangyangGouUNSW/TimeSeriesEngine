@@ -39,6 +39,14 @@ service TimeseriesCoreService {
       returns (QueryHistoryOverviewResponse);
 }
 
+// Core sends constraint violations to the unified service after a successful
+// hot-window update. The two services intentionally share this package so
+// the generated client uses the same gRPC method path and wire schema.
+service TimeseriesConstraintResultReceiverService {
+  rpc ReceiveConstraintResult(ConstraintResultMessage)
+      returns (SyncResponse);
+}
+
 enum OperationCode {
   OPERATION_CODE_OK = 0;
   OPERATION_CODE_PARTIAL_SUCCESS = 1;
@@ -55,6 +63,11 @@ message OperationResult {
   uint64 success_count = 2;
   uint64 failed_count = 3;
   string message = 4;
+}
+
+message SyncResponse {
+  bool success = 1;
+  string message = 2;
 }
 
 message TimeseriesValue {
@@ -276,8 +289,17 @@ message IngestDataResponse {
   OperationResult resolve_result = 2;
   OperationResult storage_result = 3;
   OperationResult window_result = 4;
+  // Result of notifying the unified service. An OK result also records that
+  // notification was not needed when no violation was found.
+  OperationResult constraint_notification_result = 6;
   // Set only when return_resolved_data is true.
   TimeseriesBatch resolved_data = 5;
+}
+
+message ConstraintResultMessage {
+  int64 check_time_ms = 1;
+  repeated string violated_constraint_ids = 2;
+  repeated string sequence_ids = 3;
 }
 
 message IngestRequest {

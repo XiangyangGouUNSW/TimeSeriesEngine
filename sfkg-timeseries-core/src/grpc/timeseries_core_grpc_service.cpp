@@ -1,10 +1,13 @@
 #include "sfkg/timeseries/core/grpc/timeseries_core_grpc_service.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -122,6 +125,160 @@ bool validTimeRange(
     const std::optional<Timestamp>& start,
     const std::optional<Timestamp>& end) {
     return !start || !end || *start <= *end;
+}
+
+std::vector<SequenceId> mappedSequenceIds(const ConstraintRule& rule) {
+    std::vector<SequenceId> sequence_ids;
+    sequence_ids.reserve(rule.variable_mapping.size());
+    for (const auto& [variable, sequence_id] : rule.variable_mapping) {
+        (void)variable;
+        if (!sequence_id.empty()) {
+            sequence_ids.push_back(sequence_id);
+        }
+    }
+    std::sort(sequence_ids.begin(), sequence_ids.end());
+    sequence_ids.erase(
+        std::unique(sequence_ids.begin(), sequence_ids.end()),
+        sequence_ids.end());
+    return sequence_ids;
+}
+
+bool containsAllSequences(
+    const WindowData& data,
+    const std::vector<SequenceId>& sequence_ids) {
+    for (const auto& sequence_id : sequence_ids) {
+        if (data.sequence_values.find(sequence_id) ==
+            data.sequence_values.end()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool hasTwoDistinctTimestamps(const WindowData& data) {
+    std::optional<Timestamp> first_time;
+    for (const auto& [sequence_id, points] : data.sequence_values) {
+        (void)sequence_id;
+        for (const auto& point : points) {
+            if (!first_time) {
+                first_time = point.time;
+            } else if (point.time != *first_time) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+template <typename Value>
+void appendUnique(std::vector<Value>* values, const Value& value) {
+    if (std::find(values->begin(), values->end(), value) == values->end()) {
+        values->push_back(value);
+    }
+}
+
+ConstraintCheckResult runContinuousConstraintCheck(
+    const WindowData& window_data,
+    const std::vector<ConstraintRule>& enabled_rules,
+    const AlignmentService& alignment_service,
+    const ConstraintCheckEngine& constraint_engine) {
+    ConstraintCheckResult result;
+    result.satisfied = true;
+    result.operation = internal::ok(
+        0, "constraint check skipped: no applicable enabled rules");
+    if (enabled_rules.empty()) {
+        return result;
+    }
+
+    std::vector<ConstraintRule> single_sequence_rules;
+    std::vector<ConstraintRule> multi_sequence_rules;
+    for (const auto& rule : enabled_rules) {
+        const auto sequence_ids = mappedSequenceIds(rule);
+        // A rule whose sequences have not appeared in the current hot window
+        // is not an error during continuous ingest; it becomes checkable once
+        // the missing sequence data arrives.
+        if (sequence_ids.empty() ||
+            !containsAllSequences(window_data, sequence_ids)) {
+            continue;
+        }
+        if (sequence_ids.size() == 1) {
+            single_sequence_rules.push_back(rule);
+        } else {
+            multi_sequence_rules.push_back(rule);
+        }
+    }
+
+    if (!single_sequence_rules.empty()) {
+        const auto single_result = constraint_engine.checkConstraints(
+            single_sequence_rules, window_data);
+        if (!isSuccessful(single_result.operation.code)) {
+            return single_result;
+        }
+        result.evaluated_count += single_result.evaluated_count;
+        result.violations.insert(
+            result.violations.end(),
+            single_result.violations.begin(),
+            single_result.violations.end());
+    }
+
+    if (!multi_sequence_rules.empty()) {
+        // Multi-sequence constraints use ordinary time alignment only.
+        // Relation configs and lag adjustments are deliberately unrelated to
+        // constraint checking.
+        if (!hasTwoDistinctTimestamps(window_data)) {
+            result.satisfied = result.violations.empty();
+            result.operation = internal::ok(
+                result.evaluated_count,
+                result.satisfied
+                    ? "constraint check skipped: insufficient timestamps "
+                      "for ordinary alignment"
+                    : "single-sequence violations found; multi-sequence "
+                      "check skipped due to insufficient timestamps");
+            return result;
+        }
+        const auto alignment = alignment_service.alignWindowData(window_data);
+        if (!isSuccessful(alignment.operation.code)) {
+            ConstraintCheckResult failed;
+            failed.operation = alignment.operation;
+            failed.satisfied = false;
+            return failed;
+        }
+        const auto multi_result = constraint_engine.checkConstraints(
+            multi_sequence_rules, alignment.aligned_data);
+        if (!isSuccessful(multi_result.operation.code)) {
+            return multi_result;
+        }
+        result.evaluated_count += multi_result.evaluated_count;
+        result.violations.insert(
+            result.violations.end(),
+            multi_result.violations.begin(),
+            multi_result.violations.end());
+    }
+
+    result.satisfied = result.violations.empty();
+    result.operation = internal::ok(
+        result.evaluated_count,
+        result.satisfied
+            ? "continuous constraint checks completed; all satisfied"
+            : "continuous constraint checks completed; violations found");
+    return result;
+}
+
+OperationResult withConstraintNotificationFailure(
+    OperationResult base,
+    const OperationResult& notification) {
+    if (isSuccessful(notification.code)) {
+        return base;
+    }
+    if (base.code == OperationCode::Ok) {
+        base.code = OperationCode::PartialSuccess;
+    }
+    if (!base.message.empty()) {
+        base.message += "; ";
+    }
+    base.message += "constraint check/notification failed: " +
+        notification.message;
+    return base;
 }
 
 }  // namespace
@@ -290,10 +447,102 @@ bool validTimeRange(
             storage_result, response->mutable_storage_result());
         conversion::toProto(
             window_result, response->mutable_window_result());
+
+        OperationResult constraint_notification_result = internal::ok(
+            0, "constraint check skipped because hot window update failed");
+        OperationResult ingest_result = combineIngestResults(
+            resolved.operation, storage_result, window_result);
+        if (isSuccessful(window_result.code)) {
+            const auto enabled_rules =
+                config_registry_.allEnabledConstraints();
+            if (enabled_rules.empty()) {
+                constraint_notification_result = internal::ok(
+                    0, "no enabled constraints; notification skipped");
+            } else {
+                std::vector<SequenceId> requested_sequence_ids;
+                std::unordered_set<SequenceId> requested_sequence_set;
+                for (const auto& rule : enabled_rules) {
+                    for (const auto& sequence_id : mappedSequenceIds(rule)) {
+                        if (requested_sequence_set.insert(sequence_id).second) {
+                            requested_sequence_ids.push_back(sequence_id);
+                        }
+                    }
+                }
+
+                if (requested_sequence_ids.empty()) {
+                    constraint_notification_result = internal::invalidArgument(
+                        "enabled constraints contain no mapped sequences");
+                } else {
+                    const auto window = window_service_.queryWindowData({
+                        requested_sequence_ids, std::nullopt, std::nullopt});
+                    if (!isSuccessful(window.operation.code)) {
+                        constraint_notification_result = window.operation;
+                    } else if (window.data.sequence_values.empty()) {
+                        constraint_notification_result = internal::ok(
+                            0,
+                            "constraint check skipped because hot window has "
+                            "no applicable data");
+                    } else {
+                        const auto check = runContinuousConstraintCheck(
+                            window.data,
+                            enabled_rules,
+                            alignment_service_,
+                            constraint_engine_);
+                        if (!isSuccessful(check.operation.code)) {
+                            constraint_notification_result = check.operation;
+                        } else if (check.violations.empty()) {
+                            constraint_notification_result = internal::ok(
+                                check.evaluated_count,
+                                "no constraint violations; notification "
+                                "skipped");
+                        } else {
+                            std::unordered_map<
+                                std::string, std::vector<SequenceId>>
+                                sequences_by_constraint;
+                            for (const auto& rule : enabled_rules) {
+                                sequences_by_constraint[rule.constraint_id] =
+                                    mappedSequenceIds(rule);
+                            }
+
+                            std::vector<std::string> violated_constraint_ids;
+                            std::vector<SequenceId> violated_sequence_ids;
+                            for (const auto& violation : check.violations) {
+                                appendUnique(
+                                    &violated_constraint_ids,
+                                    violation.constraint_id);
+                                const auto found = sequences_by_constraint.find(
+                                    violation.constraint_id);
+                                if (found != sequences_by_constraint.end()) {
+                                    for (const auto& sequence_id : found->second) {
+                                        appendUnique(
+                                            &violated_sequence_ids,
+                                            sequence_id);
+                                    }
+                                }
+                            }
+                            std::sort(
+                                violated_constraint_ids.begin(),
+                                violated_constraint_ids.end());
+                            std::sort(
+                                violated_sequence_ids.begin(),
+                                violated_sequence_ids.end());
+                            constraint_notification_result =
+                                constraint_result_receiver_
+                                    .receiveConstraintResult(
+                                        window.data.window_end_time,
+                                        violated_constraint_ids,
+                                        violated_sequence_ids);
+                        }
+                    }
+                }
+            }
+        }
         conversion::toProto(
-            combineIngestResults(
-                resolved.operation, storage_result, window_result),
-            response->mutable_operation());
+            constraint_notification_result,
+            response->mutable_constraint_notification_result());
+        ingest_result = withConstraintNotificationFailure(
+            std::move(ingest_result), constraint_notification_result);
+        conversion::toProto(ingest_result, response->mutable_operation());
         if (request->return_resolved_data()) {
             conversion::toProto(
                 resolved.resolved_data, response->mutable_resolved_data());

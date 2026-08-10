@@ -52,6 +52,11 @@ public:
     std::vector<ConstraintRule> enabledConstraints(
         const std::vector<std::string>& constraint_ids) const;
 
+    // Returns a copied, read-only snapshot of every currently enabled rule.
+    // The copy lets continuous ingest checks run without holding the
+    // registry's shared lock while the constraint engine evaluates data.
+    std::vector<ConstraintRule> allEnabledConstraints() const;
+
 private:
     // Readers may run concurrently; snapshot replacement takes the exclusive
     // lock so all related indexes become visible atomically.

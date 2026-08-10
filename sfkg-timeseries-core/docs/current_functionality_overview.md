@@ -82,6 +82,8 @@ gRPC 请求
   → 序列解析与数据类型校验
   → TDengine 原始数据写入
   → 内存热窗口更新
+  → 检查当前窗口中的已启用约束
+  → 有违反时调用统一服务的 ReceiveConstraintResult
   → 返回总结果和各阶段结果
 ```
 
@@ -90,11 +92,13 @@ gRPC 请求
 - `resolve_result`：数据识别和标准化结果；
 - `storage_result`：TDengine 写入结果；
 - `window_result`：热窗口更新结果；
+- `constraint_notification_result`：约束检查及异常通知结果；没有违反时不发送通知；
 - `operation`：综合结果。
 
 当前写入和窗口更新是同一请求线程中的两个独立操作，不是数据库事务；一处成功、
-另一处失败时会通过分阶段结果报告。`return_resolved_data` 可用于控制是否返回
-标准化后的数据副本。
+另一处失败时会通过分阶段结果报告。约束异常通知失败不会回滚已经完成的冷、热写入，
+但会使综合结果变为部分成功。`return_resolved_data` 可用于控制是否返回标准化后的
+数据副本。
 
 ### 4.2 细粒度接入接口
 

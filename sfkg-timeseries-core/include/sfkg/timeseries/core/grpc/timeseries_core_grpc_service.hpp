@@ -5,6 +5,7 @@
 #include "timeseries_core.grpc.pb.h"
 #include "sfkg/timeseries/core/alignment_service.hpp"
 #include "sfkg/timeseries/core/constraint_check_engine.hpp"
+#include "sfkg/timeseries/core/grpc/constraint_result_receiver_client.hpp"
 #include "sfkg/timeseries/core/history_query_service.hpp"
 #include "sfkg/timeseries/core/ingest_service.hpp"
 #include "sfkg/timeseries/core/runtime_config_registry.hpp"
@@ -27,7 +28,8 @@ public:
         StatisticsService& statistics_service,
         ConstraintCheckEngine& constraint_engine,
         HistoryQueryService& history_service,
-        RuntimeConfigRegistry& config_registry)
+        RuntimeConfigRegistry& config_registry,
+        ConstraintResultReceiverClient& constraint_result_receiver)
         : ingest_service_(ingest_service),
           storage_service_(storage_service),
           window_service_(window_service),
@@ -35,7 +37,8 @@ public:
           statistics_service_(statistics_service),
           constraint_engine_(constraint_engine),
           history_service_(history_service),
-          config_registry_(config_registry) {}
+          config_registry_(config_registry),
+          constraint_result_receiver_(constraint_result_receiver) {}
 
     ::grpc::Status syncInstanceConfigs(
         ::grpc::ServerContext* context,
@@ -104,6 +107,7 @@ private:
     ConstraintCheckEngine& constraint_engine_;
     HistoryQueryService& history_service_;
     RuntimeConfigRegistry& config_registry_;
+    ConstraintResultReceiverClient& constraint_result_receiver_;
 };
 
 }  // namespace sfkg::timeseries::core::grpc

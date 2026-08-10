@@ -27,6 +27,12 @@ int main(int argc, char* argv[]) {
     if (argc > 1) {
         address = argv[1];
     }
+    std::string constraint_result_receiver_address =
+        "222.29.156.142:9105";
+    if (const char* configured = std::getenv(
+            "SFKG_CONSTRAINT_RESULT_RECEIVER_ADDRESS")) {
+        constraint_result_receiver_address = configured;
+    }
 
     core::RuntimeConfigRegistry registry;
     core::internal::TaosClient taos_client;
@@ -43,6 +49,8 @@ int main(int argc, char* argv[]) {
     core::StatisticsService statistics;
     core::ConstraintCheckEngine constraints;
     core::HistoryQueryService history(registry, taos_client);
+    core::grpc::ConstraintResultReceiverClient constraint_result_receiver(
+        constraint_result_receiver_address);
     core::grpc::TimeseriesCoreGrpcService service(
         ingest,
         storage,
@@ -51,7 +59,8 @@ int main(int argc, char* argv[]) {
         statistics,
         constraints,
         history,
-        registry);
+        registry,
+        constraint_result_receiver);
 
     ::grpc::EnableDefaultHealthCheckService(true);
     ::grpc::ServerBuilder builder;

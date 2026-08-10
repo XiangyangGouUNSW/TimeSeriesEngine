@@ -413,4 +413,25 @@ std::vector<ConstraintRule> RuntimeConfigRegistry::enabledConstraints(
     return lookupConstraints(constraint_ids).enabled_rules;
 }
 
+std::vector<ConstraintRule> RuntimeConfigRegistry::allEnabledConstraints() const {
+    // Copy the rules while holding the shared lock, then sort the snapshot so
+    // continuous checks and their logs are deterministic despite the
+    // unordered runtime index.
+    std::shared_lock lock(mutex_);
+    std::vector<ConstraintRule> result;
+    result.reserve(constraints_.size());
+    for (const auto& [constraint_id, config] : constraints_) {
+        (void)constraint_id;
+        if (config.enabled) {
+            result.push_back(config.rule);
+        }
+    }
+    std::sort(
+        result.begin(), result.end(),
+        [](const ConstraintRule& left, const ConstraintRule& right) {
+            return left.constraint_id < right.constraint_id;
+        });
+    return result;
+}
+
 }  // namespace sfkg::timeseries::core

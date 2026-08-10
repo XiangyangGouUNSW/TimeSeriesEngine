@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -44,6 +45,10 @@ core::OperationResult registerEtth1Instances(
 
 int main(int argc, char* argv[]) {
     const std::string address = argc > 1 ? argv[1] : "0.0.0.0:50052";
+    const std::string constraint_result_receiver_address =
+        std::getenv("SFKG_CONSTRAINT_RESULT_RECEIVER_ADDRESS") == nullptr
+        ? "222.29.156.142:9105"
+        : std::getenv("SFKG_CONSTRAINT_RESULT_RECEIVER_ADDRESS");
 
     core::RuntimeConfigRegistry registry;
     const auto registered = registerEtth1Instances(&registry);
@@ -68,6 +73,8 @@ int main(int argc, char* argv[]) {
     core::StatisticsService statistics;
     core::ConstraintCheckEngine constraints;
     core::HistoryQueryService history(registry, taos_client);
+    core::grpc::ConstraintResultReceiverClient constraint_result_receiver(
+        constraint_result_receiver_address);
     core::grpc::TimeseriesCoreGrpcService service(
         ingest,
         storage,
@@ -76,7 +83,8 @@ int main(int argc, char* argv[]) {
         statistics,
         constraints,
         history,
-        registry);
+        registry,
+        constraint_result_receiver);
 
     ::grpc::EnableDefaultHealthCheckService(true);
     ::grpc::ServerBuilder builder;

@@ -111,6 +111,7 @@ if(SFKG_BUILD_GRPC)
         PUBLIC protobuf::libprotobuf gRPC::grpc++)
 
     add_library(sfkg_timeseries_grpc
+        src/grpc/constraint_result_receiver_client.cpp
         src/grpc/proto_conversion.cpp
         src/grpc/timeseries_core_grpc_service.cpp)
     target_include_directories(sfkg_timeseries_grpc
@@ -198,6 +199,14 @@ if(SFKG_BUILD_TESTS)
         add_test(
             NAME runtime_instance_config_proto_test
             COMMAND runtime_instance_config_proto_test)
+
+        add_executable(constraint_result_receiver_client_test
+            tests/constraint_result_receiver_client_test.cpp)
+        target_link_libraries(constraint_result_receiver_client_test
+            PRIVATE sfkg_timeseries_grpc)
+        add_test(
+            NAME constraint_result_receiver_client_test
+            COMMAND constraint_result_receiver_client_test)
     endif()
 
     if(SFKG_WITH_TAOS)
