@@ -72,11 +72,14 @@ int main() {
     assert(registry.findInstance("pressure-1").has_value());
 
     WindowService window;
+    assert(window.windowSize() == WindowService::kDefaultWindowSizeMs);
+    assert(window.configureWindowSize(1'000).code == OperationCode::Ok);
+    assert(window.windowSize() == 1'000);
     const TimeseriesBatch window_batch{
         {{1'000, "temperature-1", 25.0},
          {1'500, "temperature-1", 26.0},
          {2'200, "temperature-1", 27.0}}};
-    assert(window.buildTimeWindow(window_batch, 1'000).code ==
+    assert(window.buildTimeWindow(window_batch).code ==
            OperationCode::Ok);
     WindowQuery window_query;
     window_query.sequence_ids = {"temperature-1"};

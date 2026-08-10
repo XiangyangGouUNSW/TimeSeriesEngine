@@ -39,7 +39,7 @@ int main(int argc, char* argv[]) {
     core::IngestService ingest(registry);
     core::StorageService storage(taos_client);
     core::WindowService window;
-    core::AlignmentService alignment;
+    core::AlignmentService alignment(registry);
     core::StatisticsService statistics;
     core::ConstraintCheckEngine constraints;
     core::HistoryQueryService history(registry, taos_client);

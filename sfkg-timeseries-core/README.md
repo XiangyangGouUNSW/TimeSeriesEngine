@@ -153,9 +153,10 @@ ss -lntp | grep ':50051'
 统一服务启动后，建议按以下顺序调用：
 
 1. `syncInstanceConfigs` 同步实例配置；
-2. `syncConstraints`、`syncRelations` 同步约束和关联关系；
-3. 调用 `ingestData` 或 `ingestAndResolveData` 接入数据；
-4. 调用窗口、约束检查或历史查询接口。
+2. `syncWindowConfig` 同步任务窗口长度；未同步时 Core 默认使用 3 天；
+3. `syncConstraints`、`syncRelations` 同步约束和关联关系；
+4. 调用 `ingestData` 或 `ingestAndResolveData` 接入数据；
+5. 调用窗口、约束检查或历史查询接口。
 
 `queryHistoryData` 的 `granularity` 单位为毫秒。未设置时返回原始点；设置后
 按时间桶聚合，每个序列每个时间桶返回最后一个值。返回结果仍按时间升序，

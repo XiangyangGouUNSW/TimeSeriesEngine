@@ -49,6 +49,10 @@ public:
         ::grpc::ServerContext* context,
         const pb::SyncRelationsRequest* request,
         pb::SyncConfigResponse* response) override;
+    ::grpc::Status syncWindowConfig(
+        ::grpc::ServerContext* context,
+        const pb::SyncWindowConfigRequest* request,
+        pb::SyncConfigResponse* response) override;
 
     ::grpc::Status ingestData(
         ::grpc::ServerContext* context,

@@ -204,15 +204,43 @@ bool validTimeRange(
     });
 }
 
+::grpc::Status TimeseriesCoreGrpcService::syncWindowConfig(
+    ::grpc::ServerContext* context,
+    const pb::SyncWindowConfigRequest* request,
+    pb::SyncConfigResponse* response) {
+    (void)context;
+    return guardedCall("syncWindowConfig", response, [&] {
+        if (!request->has_config()) {
+            conversion::toProto(
+                internal::invalidArgument("window config is required"),
+                response->mutable_operation());
+            return ::grpc::Status::OK;
+        }
+        RuntimeWindowConfig config;
+        std::string error;
+        if (!conversion::fromProto(
+                request->config(), &config, &error)) {
+            conversion::toProto(
+                internal::invalidArgument(error),
+                response->mutable_operation());
+            return ::grpc::Status::OK;
+        }
+        conversion::toProto(
+            window_service_.configureWindowSize(config.window_size),
+            response->mutable_operation());
+        return ::grpc::Status::OK;
+    });
+}
+
 ::grpc::Status TimeseriesCoreGrpcService::ingestData(
     ::grpc::ServerContext* context,
     const pb::IngestDataRequest* request,
     pb::IngestDataResponse* response) {
     (void)context;
     return guardedCall("ingestData", response, [&] {
-        if (request->points().empty() || request->window_size() <= 0) {
+        if (request->points().empty()) {
             const auto invalid = internal::invalidArgument(
-                "points must not be empty and window_size must be positive");
+                "points must not be empty");
             conversion::toProto(invalid, response->mutable_operation());
             conversion::toProto(invalid, response->mutable_resolve_result());
             return ::grpc::Status::OK;
@@ -250,7 +278,7 @@ bool validTimeRange(
             // of truth for the hot window.
             storage_result = storage_service_.writeRawData(resolved.resolved_data);
             window_result = window_service_.buildTimeWindow(
-                resolved.resolved_data, request->window_size());
+                resolved.resolved_data);
         } else {
             storage_result = failedPrecondition(
                 "storage skipped because ingest resolution did not succeed");
@@ -393,11 +421,11 @@ bool validTimeRange(
     return guardedCall("alignWindowData", response, [&] {
         AlignmentConfig config;
         std::string error;
-        if (!request->has_config() ||
+        if (request->has_config() &&
             !conversion::fromProto(request->config(), &config, &error)) {
             conversion::toProto(
                 internal::invalidArgument(
-                    error.empty() ? "alignment config is required" : error),
+                    error.empty() ? "alignment config is invalid" : error),
                 response->mutable_operation());
             return ::grpc::Status::OK;
         }

@@ -8,13 +8,41 @@
 
 namespace sfkg::timeseries::core {
 
+std::int64_t WindowService::windowSize() const {
+    std::lock_guard lock(mutex_);
+    return window_size_;
+}
+
+OperationResult WindowService::configureWindowSize(std::int64_t window_size) {
+    if (window_size <= 0) {
+        return internal::invalidArgument(
+            "window_size must be positive");
+    }
+
+    std::lock_guard lock(mutex_);
+    window_size_ = window_size;
+    pruneExpiredPoints();
+    return internal::ok(0, "hot window size configured");
+}
+
+OperationResult WindowService::buildTimeWindow(
+    const TimeseriesBatch& data) {
+    return updateWindow(data, std::nullopt);
+}
+
 OperationResult WindowService::buildTimeWindow(
     const TimeseriesBatch& data,
     std::int64_t window_size) {
+    return updateWindow(data, window_size);
+}
+
+OperationResult WindowService::updateWindow(
+    const TimeseriesBatch& data,
+    std::optional<std::int64_t> window_size_override) {
     if (data.points.empty()) {
         return internal::invalidArgument("window input must not be empty");
     }
-    if (window_size <= 0) {
+    if (window_size_override && *window_size_override <= 0) {
         return internal::invalidArgument(
             "window_size must be positive");
     }
@@ -26,7 +54,9 @@ OperationResult WindowService::buildTimeWindow(
     }
 
     std::lock_guard lock(mutex_);
-    window_size_ = window_size;
+    if (window_size_override) {
+        window_size_ = *window_size_override;
+    }
     for (const auto& point : data.points) {
         sequence_windows_[point.sequence_id][point.time] = point;
         if (!watermark_ || point.time > *watermark_) {
@@ -34,6 +64,14 @@ OperationResult WindowService::buildTimeWindow(
         }
     }
 
+    pruneExpiredPoints();
+    return internal::ok(data.points.size(), "hot window updated");
+}
+
+void WindowService::pruneExpiredPoints() {
+    if (!watermark_ || window_size_ <= 0) {
+        return;
+    }
     const auto start = *watermark_ <
             std::numeric_limits<Timestamp>::min() + window_size_
         ? std::numeric_limits<Timestamp>::min()
@@ -48,7 +86,6 @@ OperationResult WindowService::buildTimeWindow(
             ++sequence;
         }
     }
-    return internal::ok(data.points.size(), "hot window updated");
 }
 
 WindowQueryResult WindowService::queryWindowData(

@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "sfkg/timeseries/core/alignment_service.hpp"
+#include "sfkg/timeseries/core/runtime_config_registry.hpp"
 
 using namespace sfkg::timeseries::core;
 
@@ -19,6 +20,12 @@ double asDouble(const TimeseriesValue& value) {
     }
     assert(false && "test value is not numeric");
     return 0.0;
+}
+
+const std::string& asString(const TimeseriesValue& value) {
+    const auto* string_value = std::get_if<std::string>(&value);
+    assert(string_value != nullptr && "test value is not a string");
+    return *string_value;
 }
 
 SequenceAlignmentConfig sequence(
@@ -45,7 +52,17 @@ RuntimeRelationConfig fixedRelation(
 }  // namespace
 
 int main() {
-    AlignmentService service;
+    RuntimeConfigRegistry registry;
+    RuntimeInstanceConfig temperature_instance;
+    temperature_instance.sequence_id = "temperature-1";
+    temperature_instance.data_source_id = "test";
+    temperature_instance.external_sequence_id = "temperature-1";
+    temperature_instance.series_kind = SeriesKind::Continuous;
+    assert(registry.replaceInstanceConfigs(
+        RuntimeConfigSnapshot<RuntimeInstanceConfig>{{temperature_instance}})
+               .code == OperationCode::Ok);
+
+    AlignmentService service(registry);
 
     AlignmentConfig basic_config;
     basic_config.bucket_interval = 5;
@@ -67,6 +84,43 @@ int main() {
     // Linear interpolation is used only between known points; boundaries use
     // NEAR, so the last bucket is filled from the previous known value.
     assert(asDouble(result.aligned_data.samples[3].values.at("temperature-1")) == 20.0);
+
+    // With no AlignmentConfig, the continuous sequence uses the registry
+    // default Average + Linear and the smallest positive gap as interval.
+    WindowData inferred_window;
+    inferred_window.window_start_time = 0;
+    inferred_window.window_end_time = 4;
+    inferred_window.sequence_values["temperature-1"] = {
+        {0, "temperature-1", 0.0},
+        {1, "temperature-1", 10.0},
+        {3, "temperature-1", 30.0}};
+    result = service.alignWindowData(inferred_window);
+    assert(result.operation.code == OperationCode::Ok);
+    assert(result.aligned_data.samples.size() == 4);
+    assert(asDouble(result.aligned_data.samples[2].values.at("temperature-1")) == 20.0);
+
+    RuntimeInstanceConfig status_instance;
+    status_instance.sequence_id = "machine-status-1";
+    status_instance.data_source_id = "test";
+    status_instance.external_sequence_id = "machine-status-1";
+    status_instance.series_kind = SeriesKind::Discrete;
+    assert(registry.upsertInstanceConfigs(
+        RuntimeConfigSnapshot<RuntimeInstanceConfig>{{status_instance}})
+               .code == OperationCode::Ok);
+    AlignmentConfig status_config;
+    status_config.bucket_interval = 2;
+    status_config.sequences.push_back({"machine-status-1"});
+    WindowData status_window;
+    status_window.window_start_time = 0;
+    status_window.window_end_time = 8;
+    status_window.sequence_values["machine-status-1"] = {
+        {0, "machine-status-1", std::string("off")},
+        {6, "machine-status-1", std::string("on")}};
+    result = service.alignWindowData(status_window, status_config);
+    assert(result.operation.code == OperationCode::Ok);
+    assert(asString(result.aligned_data.samples[1].values.at("machine-status-1")) == "off");
+    assert(asString(result.aligned_data.samples[2].values.at("machine-status-1")) == "off");
+    assert(asString(result.aligned_data.samples[3].values.at("machine-status-1")) == "on");
 
     auto near_config = basic_config;
     near_config.sequences.front().fill_method = GapFillMethod::Near;

@@ -298,6 +298,32 @@ bool syncInstances(
     return true;
 }
 
+bool syncWindowConfig(
+    const std::shared_ptr<::grpc::Channel>& channel,
+    std::int64_t window_size,
+    Logger* logger) {
+    auto stub = pb::TimeseriesCoreService::NewStub(channel);
+    pb::SyncWindowConfigRequest request;
+    request.mutable_config()->set_window_size(window_size);
+    ::grpc::ClientContext context;
+    context.set_deadline(
+        std::chrono::system_clock::now() + std::chrono::seconds(10));
+    pb::SyncConfigResponse response;
+    const auto status = stub->syncWindowConfig(&context, request, &response);
+    if (!status.ok() || response.operation().code() != pb::OPERATION_CODE_OK) {
+        logger->line(
+            "[benchmark] syncWindowConfig failed grpc=" +
+            std::to_string(status.error_code()) +
+            " code=" + operationCode(response.operation().code()) +
+            " message=" + response.operation().message());
+        return false;
+    }
+    logger->line(
+        "[benchmark] synced window_size_ms=" +
+        std::to_string(window_size));
+    return true;
+}
+
 std::optional<std::uint64_t> queryPointCount(
     const std::shared_ptr<::grpc::Channel>& channel,
     const std::vector<std::string>& sequence_ids,
@@ -357,7 +383,6 @@ void workerMain(
 
     while (SteadyClock::now() < end_time) {
         pb::IngestDataRequest request;
-        request.set_window_size(options.window_size_ms);
         request.set_return_resolved_data(false);
         for (std::size_t point_index = 0;
              point_index < options.batch_size;
@@ -579,6 +604,9 @@ int main(int argc, char* argv[]) {
         options.address, ::grpc::InsecureChannelCredentials());
     const auto sequence_ids = makeSequenceIds(options);
     if (!syncInstances(channel, sequence_ids, &logger)) {
+        return 2;
+    }
+    if (!syncWindowConfig(channel, options.window_size_ms, &logger)) {
         return 2;
     }
 

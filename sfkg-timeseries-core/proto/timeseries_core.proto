@@ -11,6 +11,8 @@ service TimeseriesCoreService {
       returns (SyncConfigResponse);
   rpc syncRelations(SyncRelationsRequest)
       returns (SyncConfigResponse);
+  rpc syncWindowConfig(SyncWindowConfigRequest)
+      returns (SyncConfigResponse);
 
   // Production ingest entry: resolve once, persist to cold storage, then
   // update the hot window inside Core.
@@ -149,13 +151,13 @@ enum GapFillMethod {
 message SequenceAlignmentConfig {
   string sequence_id = 1;
   VariableRole role = 2;
-  BucketAggregation aggregation = 3;
-  GapFillMethod fill_method = 4;
+  optional BucketAggregation aggregation = 3;
+  optional GapFillMethod fill_method = 4;
 }
 
 message AlignmentConfig {
   repeated SequenceAlignmentConfig sequences = 1;
-  int64 bucket_interval = 2;
+  optional int64 bucket_interval = 2;
 }
 
 message ConstraintTerm {
@@ -246,13 +248,24 @@ message SyncRelationsRequest {
   repeated RuntimeRelationConfig items = 1;
 }
 
+message RuntimeWindowConfig {
+  // Milliseconds retained by the Core hot window. The current Core instance
+  // applies one global window configuration; task-specific routing can be
+  // added when task_id is introduced to the data path.
+  int64 window_size = 1;
+}
+
+message SyncWindowConfigRequest {
+  RuntimeWindowConfig config = 1;
+}
+
 message SyncConfigResponse {
   OperationResult operation = 1;
 }
 
 message IngestDataRequest {
   repeated TimeseriesIngestData points = 1;
-  int64 window_size = 2;
+  reserved 2;
   // The normalized batch is omitted by default to avoid an unnecessary copy.
   bool return_resolved_data = 3;
 }

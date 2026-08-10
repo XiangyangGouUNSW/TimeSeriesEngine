@@ -164,10 +164,21 @@ int run(int argc, char* argv[]) {
     }
 
     {
+        pb::SyncWindowConfigRequest request;
+        pb::SyncConfigResponse response;
+        ::grpc::ClientContext context;
+        request.mutable_config()->set_window_size(60'000);
+        const auto status = stub->syncWindowConfig(
+            &context, request, &response);
+        passed &= check(
+            "syncWindowConfig", status, response.operation(),
+            pb::OPERATION_CODE_OK);
+    }
+
+    {
         pb::IngestDataRequest request;
         pb::IngestDataResponse response;
         ::grpc::ClientContext context;
-        request.set_window_size(60'000);
         request.set_return_resolved_data(true);
 
         auto* double_point = request.add_points();

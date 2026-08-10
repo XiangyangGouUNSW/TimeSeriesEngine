@@ -12,6 +12,8 @@ namespace sfkg::timeseries::core {
 
 using Timestamp = std::int64_t;
 using SequenceId = std::string;
+inline constexpr Timestamp kDefaultWindowSizeMs =
+    3LL * 24 * 60 * 60 * 1000;
 using TimeseriesValue =
     std::variant<double, std::int64_t, bool, std::string>;
 
@@ -110,13 +112,17 @@ enum class GapFillMethod {
 struct SequenceAlignmentConfig {
     SequenceId sequence_id;
     VariableRole role{VariableRole::Independent};
-    BucketAggregation aggregation{BucketAggregation::Average};
-    GapFillMethod fill_method{GapFillMethod::Linear};
+    // An omitted strategy is resolved from the registered SeriesKind. An
+    // explicitly supplied strategy always takes precedence.
+    std::optional<BucketAggregation> aggregation;
+    std::optional<GapFillMethod> fill_method;
 };
 
 struct AlignmentConfig {
     std::vector<SequenceAlignmentConfig> sequences;
-    std::int64_t bucket_interval{};
+    // If omitted, AlignmentService infers the smallest positive timestamp
+    // gap in the current window.
+    std::optional<std::int64_t> bucket_interval;
 };
 
 struct ConstraintTerm {
@@ -219,6 +225,12 @@ struct RuntimeRelationConfig {
     std::string relation_type;
     double confidence{};
     bool enabled{false};
+};
+
+// The current Core process owns one hot-window configuration. The unified
+// service may replace it at runtime; an instance starts with the default.
+struct RuntimeWindowConfig {
+    Timestamp window_size{kDefaultWindowSizeMs};
 };
 
 template <typename T>

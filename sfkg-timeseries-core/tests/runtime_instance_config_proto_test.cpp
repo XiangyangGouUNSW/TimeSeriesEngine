@@ -37,5 +37,13 @@ int main() {
     error.clear();
     assert(!conversion::fromProto(source, &target, &error));
     assert(error == "unknown series_kind");
+
+    proto::RuntimeWindowConfig window_source;
+    window_source.set_window_size(259'200'000);
+    core::RuntimeWindowConfig window_target;
+    error.clear();
+    assert(conversion::fromProto(window_source, &window_target, &error));
+    assert(error.empty());
+    assert(window_target.window_size == 259'200'000);
     return 0;
 }

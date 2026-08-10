@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "operation_helpers.hpp"
+#include "sfkg/timeseries/core/runtime_config_registry.hpp"
 
 namespace sfkg::timeseries::core {
 namespace {
@@ -19,6 +20,72 @@ namespace {
 using BucketPoint = std::pair<Timestamp, const RawTimeseriesPoint*>;
 using BucketPoints = std::vector<std::vector<BucketPoint>>;
 using BucketValues = std::vector<std::optional<TimeseriesValue>>;
+
+BucketAggregation defaultAggregation(SeriesKind kind) {
+    switch (kind) {
+        case SeriesKind::Continuous:
+            return BucketAggregation::Average;
+        case SeriesKind::Discrete:
+        case SeriesKind::Categorical:
+            return BucketAggregation::Last;
+        case SeriesKind::Unspecified:
+            return BucketAggregation::First;
+    }
+    return BucketAggregation::First;
+}
+
+GapFillMethod defaultFillMethod(SeriesKind kind) {
+    switch (kind) {
+        case SeriesKind::Continuous:
+            return GapFillMethod::Linear;
+        case SeriesKind::Discrete:
+        case SeriesKind::Categorical:
+            return GapFillMethod::Previous;
+        case SeriesKind::Unspecified:
+            return GapFillMethod::Near;
+    }
+    return GapFillMethod::Near;
+}
+
+std::optional<std::int64_t> inferBucketInterval(
+    const WindowData& window_data,
+    const std::vector<SequenceAlignmentConfig>& sequences) {
+    std::optional<std::uint64_t> smallest_gap;
+    for (const auto& sequence : sequences) {
+        const auto found = window_data.sequence_values.find(
+            sequence.sequence_id);
+        if (found == window_data.sequence_values.end() ||
+            found->second.size() < 2) {
+            continue;
+        }
+
+        std::vector<Timestamp> times;
+        times.reserve(found->second.size());
+        for (const auto& point : found->second) {
+            times.push_back(point.time);
+        }
+        std::sort(times.begin(), times.end());
+        times.erase(std::unique(times.begin(), times.end()), times.end());
+        for (std::size_t index = 1; index < times.size(); ++index) {
+            // The timestamps are sorted, so unsigned subtraction gives the
+            // non-negative distance without signed overflow at the limits.
+            const auto gap = static_cast<std::uint64_t>(times[index]) -
+                static_cast<std::uint64_t>(times[index - 1]);
+            if (gap == 0 || gap > static_cast<std::uint64_t>(
+                    std::numeric_limits<std::int64_t>::max())) {
+                continue;
+            }
+            if (!smallest_gap || gap < *smallest_gap) {
+                smallest_gap = gap;
+            }
+        }
+    }
+
+    if (!smallest_gap) {
+        return std::nullopt;
+    }
+    return static_cast<std::int64_t>(*smallest_gap);
+}
 
 bool numericValue(const TimeseriesValue& value, double* output) {
     if (const auto* number = std::get_if<double>(&value)) {
@@ -290,8 +357,25 @@ bool fillValues(
 }  // namespace
 
 AlignmentResult AlignmentService::alignWindowData(
+    const WindowData& window_data) const {
+    return alignWindowData(window_data, AlignmentConfig{}, {});
+}
+
+AlignmentResult AlignmentService::alignWindowData(
     const WindowData& window_data,
-    const AlignmentConfig& config,
+    const AlignmentConfig& config) const {
+    return alignWindowData(window_data, config, {});
+}
+
+AlignmentResult AlignmentService::alignWindowData(
+    const WindowData& window_data,
+    const std::vector<RuntimeRelationConfig>& relations) const {
+    return alignWindowData(window_data, AlignmentConfig{}, relations);
+}
+
+AlignmentResult AlignmentService::alignWindowData(
+    const WindowData& window_data,
+    const AlignmentConfig& requested_config,
     const std::vector<RuntimeRelationConfig>& relations) const {
     AlignmentResult result;
     if (window_data.window_start_time > window_data.window_end_time) {
@@ -299,10 +383,16 @@ AlignmentResult AlignmentService::alignWindowData(
             "alignment window start time must not be after end time");
         return result;
     }
-    if (config.bucket_interval <= 0) {
-        result.operation = internal::invalidArgument(
-            "alignment bucket_interval must be positive");
-        return result;
+
+    AlignmentConfig config = requested_config;
+    if (config.sequences.empty()) {
+        config.sequences.reserve(window_data.sequence_values.size());
+        for (const auto& [sequence_id, points] : window_data.sequence_values) {
+            (void)points;
+            config.sequences.push_back({
+                sequence_id, VariableRole::Independent,
+                std::nullopt, std::nullopt});
+        }
     }
     if (config.sequences.empty()) {
         result.operation = internal::invalidArgument(
@@ -311,7 +401,7 @@ AlignmentResult AlignmentService::alignWindowData(
     }
 
     std::unordered_set<SequenceId> configured_sequences;
-    for (const auto& sequence : config.sequences) {
+    for (auto& sequence : config.sequences) {
         if (sequence.sequence_id.empty()) {
             result.operation = internal::invalidArgument(
                 "alignment sequence_id must not be empty");
@@ -321,6 +411,17 @@ AlignmentResult AlignmentService::alignWindowData(
             result.operation = internal::invalidArgument(
                 "duplicate alignment sequence_id: " + sequence.sequence_id);
             return result;
+        }
+
+        SeriesKind kind = SeriesKind::Unspecified;
+        if (const auto instance = configs_.findInstance(sequence.sequence_id)) {
+            kind = instance->series_kind;
+        }
+        if (!sequence.aggregation) {
+            sequence.aggregation = defaultAggregation(kind);
+        }
+        if (!sequence.fill_method) {
+            sequence.fill_method = defaultFillMethod(kind);
         }
     }
 
@@ -412,10 +513,28 @@ AlignmentResult AlignmentService::alignWindowData(
         }
     }
 
+    if (config.bucket_interval) {
+        if (*config.bucket_interval <= 0) {
+            result.operation = internal::invalidArgument(
+                "alignment bucket_interval must be positive");
+            return result;
+        }
+    } else {
+        const auto inferred = inferBucketInterval(
+            window_data, config.sequences);
+        if (!inferred) {
+            result.operation = internal::invalidArgument(
+                "cannot infer bucket_interval; provide a positive interval "
+                "or at least two distinct timestamps");
+            return result;
+        }
+        config.bucket_interval = *inferred;
+    }
+
     const auto span = static_cast<std::uint64_t>(
         window_data.window_end_time) -
         static_cast<std::uint64_t>(window_data.window_start_time);
-    const auto interval = static_cast<std::uint64_t>(config.bucket_interval);
+    const auto interval = static_cast<std::uint64_t>(*config.bucket_interval);
     const auto bucket_count_u64 = span / interval + (span % interval != 0);
     if (bucket_count_u64 > std::numeric_limits<std::size_t>::max()) {
         result.operation = internal::invalidArgument(
@@ -475,7 +594,7 @@ AlignmentResult AlignmentService::alignWindowData(
             TimeseriesValue value;
             std::string error;
             if (!aggregateBucket(
-                    buckets[bucket], sequence_config.aggregation,
+                    buckets[bucket], *sequence_config.aggregation,
                     &value, &error)) {
                 result.operation = internal::invalidArgument(error);
                 return result;
@@ -485,7 +604,7 @@ AlignmentResult AlignmentService::alignWindowData(
 
         std::string fill_error;
         if (!fillValues(
-                &values, sequence_config.fill_method, &fill_error)) {
+                &values, *sequence_config.fill_method, &fill_error)) {
             result.operation = internal::invalidArgument(fill_error);
             return result;
         }

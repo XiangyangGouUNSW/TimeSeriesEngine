@@ -263,6 +263,7 @@ std::vector<std::string> makeSequenceIds(const Options& options) {
 bool setupConfigs(
     const std::shared_ptr<::grpc::Channel>& channel,
     const std::vector<std::string>& ids,
+    std::int64_t window_size,
     Logger* logger) {
     auto stub = pb::TimeseriesCoreService::NewStub(channel);
     const auto call = [&](const char* name, auto&& invoke) {
@@ -297,6 +298,18 @@ bool setupConfigs(
             pb::SyncConfigResponse response;
             const auto status = stub.syncInstanceConfigs(
                 &context, instances, &response);
+            return std::make_pair(status, response.operation().code());
+        })) {
+        return false;
+    }
+
+    pb::SyncWindowConfigRequest window_config;
+    window_config.mutable_config()->set_window_size(window_size);
+    if (!call("syncWindowConfig", [&](auto& stub) {
+            ::grpc::ClientContext context;
+            pb::SyncConfigResponse response;
+            const auto status = stub.syncWindowConfig(
+                &context, window_config, &response);
             return std::make_pair(status, response.operation().code());
         })) {
         return false;
@@ -393,7 +406,6 @@ void ingestMain(
 
     while (SteadyClock::now() < end_time) {
         pb::IngestDataRequest request;
-        request.set_window_size(options.window_size_ms);
         for (std::size_t point_index = 0;
              point_index < options.batch_size;
              ++point_index) {
@@ -749,7 +761,8 @@ int main(int argc, char* argv[]) {
     const auto channel = ::grpc::CreateChannel(
         options.address, ::grpc::InsecureChannelCredentials());
     const auto ids = makeSequenceIds(options);
-    if (ids.size() < 2 || !setupConfigs(channel, ids, &logger)) {
+    if (ids.size() < 2 ||
+        !setupConfigs(channel, ids, options.window_size_ms, &logger)) {
         return 2;
     }
 

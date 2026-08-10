@@ -305,6 +305,24 @@ bool syncInstances(
     return status.ok() && response.operation().code() == pb::OPERATION_CODE_OK;
 }
 
+bool syncWindowConfig(
+    const std::shared_ptr<::grpc::Channel>& channel,
+    std::int64_t window_size,
+    Logger* logger) {
+    auto stub = pb::TimeseriesCoreService::NewStub(channel);
+    pb::SyncWindowConfigRequest request;
+    request.mutable_config()->set_window_size(window_size);
+    ::grpc::ClientContext context;
+    pb::SyncConfigResponse response;
+    const auto status = stub->syncWindowConfig(&context, request, &response);
+    logger->line(
+        "[stage] syncWindowConfig grpc=" +
+        std::to_string(status.error_code()) +
+        " operation=" + operationCode(response.operation().code()) +
+        " window_size_ms=" + std::to_string(window_size));
+    return status.ok() && response.operation().code() == pb::OPERATION_CODE_OK;
+}
+
 CallResult makeResult(
     const ::grpc::Status& status,
     const pb::OperationResult& operation) {
@@ -396,7 +414,6 @@ void runFullIngest(
     for (std::size_t batch = 0; batch < options.batches; ++batch) {
         const auto points = makePoints(ids, batch, options.batch_size, base_time);
         pb::IngestDataRequest request;
-        request.set_window_size(options.window_size_ms);
         fillIngest(&request, points);
         measure("ingestData", stats, logger, [&] {
             ::grpc::ClientContext context;
@@ -509,6 +526,9 @@ int main(int argc, char* argv[]) {
     all_ids.insert(all_ids.end(), window_ids.begin(), window_ids.end());
     all_ids.insert(all_ids.end(), full_ids.begin(), full_ids.end());
     if (!syncInstances(channel, all_ids, &logger)) {
+        return 2;
+    }
+    if (!syncWindowConfig(channel, options.window_size_ms, &logger)) {
         return 2;
     }
 

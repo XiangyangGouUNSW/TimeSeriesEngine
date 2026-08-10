@@ -81,6 +81,17 @@ fixed_lag: std::int64_t
 
 ```cpp
 AlignmentResult alignWindowData(
+    const WindowData& window_data) const;
+
+AlignmentResult alignWindowData(
+    const WindowData& window_data,
+    const AlignmentConfig& config) const;
+
+AlignmentResult alignWindowData(
+    const WindowData& window_data,
+    const std::vector<RuntimeRelationConfig>& relations) const;
+
+AlignmentResult alignWindowData(
     const WindowData& window_data,
     const AlignmentConfig& config,
     const std::vector<RuntimeRelationConfig>& relations) const;
@@ -97,7 +108,13 @@ relations 非空：按具体 sequence 关系应用固定 lag
 多个目标序列关系。每条关系的 `target_sequence_id` 应唯一。
 
 对齐结果仍然是 `AlignedWindowData`，输出时间网格由因变量窗口和
-`AlignmentConfig.bucket_interval` 决定，不会因为不同 relation 产生额外输出桶。
+`AlignmentConfig.bucket_interval` 决定；省略时 Core 根据当前窗口中所有参与序列的
+最小正时间间隔推导，不会因为不同 relation 产生额外输出桶。
+
+`AlignmentConfig` 可以整体省略。省略的 sequence 列表默认使用当前窗口中的全部序列，
+省略的聚合和填补策略由本地 `RuntimeConfigRegistry` 中的 `SeriesKind` 决定：连续型
+默认 `AVERAGE + LINEAR`，离散型和类别型默认 `LAST + PREVIOUS`，未指定类型默认
+`FIRST + NEAR`。显式传入的配置优先。
 
 ## relation 对齐操作
 
@@ -172,7 +189,7 @@ std::optional<RuntimeRelationConfig> findRelation(
 
 ```text
 接收 WindowData 或 window_query
-接收 AlignmentConfig
+接收可选的 AlignmentConfig；省略时由 Core 本地补全默认配置
 接收 relation_ids
 查询具体 RuntimeRelationConfig
 调用 AlignmentService
@@ -184,7 +201,7 @@ std::optional<RuntimeRelationConfig> findRelation(
 - `WindowData` 不需要增加车间或实体字段；
 - `AlignedWindowData` 不需要增加 relation 字段；
 - `ConstraintCheckEngine` 不负责关系展开和 lag 计算；
-- `AlignmentConfig` 的 bucket、aggregation、fill_method 仍然保留；
+- `AlignmentConfig` 的 bucket、aggregation、fill_method 仍然保留，但都可以按约定省略；
 - 无 relation 时的普通分桶对齐仍然可以使用同一个接口。
 
 ## 对统一服务模块的影响
@@ -211,14 +228,14 @@ SERIES_KIND_CATEGORICAL
 ```
 
 统一服务负责保存并传入该字段。现有 `data_type` 字段保留兼容旧客户端，
-仍用于接入阶段的实际值类型校验，并继续接受原有取值约定。当前 Core 不会
-根据 `series_kind` 自动选择对齐策略；统一服务仍应在 `AlignmentConfig` 中
-明确传入 `aggregation` 和 `fill_method`。因此本次新增字段不会改变
+仍用于接入阶段的实际值类型校验，并继续接受原有取值约定。Core 的本地
+`AlignmentService` 会根据 Registry 中的 `series_kind` 自动补全未指定的对齐策略；
+统一服务仍可以在 `AlignmentConfig` 中显式覆盖默认值。因此该字段不会改变
 `TimeseriesIngestData`、`WindowData` 或历史查询接口。
 
 受影响的调用方只有传输 `RuntimeInstanceConfig` 的配置同步调用：
 
 1. 统一服务需要重新生成 proto 客户端，并可在 `syncInstanceConfigs` 中传入
    `series_kind`；省略时 Core 按 `UNSPECIFIED` 处理。
-2. Core 的 proto 转换和运行时注册表会保存并校验该字段。
+2. Core 的 proto 转换和运行时注册表会保存该字段，并在本地对齐时使用它补全默认策略。
 3. 旧客户端不传该字段仍可联调；现有 `data_type` 的兼容行为保持不变。

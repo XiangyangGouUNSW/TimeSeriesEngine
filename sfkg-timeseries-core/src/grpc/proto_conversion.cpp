@@ -276,11 +276,14 @@ bool fromProto(
     const pb::AlignmentConfig& source,
     AlignmentConfig* target,
     std::string* error) {
-    if (source.bucket_interval() <= 0) {
+    target->bucket_interval.reset();
+    if (source.has_bucket_interval() && source.bucket_interval() <= 0) {
         *error = "bucket_interval must be positive";
         return false;
     }
-    target->bucket_interval = source.bucket_interval();
+    if (source.has_bucket_interval()) {
+        target->bucket_interval = source.bucket_interval();
+    }
     target->sequences.clear();
     target->sequences.reserve(source.sequences_size());
     for (const auto& sequence : source.sequences()) {
@@ -297,46 +300,57 @@ bool fromProto(
             case pb::VARIABLE_ROLE_DEPENDENT:
                 converted.role = VariableRole::Dependent;
                 break;
+            case pb::VARIABLE_ROLE_UNSPECIFIED:
+                converted.role = VariableRole::Independent;
+                break;
             default:
                 *error = "alignment variable role is unspecified";
                 return false;
         }
-        switch (sequence.aggregation()) {
-            case pb::BUCKET_AGGREGATION_FIRST:
-                converted.aggregation = BucketAggregation::First;
-                break;
-            case pb::BUCKET_AGGREGATION_LAST:
-                converted.aggregation = BucketAggregation::Last;
-                break;
-            case pb::BUCKET_AGGREGATION_AVERAGE:
-                converted.aggregation = BucketAggregation::Average;
-                break;
-            case pb::BUCKET_AGGREGATION_MAXIMUM:
-                converted.aggregation = BucketAggregation::Maximum;
-                break;
-            case pb::BUCKET_AGGREGATION_MINIMUM:
-                converted.aggregation = BucketAggregation::Minimum;
-                break;
-            default:
-                *error = "alignment aggregation is unspecified";
-                return false;
+        if (sequence.has_aggregation()) {
+            switch (sequence.aggregation()) {
+                case pb::BUCKET_AGGREGATION_FIRST:
+                    converted.aggregation = BucketAggregation::First;
+                    break;
+                case pb::BUCKET_AGGREGATION_LAST:
+                    converted.aggregation = BucketAggregation::Last;
+                    break;
+                case pb::BUCKET_AGGREGATION_AVERAGE:
+                    converted.aggregation = BucketAggregation::Average;
+                    break;
+                case pb::BUCKET_AGGREGATION_MAXIMUM:
+                    converted.aggregation = BucketAggregation::Maximum;
+                    break;
+                case pb::BUCKET_AGGREGATION_MINIMUM:
+                    converted.aggregation = BucketAggregation::Minimum;
+                    break;
+                case pb::BUCKET_AGGREGATION_UNSPECIFIED:
+                    break;
+                default:
+                    *error = "unknown alignment aggregation";
+                    return false;
+            }
         }
-        switch (sequence.fill_method()) {
-            case pb::GAP_FILL_METHOD_NEAR:
-                converted.fill_method = GapFillMethod::Near;
-                break;
-            case pb::GAP_FILL_METHOD_PREVIOUS:
-                converted.fill_method = GapFillMethod::Previous;
-                break;
-            case pb::GAP_FILL_METHOD_NEXT:
-                converted.fill_method = GapFillMethod::Next;
-                break;
-            case pb::GAP_FILL_METHOD_LINEAR:
-                converted.fill_method = GapFillMethod::Linear;
-                break;
-            default:
-                *error = "alignment fill method is unspecified";
-                return false;
+        if (sequence.has_fill_method()) {
+            switch (sequence.fill_method()) {
+                case pb::GAP_FILL_METHOD_NEAR:
+                    converted.fill_method = GapFillMethod::Near;
+                    break;
+                case pb::GAP_FILL_METHOD_PREVIOUS:
+                    converted.fill_method = GapFillMethod::Previous;
+                    break;
+                case pb::GAP_FILL_METHOD_NEXT:
+                    converted.fill_method = GapFillMethod::Next;
+                    break;
+                case pb::GAP_FILL_METHOD_LINEAR:
+                    converted.fill_method = GapFillMethod::Linear;
+                    break;
+                case pb::GAP_FILL_METHOD_UNSPECIFIED:
+                    break;
+                default:
+                    *error = "unknown alignment fill method";
+                    return false;
+            }
         }
         target->sequences.push_back(std::move(converted));
     }
@@ -443,6 +457,15 @@ bool fromProto(
     target->relation_type = source.relation_type();
     target->confidence = source.confidence();
     target->enabled = source.enabled();
+    return true;
+}
+
+bool fromProto(
+    const pb::RuntimeWindowConfig& source,
+    RuntimeWindowConfig* target,
+    std::string* error) {
+    (void)error;
+    target->window_size = source.window_size();
     return true;
 }
 
