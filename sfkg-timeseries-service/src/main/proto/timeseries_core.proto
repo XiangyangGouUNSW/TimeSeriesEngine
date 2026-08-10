@@ -17,6 +17,7 @@ service TimeseriesCoreService {
   rpc queryHistoryOverview (QueryHistoryOverviewRequest) returns (QueryHistoryOverviewResponse);
   rpc queryWindowData (QueryWindowDataRequest) returns (QueryWindowDataResponse);
   rpc syncWindowConfig (SyncWindowConfigRequest) returns (SyncConfigResponse);
+  rpc syncDerivedSeriesConfigs (SyncDerivedSeriesConfigsRequest) returns (SyncConfigResponse);
 }
 
 // ── Shared enums & messages ───────────────────────────────────────
@@ -296,4 +297,51 @@ message RuntimeWindowConfig {
 
 message SyncWindowConfigRequest {
   RuntimeWindowConfig config = 1;
+}
+
+// ── Derived series ────────────────────────────────────────────────
+
+enum DerivedOperator {
+  DERIVED_OPERATOR_UNSPECIFIED = 0;
+  DERIVED_OPERATOR_ADD = 1;
+  DERIVED_OPERATOR_SUBTRACT = 2;
+  DERIVED_OPERATOR_MULTIPLY = 3;
+  DERIVED_OPERATOR_DIVIDE = 4;
+}
+
+message DerivedExpression {
+  oneof node {
+    string sequence_id = 1;
+    double constant = 2;
+    DerivedBinaryExpression binary = 3;
+  }
+}
+
+message DerivedBinaryExpression {
+  DerivedOperator operator = 1;
+  DerivedExpression left = 2;
+  DerivedExpression right = 3;
+}
+
+message LinearTerm {
+  string sequence_id = 1;
+  double coefficient = 2;
+}
+
+message LinearCombinationConfig {
+  repeated LinearTerm terms = 1;
+  double bias = 2;
+}
+
+message DerivedSeriesConfig {
+  string derived_sequence_id = 1;
+  bool enabled = 2;
+  oneof formula {
+    LinearCombinationConfig linear_combination = 3;
+    DerivedExpression expression = 4;
+  }
+}
+
+message SyncDerivedSeriesConfigsRequest {
+  repeated DerivedSeriesConfig items = 1;
 }

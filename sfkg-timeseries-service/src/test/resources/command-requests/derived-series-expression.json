@@ -1,0 +1,21 @@
+{
+  "items": [
+    {
+      "derivedSequenceId": "ETTh1_avg",
+      "enabled": true,
+      "expression": {
+        "binary": {
+          "operator": "DIVIDE",
+          "left": {
+            "binary": {
+              "operator": "ADD",
+              "left": {"sequenceId": "ETTh1_HUFL"},
+              "right": {"sequenceId": "ETTh1_HULL"}
+            }
+          },
+          "right": {"constant": 2.0}
+        }
+      }
+    }
+  ]
+}

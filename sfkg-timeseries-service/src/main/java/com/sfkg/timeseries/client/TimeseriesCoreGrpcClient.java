@@ -4,6 +4,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.config.GrpcClientProperties;
+import com.sfkg.timeseries.dto.DerivedSeriesConfigSaveRequest;
+import com.sfkg.timeseries.dto.DerivedSeriesConfigSaveRequest.DerivedExpressionDTO;
+import com.sfkg.timeseries.dto.DerivedSeriesConfigSaveRequest.LinearTermDTO;
 import com.sfkg.timeseries.dto.HistoryDataQueryRequest;
 import com.sfkg.timeseries.dto.SyncResult;
 import com.sfkg.timeseries.dto.TimeseriesDataSaveRequest;
@@ -15,9 +18,15 @@ import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.entity.TimeseriesRelation;
 import com.sfkg.timeseries.grpc.ConstraintRule;
 import com.sfkg.timeseries.grpc.ConstraintTerm;
+import com.sfkg.timeseries.grpc.DerivedBinaryExpression;
+import com.sfkg.timeseries.grpc.DerivedExpression;
+import com.sfkg.timeseries.grpc.DerivedOperator;
+import com.sfkg.timeseries.grpc.DerivedSeriesConfig;
 import com.sfkg.timeseries.grpc.HistoryOverview;
 import com.sfkg.timeseries.grpc.IngestDataRequest;
 import com.sfkg.timeseries.grpc.IngestDataResponse;
+import com.sfkg.timeseries.grpc.LinearCombinationConfig;
+import com.sfkg.timeseries.grpc.LinearTerm;
 import com.sfkg.timeseries.grpc.OperationCode;
 import com.sfkg.timeseries.grpc.OperationResult;
 import com.sfkg.timeseries.grpc.QueryHistoryDataRequest;
@@ -35,6 +44,7 @@ import com.sfkg.timeseries.grpc.RuntimeWindowConfig;
 import com.sfkg.timeseries.grpc.SeriesKind;
 import com.sfkg.timeseries.grpc.SyncConfigResponse;
 import com.sfkg.timeseries.grpc.SyncConstraintsRequest;
+import com.sfkg.timeseries.grpc.SyncDerivedSeriesConfigsRequest;
 import com.sfkg.timeseries.grpc.SyncInstanceConfigsRequest;
 import com.sfkg.timeseries.grpc.SyncRelationsRequest;
 import com.sfkg.timeseries.grpc.SyncResponse;
@@ -292,6 +302,70 @@ public class TimeseriesCoreGrpcClient {
                 .build();
         LOG.info("[{}] -> syncWindowConfig windowSize={}ms at {}", SERVICE_NAME, windowSizeMs, address);
         return callCoreSync(address, stub -> stub.syncWindowConfig(req), "syncWindowConfig");
+    }
+
+    // ── derived series config ──────────────────────────────────────────
+
+    public SyncResult syncDerivedSeriesConfigs(DerivedSeriesConfigSaveRequest request) {
+        String address = grpcClientProperties.getCoreAddress();
+        if (isBlank(address)) {
+            return notConfigured("syncDerivedSeriesConfigs");
+        }
+        if (request == null || request.getItems() == null || request.getItems().isEmpty()) {
+            return SyncResult.fail("no derived series configs");
+        }
+        SyncDerivedSeriesConfigsRequest.Builder b = SyncDerivedSeriesConfigsRequest.newBuilder();
+        for (DerivedSeriesConfigSaveRequest.DerivedSeriesConfigItem item : request.getItems()) {
+            DerivedSeriesConfig.Builder cb = DerivedSeriesConfig.newBuilder()
+                    .setDerivedSequenceId(nullToEmpty(item.getDerivedSequenceId()))
+                    .setEnabled(item.isEnabled());
+            if (item.getLinearCombination() != null) {
+                LinearCombinationConfig.Builder lc = LinearCombinationConfig.newBuilder()
+                        .setBias(item.getLinearCombination().getBias() != null
+                                ? item.getLinearCombination().getBias() : 0.0);
+                if (item.getLinearCombination().getTerms() != null) {
+                    for (LinearTermDTO term : item.getLinearCombination().getTerms()) {
+                        lc.addTerms(LinearTerm.newBuilder()
+                                .setSequenceId(nullToEmpty(term.getSequenceId()))
+                                .setCoefficient(term.getCoefficient() != null ? term.getCoefficient() : 0.0)
+                                .build());
+                    }
+                }
+                cb.setLinearCombination(lc.build());
+            } else if (item.getExpression() != null) {
+                cb.setExpression(buildDerivedExpression(item.getExpression()));
+            }
+            b.addItems(cb.build());
+        }
+        LOG.info("[{}] -> syncDerivedSeriesConfigs count={} at {}", SERVICE_NAME, b.getItemsCount(), address);
+        return callCoreSync(address, stub -> stub.syncDerivedSeriesConfigs(b.build()), "syncDerivedSeriesConfigs");
+    }
+
+    private DerivedExpression buildDerivedExpression(DerivedExpressionDTO dto) {
+        DerivedExpression.Builder b = DerivedExpression.newBuilder();
+        if (dto.getSequenceId() != null) {
+            b.setSequenceId(dto.getSequenceId());
+        } else if (dto.getConstant() != null) {
+            b.setConstant(dto.getConstant());
+        } else if (dto.getBinary() != null) {
+            b.setBinary(DerivedBinaryExpression.newBuilder()
+                    .setOperator(toDerivedOperator(dto.getBinary().getOperator()))
+                    .setLeft(buildDerivedExpression(dto.getBinary().getLeft()))
+                    .setRight(buildDerivedExpression(dto.getBinary().getRight()))
+                    .build());
+        }
+        return b.build();
+    }
+
+    private DerivedOperator toDerivedOperator(String op) {
+        if (op == null) return DerivedOperator.DERIVED_OPERATOR_UNSPECIFIED;
+        return switch (op.toUpperCase()) {
+            case "ADD" -> DerivedOperator.DERIVED_OPERATOR_ADD;
+            case "SUBTRACT" -> DerivedOperator.DERIVED_OPERATOR_SUBTRACT;
+            case "MULTIPLY" -> DerivedOperator.DERIVED_OPERATOR_MULTIPLY;
+            case "DIVIDE" -> DerivedOperator.DERIVED_OPERATOR_DIVIDE;
+            default -> DerivedOperator.DERIVED_OPERATOR_UNSPECIFIED;
+        };
     }
 
     // ── relation config helpers ────────────────────────────────────────
