@@ -31,6 +31,7 @@ import com.sfkg.timeseries.grpc.RuntimeConstraintConfig;
 import com.sfkg.timeseries.grpc.RuntimeInstanceConfig;
 import com.sfkg.timeseries.grpc.RuntimeRelationConfig;
 import com.sfkg.timeseries.grpc.RuntimeRelationSource;
+import com.sfkg.timeseries.grpc.RuntimeWindowConfig;
 import com.sfkg.timeseries.grpc.SeriesKind;
 import com.sfkg.timeseries.grpc.SyncConfigResponse;
 import com.sfkg.timeseries.grpc.SyncConstraintsRequest;
@@ -38,6 +39,7 @@ import com.sfkg.timeseries.grpc.SyncInstanceConfigsRequest;
 import com.sfkg.timeseries.grpc.SyncRelationsRequest;
 import com.sfkg.timeseries.grpc.SyncResponse;
 import com.sfkg.timeseries.grpc.SyncTaskStatusRequest;
+import com.sfkg.timeseries.grpc.SyncWindowConfigRequest;
 import com.sfkg.timeseries.grpc.TimeseriesCoreServiceGrpc;
 import com.sfkg.timeseries.grpc.TimeseriesIngestData;
 import com.sfkg.timeseries.grpc.TimeseriesValue;
@@ -278,9 +280,21 @@ public class TimeseriesCoreGrpcClient {
         return callCoreSync(address, stub -> stub.syncRelations(reqBuilder.build()), "syncRelations");
     }
 
-    /**
-     * If IDs are category IDs, expand to all sequences under that category.
-     */
+    // ── window config ──────────────────────────────────────────────────
+
+    public SyncResult syncWindowConfig(long windowSizeMs) {
+        String address = grpcClientProperties.getCoreAddress();
+        if (isBlank(address)) {
+            return notConfigured("syncWindowConfig");
+        }
+        SyncWindowConfigRequest req = SyncWindowConfigRequest.newBuilder()
+                .setConfig(RuntimeWindowConfig.newBuilder().setWindowSize(windowSizeMs).build())
+                .build();
+        LOG.info("[{}] -> syncWindowConfig windowSize={}ms at {}", SERVICE_NAME, windowSizeMs, address);
+        return callCoreSync(address, stub -> stub.syncWindowConfig(req), "syncWindowConfig");
+    }
+
+    // ── relation config helpers ────────────────────────────────────────
     private List<String> resolveToSequences(Collection<String> ids) {
         if (ids == null || ids.isEmpty()) return List.of();
         List<String> result = new ArrayList<>();

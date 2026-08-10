@@ -16,6 +16,7 @@ service TimeseriesCoreService {
   rpc queryHistoryData (QueryHistoryDataRequest) returns (QueryHistoryDataResponse);
   rpc queryHistoryOverview (QueryHistoryOverviewRequest) returns (QueryHistoryOverviewResponse);
   rpc queryWindowData (QueryWindowDataRequest) returns (QueryWindowDataResponse);
+  rpc syncWindowConfig (SyncWindowConfigRequest) returns (SyncConfigResponse);
 }
 
 // ── Shared enums & messages ───────────────────────────────────────
@@ -285,4 +286,14 @@ message ConstraintResultMessage {
   int64 check_time_ms = 1;
   repeated string violated_constraint_ids = 2;
   repeated string sequence_ids = 3;
+}
+
+// ── Window config ─────────────────────────────────────────────────
+
+message RuntimeWindowConfig {
+  int64 window_size = 1;
+}
+
+message SyncWindowConfigRequest {
+  RuntimeWindowConfig config = 1;
 }
