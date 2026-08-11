@@ -44,6 +44,11 @@ forecast_model:
   epochs: 20                   # 训练轮数
   batch_size: 64               # 训练 batch
   learning_rate: 0.001         # 学习率
+  catboost:
+    iterations: 300            # 因变量类离散序列：CatBoost 条件期望树参数
+    learning_rate: 0.05
+    depth: 6
+    l2_leaf_reg: 3.0           # thread_count 运行时读 SFKG_MAX_THREADS（默认 4）
 
 inference:
   window_size: 100             # 异常检测：取实时窗口最近多少行当输入

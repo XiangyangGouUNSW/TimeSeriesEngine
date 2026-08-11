@@ -54,6 +54,7 @@ class PatchTSTForecaster:
     batch_size: int = 64
     learning_rate: float = 1e-3
     device: str | None = None
+    model_type: str = "patchtst"
 
     def __post_init__(self):
         self._model = None
@@ -199,26 +200,40 @@ class PatchTSTForecaster:
 
     # ================= 持久化 =================
 
-    def save(self, path) -> None:
-        """存 model state_dict + 标准化参数 + 元信息到 path（供磁盘缓存）。"""
+    def to_dict(self) -> dict:
+        """序列化到 dict（含 model_type，供 engine loader 分发/嵌套进 CatBoost 负载）。"""
         if self._model is None:
             raise RuntimeError("还没训练，先调用 fit()")
-        torch.save({
+        return {
+            "model_type": self.model_type,
             "state_dict": self._model.state_dict(),
             "config": self._model.config.to_dict(),
             "sequence_ids": self.sequence_ids,
             "context_length": self.context_length,
             "prediction_length": self.prediction_length,
-        }, path)
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PatchTSTForecaster":
+        """从 to_dict 的 dict 重建模型（含嵌套：CatBoost 内部 PatchTST 也走这里）。"""
+        fc = cls(sequence_ids=d["sequence_ids"],
+                 context_length=d["context_length"],
+                 prediction_length=d["prediction_length"])
+        cfg = PatchTSTConfig(**d["config"])
+        fc._model = PatchTSTForPrediction(cfg)
+        fc._model.load_state_dict(d["state_dict"])
+        fc._model.eval()
+        return fc
+
+    def save(self, path) -> None:
+        """存 model state_dict + 标准化参数 + 元信息到 path（供磁盘缓存）。"""
+        torch.save(self.to_dict(), path)
 
     def load(self, path) -> None:
         """从 path 恢复模型。"""
-        ckpt = torch.load(path, map_location="cpu")
-        cfg = PatchTSTConfig(**ckpt["config"])
-        self._model = PatchTSTForPrediction(cfg)
-        self._model.load_state_dict(ckpt["state_dict"])
-        self._model.eval()
-        self.sequence_ids = ckpt["sequence_ids"]
-        self.context_length = ckpt["context_length"]
-        self.prediction_length = ckpt["prediction_length"]
+        restored = PatchTSTForecaster.from_dict(torch.load(path, map_location="cpu"))
+        self.sequence_ids = restored.sequence_ids
+        self.context_length = restored.context_length
+        self.prediction_length = restored.prediction_length
+        self._model = restored._model
         logger.info("[patchtst] load %s 完成", path)

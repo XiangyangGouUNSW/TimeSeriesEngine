@@ -18,8 +18,14 @@ import numpy as np
 
 import timeseries_analysis_pb2 as pb        # P↔S 的消息（ForecastResult/AnomalyResult）
 import timeseries_core_pb2 as cpb           # P↔C 的消息（AlignedWindowData）
+import torch
 
 from anomaly_models import KNOWN_METHODS, build_anomaly_model
+from catboost_forecaster import (
+    CatBoostForecaster,
+    ConstantForecaster,
+    UnsupportedTargetError,
+)
 from patchtst_forecaster import PatchTSTForecaster
 from task_registry import TaskKind
 from training_loop import ModelStore
@@ -28,6 +34,16 @@ logger = logging.getLogger(__name__)
 
 # 异常检测类型：methods 空时的默认组合（实时约束检查已迁 C，默认只做模式偏移检测）
 DEFAULT_METHODS = ["CAUSAL_PATTERN"]
+
+
+def _is_missing(v) -> bool:
+    """判断值是否缺失（float NaN / None；string 不触发 np.isnan 报错）。"""
+    if v is None:
+        return True
+    try:
+        return bool(np.isnan(v))
+    except (TypeError, ValueError):
+        return False
 
 
 class AnalysisEngine:
@@ -73,7 +89,7 @@ class AnalysisEngine:
             ctx = self._context_length(task)
             window = self.core.get_aligned_real_time_window(all_ids)
             times = window.timestamps_ms[-ctx:]
-            matrix = np.array(window.values[-ctx:], dtype=np.float32)
+            matrix = self._clean_matrix(np.array(window.values[-ctx:], dtype=np.float32))
             horizon = task.forecast_horizon_steps or self.cfg["inference"]["horizon_steps"]
             pred_map = model.forecast(matrix, steps=horizon)
             preds = pred_map[target]
@@ -107,7 +123,12 @@ class AnalysisEngine:
 
             return self._forecast_result(task, pb.ANALYSIS_STATUS_SUCCESS,
                                          f"预测完成（{horizon} 步，违规 {len(violations)} 条）",
-                                         out_ts, [target], preds)
+                                         out_ts, [target], preds,
+                                         model_version=getattr(model, "model_type",
+                                                               "patchtst-shell-v1"))
+        except UnsupportedTargetError as e:
+            logger.info(f"[engine] 预测不支持：{e}")
+            return self._forecast_result(task, pb.ANALYSIS_STATUS_NOT_IMPLEMENTED, str(e))
         except Exception as e:
             logger.info(f"[engine] 预测链路异常：{e}")
             return self._forecast_result(task, pb.ANALYSIS_STATUS_FAILED, f"预测失败：{e}")
@@ -115,9 +136,25 @@ class AnalysisEngine:
     # ================= PatchTST 预测模型复用 =================
 
     def _register_model_loader(self) -> None:
-        """磁盘缓存加载：重建 PatchTSTForecaster 并从文件恢复。"""
+        """磁盘缓存加载：按存盘负载的 model_type 分发。
+
+        catboost/constant → 各自 load_dict；无 model_type 的旧文件（legacy PatchTST）
+        回退到 PatchTSTForecaster.load。
+        """
 
         def loader(key: str, path):
+            ckpt = torch.load(path, map_location="cpu")
+            mtype = ckpt.get("model_type")
+            if mtype == "catboost":
+                fc = CatBoostForecaster(sequence_ids=ckpt["sequence_ids"],
+                                        target_sequence_id=ckpt["target_sequence_id"])
+                fc.load_dict(ckpt)
+                return fc
+            if mtype == "constant":
+                fc = ConstantForecaster(sequence_ids=ckpt["sequence_ids"],
+                                        target_sequence_id=ckpt.get("target_sequence_id"))
+                fc.load_dict(ckpt)
+                return fc
             fc = PatchTSTForecaster(sequence_ids=[])
             fc.load(path)
             return fc
@@ -176,23 +213,56 @@ class AnalysisEngine:
             cut_ms = start_ms + int((end_ms - start_ms)
                                     * self.cfg["training"]["train_ratio"])
             chunk = self.core.get_history(all_ids, end_time_ms=cut_ms)
-            history = np.array(chunk.values, dtype=np.float32)
-            logger.info(f"[engine] ②训练 PatchTST：{len(history)} 行 × {len(all_ids)} 列")
+
+            # 数据推断路由（#6）：先看原始取值类型再转 float——chunk.values 保留
+            # C 端原始 Python 类型（int/bool/float/string），缺失=NaN，类型不丢。
+            col_kinds = self._infer_column_kinds(chunk)
+            offender = next((s for s, k in col_kinds.items() if k == "string"), None)
+            if offender is not None:
+                raise UnsupportedTargetError(
+                    f"序列 {offender} 为标签类离散（字符串），暂不支持预测")
+            target = task.target_sequence_ids[0]
+            target_kind = col_kinds.get(target, "continuous")
+            history = self._clean_matrix(np.array(chunk.values, dtype=np.float32))
+            logger.info("[engine] ②训练预测模型：%d 行 × %d 列，目标 %s=%s",
+                        len(history), len(all_ids), target, target_kind)
 
             f = self.cfg.get("forecast_model", {})
-            fc = PatchTSTForecaster(
-                sequence_ids=all_ids,
-                context_length=int(f.get("context_length", 96)),
-                prediction_length=int(f.get("prediction_length", 24)),
-                patch_size=int(f.get("patch_size", 16)),
-                patch_stride=int(f.get("stride", 8)),
-                d_model=int(f.get("d_model", 64)),
-                n_heads=int(f.get("n_heads", 4)),
-                num_layers=int(f.get("num_layers", 2)),
-                epochs=int(f.get("epochs", 20)),
-                batch_size=int(f.get("batch_size", 64)),
-                learning_rate=float(f.get("learning_rate", 1e-3)),
-            )
+            if target_kind == "discrete" and not task.feature_sequence_ids:
+                # 自变量类离散（[54]）：无特征 → 保持当前值
+                fc = ConstantForecaster(sequence_ids=all_ids,
+                                        target_sequence_id=target)
+            elif target_kind == "discrete":
+                # 因变量类离散（[56]）：有特征 → CatBoost 条件期望
+                fc = CatBoostForecaster(
+                    sequence_ids=all_ids, target_sequence_id=target,
+                    column_kinds=col_kinds,
+                    context_length=int(f.get("context_length", 96)),
+                    prediction_length=int(f.get("prediction_length", 24)),
+                    patch_size=int(f.get("patch_size", 16)),
+                    patch_stride=int(f.get("stride", 8)),
+                    d_model=int(f.get("d_model", 64)),
+                    n_heads=int(f.get("n_heads", 4)),
+                    num_layers=int(f.get("num_layers", 2)),
+                    epochs=int(f.get("epochs", 20)),
+                    batch_size=int(f.get("batch_size", 64)),
+                    learning_rate=float(f.get("learning_rate", 1e-3)),
+                    catboost_params=dict(f.get("catboost", {})),
+                )
+            else:
+                fc = PatchTSTForecaster(
+                    sequence_ids=all_ids,
+                    context_length=int(f.get("context_length", 96)),
+                    prediction_length=int(f.get("prediction_length", 24)),
+                    patch_size=int(f.get("patch_size", 16)),
+                    patch_stride=int(f.get("stride", 8)),
+                    d_model=int(f.get("d_model", 64)),
+                    n_heads=int(f.get("n_heads", 4)),
+                    num_layers=int(f.get("num_layers", 2)),
+                    epochs=int(f.get("epochs", 20)),
+                    batch_size=int(f.get("batch_size", 64)),
+                    learning_rate=float(f.get("learning_rate", 1e-3)),
+                )
             fc.fit(history)
             self.store.save(key, fc)
             return fc
@@ -348,10 +418,10 @@ class AnalysisEngine:
 
         # ③ 拉数据：训练用历史矩阵；检测用实时窗口对齐矩阵（统一 [时间×序列]）。
         #    C 不可达/无数据 → 异常向上抛，run_anomaly 报 FAILED（而不是"没检出"）。
-        history = self._get_history_matrix(seq_ids) if to_train else None
+        history = self._clean_matrix(self._get_history_matrix(seq_ids)) if to_train else None
         window = self.core.get_aligned_real_time_window(seq_ids)
         ws = int(self.cfg["inference"]["window_size"])
-        matrix = np.array(window.values[-ws:], dtype=np.float32)
+        matrix = self._clean_matrix(np.array(window.values[-ws:], dtype=np.float32))
         times = window.timestamps_ms[-ws:]
 
         # ④ 逐模型训练/检测：单模型异常不影响其他模型
@@ -447,13 +517,61 @@ class AnalysisEngine:
 
     # ================= 工具 =================
 
+    @staticmethod
+    def _clean_matrix(matrix: np.ndarray) -> np.ndarray:
+        """模型入口 NaN 清洗（P1-5）：逐列前值填充 NaN，仍缺的补 0。
+
+        C 对齐补的 NaN 统一在这里处理，不喂进模型（PatchTST 训练/推理、异常检测
+        训练矩阵都走这里）。返回 float32 [T, C]。
+        """
+        m = np.array(matrix, dtype=np.float32)
+        if m.ndim == 1:
+            m = m.reshape(-1, 1)
+        if m.ndim != 2 or m.shape[1] == 0:
+            return m
+        for c in range(m.shape[1]):
+            col = m[:, c]
+            last = np.nan
+            for i in range(len(col)):
+                v = col[i]
+                if np.isnan(v):
+                    if not np.isnan(last):
+                        col[i] = last
+                else:
+                    last = v
+            col[np.isnan(col)] = 0.0
+        return m
+
+    def _infer_column_kinds(self, chunk) -> dict[str, str]:
+        """按历史原始取值类型推断每列是连续还是离散（数据推断路由，不改 proto）。
+
+        必须在 np.array(chunk.values, float32) 之前调用——chunk.values 保留 C 端
+        原始 Python 类型（int/bool/float/string），缺失=NaN，类型不丢。
+        int/bool → discrete；string → string（标签类离散，暂不支持）；其余
+        （float/混合/空列）→ continuous。
+        """
+        kinds: dict[str, str] = {}
+        for c, sid in enumerate(chunk.sequence_ids):
+            vals = [row[c] for row in chunk.values]
+            non_missing = [v for v in vals if not _is_missing(v)]
+            if not non_missing:
+                kinds[sid] = "continuous"            # 空列保守默认连续
+            elif any(isinstance(v, str) for v in non_missing):
+                kinds[sid] = "string"
+            elif all(isinstance(v, (int, bool)) for v in non_missing):
+                kinds[sid] = "discrete"
+            else:
+                kinds[sid] = "continuous"
+        return kinds
+
     def _forecast_result(self, task, status, message,
-                         timestamps=None, sequence_ids=None, values=None):
+                         timestamps=None, sequence_ids=None, values=None,
+                         model_version: str = "patchtst-shell-v1"):
         return pb.ForecastResult(
             task_id=task.task_id, run_id=f"run-{int(time.time()*1000)}",
             generated_at_ms=int(time.time()*1000), status=status, message=message,
             timestamps_ms=timestamps or [], sequence_ids=sequence_ids or [],
-            values=values or [], risk_findings=[], model_version="patchtst-shell-v1")
+            values=values or [], risk_findings=[], model_version=model_version)
 
     def _build_aligned(self, target, timestamps, preds):
         """把预测值包成 C 端认识的 AlignedWindowData（供 checkConstraints）。"""

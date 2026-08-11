@@ -16,6 +16,8 @@ import sys
 import types
 from pathlib import Path
 
+import numpy as np
+
 ROOT = Path(__file__).resolve().parent.parent
 for _p in (str(ROOT / "src"), str(ROOT / "generated")):
     if _p not in sys.path:
@@ -164,6 +166,33 @@ def test_unknown_method() -> None:
     _ok("未知方法记录 warning 并跳过")
 
 
+# ================= _clean_matrix（P1-5 NaN 清洗） =================
+
+def test_clean_matrix() -> None:
+    print("\n[模型入口 NaN 清洗]")
+    m = np.array([[np.nan, 1.0], [np.nan, np.nan], [3.0, np.nan], [np.nan, 2.0]],
+                 dtype=np.float32)
+    out = AnalysisEngine._clean_matrix(m)
+    assert out.shape == (4, 2) and out.dtype == np.float32
+    assert out[0, 0] == 0.0 and out[1, 0] == 0.0 and out[2, 0] == 3.0 \
+        and out[3, 0] == 3.0, "前缀无值 → 补 0；有值后 NaN → 前值填充"
+    assert out[0, 1] == 1.0 and out[1, 1] == 1.0 and out[2, 1] == 1.0 \
+        and out[3, 1] == 2.0, "前值填充中间/末尾 NaN，末尾 2.0 覆盖填充"
+    _ok("前值填充 NaN + 前缀补 0")
+
+    m2 = np.array([[np.nan], [np.nan]], dtype=np.float32)     # 全 NaN 列 → 补 0
+    out2 = AnalysisEngine._clean_matrix(m2)
+    assert out2.shape == (2, 1) and float(out2[0, 0]) == 0.0 \
+        and float(out2[1, 0]) == 0.0, "全缺失列应补 0"
+    _ok("全缺失列补 0")
+
+    m3 = np.array([1.0, np.nan, 3.0], dtype=np.float32)        # 1D 输入
+    out3 = AnalysisEngine._clean_matrix(m3)
+    assert out3.shape == (3, 1), "1D 应 reshape 成列"
+    assert float(out3[1, 0]) == 1.0, "1D 也应前值填充"
+    _ok("1D 输入 reshape + 填充")
+
+
 # ================= ResultRepository =================
 
 def test_repository() -> None:
@@ -186,6 +215,7 @@ def main() -> None:
     test_registry()
     test_methods_parsing()
     test_unknown_method()
+    test_clean_matrix()
     test_repository()
     print(f"\n框架单元测试通过 ✓（{_PASS} 项断言）")
 

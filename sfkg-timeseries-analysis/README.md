@@ -10,8 +10,18 @@ Python 时序分析模块：模型异常检测、时序预测与预警、归因�
   训练用）、`queryWindowData`（实时窗口）、`alignWindowData`（C 端对齐）、
   `computeBasicStatistics`（相关性先验）、`checkConstraints`（约束检查）；
 - **P↔S 服务（空壳）**：7 个 RPC（任务同步 / 任务状态 / 结果查询 / 归因），S 端可调通；
-- **模型**：异常检测（GCAD / DBSCAN / MUTUAL_COUPLING 等）+ 时序预测（PatchTST）；
-  `查规模 → 达标训练一次 → 可推理`，训练结果内存/磁盘缓存，首训复用；
+- **模型**：异常检测（GCAD / DBSCAN / MUTUAL_COUPLING 等）+ 时序预测（PatchTST
+  + 离散序列 CatBoost）；`查规模 → 达标训练一次 → 可推理`，训练结果内存/磁盘缓存，
+  首训复用；
+- **离散序列预测**（按技术方案 [54][56] 三种数据类型三种预测法）：训练时按目标列历史
+  原始取值类型**数据推断路由**——int64/bool → 离散、double → 连续、string（标签类）→
+  `NOT_IMPLEMENTED` 干净结果；**自变量类离散**（无特征）→ 保持当前值（计划值接口未来
+  接入）；**因变量类离散**（有特征）→ CatBoost 条件期望（内部 PatchTST 预测连续特征 +
+  CatBoost 当前工况→因变量值）；模型存盘带 `model_type`，loader 按标记分发；
+- **模型入口 NaN 清洗**：C 对齐补的 NaN 在喂模型前统一前值填充 + 补 0（预测与异常
+  检测同规则）；
+- **失败语义**：`data not ready` / `model not ready` 一律算成功（正常结果，不
+  error_count、不报 S），默认任务一定成功，不做失败上报；
 - **模型版本**：`config_version` 进模型缓存 key（`{task_id}@v{ver}` /
   `{task_id}:{method}@v{ver}`），版本变 → key 变 → 自动重训；**保留最近 2 个版本**
   （回滚到上一配置秒级复用旧模型不重训，磁盘有界）；
@@ -94,3 +104,6 @@ python app/analysis_server.py
 - **训练/推理隔离**：`scheduler.train_workers`（默认 1，重型训练串行）与
   `scheduler.infer_workers`（默认 2，在线推理并行）分离——训练再重也不抢推理 worker；
   队列有界，满则跳过下轮不阻塞，worker 消费前重校验保证启停/版本变更即时生效。
+- **离散列需 int64 编码**：离散/连续路由按历史取值 Python 类型推断（int/bool→离散、
+  float→连续、string→不支持）。float 类型存的离散值（如 98.0）会被判为连续走 PatchTST
+  ——离散序列在 C 端请用 `int64_value` 编码，勿用 double_value 存整数。
