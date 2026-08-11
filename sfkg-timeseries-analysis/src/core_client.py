@@ -22,6 +22,7 @@ import csv
 from datetime import datetime, timezone
 
 from data_types import (
+    RawValue,
     SequenceDataScale,
     HistoricalDataChunk,
     AlignedWindow,
@@ -72,7 +73,10 @@ def parse_utc_ms(text: str) -> int:
     return int(dt.timestamp() * 1000)
 
 
-def raw_points_to_aligned(points, sequence_ids: list[str]):
+def raw_points_to_aligned(
+    points: list[tuple[int, str, RawValue]],
+    sequence_ids: list[str],
+) -> tuple[list[int], list[list[RawValue]]]:
     """把 C 端返回的原始点列表拼成对齐表。
 
     points: [(time_ms, sequence_id, value), ...]（C 的 queryHistoryData 返回形态）
@@ -101,7 +105,7 @@ class MockCoreDataClient(CoreDataClient):
         self._prefix = seq_prefix
         self._timestamps_ms, self._columns = self._load_csv(csv_path)
 
-    def _load_csv(self, path: str):
+    def _load_csv(self, path: str) -> tuple[list[int], dict[str, list[float]]]:
         """读 CSV。返回 (时间戳列表, {列名: 数值列表})。"""
         with open(path, newline="", encoding="utf-8") as f:
             reader = csv.reader(f)

@@ -206,7 +206,8 @@ def test_provider_feeds_and_writes() -> None:
     sent = sender.sent[0]
     assert sent["event_type"] == pb.ANOMALY_EVENT_TYPE_ANOMALY
     assert sent["source"] == pb.ANOMALY_SOURCE_MODEL_ANOMALY_DETECTION
-    _ok("命中 → 同一 S RPC（send_event）写异常事件")
+    assert sent["task_id"] == "t-hist2", "写事件应带任务标识（task_id）"
+    _ok("命中 → 同一 S RPC（send_event）写异常事件（含 task_id）")
 
 
 def main() -> None:

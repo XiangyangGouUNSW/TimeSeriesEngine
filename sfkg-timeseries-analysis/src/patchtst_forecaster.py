@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -56,14 +57,14 @@ class PatchTSTForecaster:
     device: str | None = None
     model_type: str = "patchtst"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self._model = None
         if self.device is None:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # ================= 训练 =================
 
-    def fit(self, history_matrix) -> None:
+    def fit(self, history_matrix: np.ndarray) -> None:
         """history_matrix: [T, C] 多元历史（行=时间，列=sequence_ids）。
 
         切滑动窗口样本 (x: [context, C] -> y: [prediction, C])，
@@ -142,7 +143,8 @@ class PatchTSTForecaster:
 
     # ================= 推理 =================
 
-    def forecast(self, window_matrix, steps: int | None = None) -> dict[str, list[float]]:
+    def forecast(self, window_matrix: np.ndarray,
+                 steps: int | None = None) -> dict[str, list[float]]:
         """window_matrix: [context_length, C] 最近对齐窗口。
 
         返回 {sequence_id: 未来 steps 步的预测值}。全部列都预测，engine 取目标列。
@@ -178,7 +180,7 @@ class PatchTSTForecaster:
             result[sid] = [float(v) for v in raw[:, i]]
         return result
 
-    def _roll_forward(self, X, raw, steps: int) -> np.ndarray:
+    def _roll_forward(self, X: np.ndarray, raw: np.ndarray, steps: int) -> np.ndarray:
         """steps > prediction_length：把预测出的值接回窗口尾部，再预测一次，滚动补足。
 
         raw: [prediction_length, C]（模型单次输出）。
@@ -225,11 +227,11 @@ class PatchTSTForecaster:
         fc._model.eval()
         return fc
 
-    def save(self, path) -> None:
+    def save(self, path: str | Path) -> None:
         """存 model state_dict + 标准化参数 + 元信息到 path（供磁盘缓存）。"""
         torch.save(self.to_dict(), path)
 
-    def load(self, path) -> None:
+    def load(self, path: str | Path) -> None:
         """从 path 恢复模型。"""
         restored = PatchTSTForecaster.from_dict(torch.load(path, map_location="cpu"))
         self.sequence_ids = restored.sequence_ids

@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+# C 端原始取值类型：int/bool/float/string；缺失统一用 NaN（float）。喂模型前才转 float32。
+RawValue = float | int | bool | str
+
 
 @dataclass
 class SequenceDataScale:
@@ -20,10 +23,14 @@ class SequenceDataScale:
 
 @dataclass
 class HistoricalDataChunk:
-    """一段历史数据。行 = 时间，列 = sequence_ids。"""
+    """一段历史数据。行 = 时间，列 = sequence_ids。
+
+    values 保留 C 端原始类型（int/bool/float/string，缺失=NaN），
+    离散/连续路由靠它推断（_infer_column_kinds 在转 float 前调用）。
+    """
     timestamps_ms: list[int]
     sequence_ids: list[str]             # 列顺序
-    values: list[list[float]]           # 每行是 [列1, 列2, ...]
+    values: list[list[RawValue]]        # 每行是 [列1, 列2, ...]
     is_last_chunk: bool = True          # 分块用；现在一次给完
 
 

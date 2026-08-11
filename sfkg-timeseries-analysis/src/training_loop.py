@@ -10,6 +10,7 @@ import logging
 import re
 import threading
 from pathlib import Path
+from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ class ModelStore:
     def _path(self, key: str) -> Path:
         return self._model_dir / f"{key}.pt"
 
-    def save(self, key: str, model) -> None:
+    def save(self, key: str, model: Any) -> None:
         # 先写内存（立刻可用），再原子写磁盘（tmp + rename，避免读到半截文件）
         with self._lock:
             self._models[key] = model
@@ -60,7 +61,7 @@ class ModelStore:
                 raise
         logger.info("[ModelStore] save %s（内存 + %s）", key, p)
 
-    def get(self, key: str):
+    def get(self, key: str) -> Any:
         with self._lock:
             if key in self._models:
                 return self._models[key]
@@ -126,6 +127,6 @@ class ModelStore:
 
     # ---- 具体模型类型的加载方式（由上层注入）----
 
-    def set_loader(self, loader) -> None:
+    def set_loader(self, loader: Callable[[str, Path], Any]) -> None:
         """loader(key, path) -> model：磁盘缓存加载函数，让 store 不依赖具体模型类。"""
         self._loader = loader

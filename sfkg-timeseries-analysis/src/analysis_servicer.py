@@ -12,12 +12,16 @@ import sys
 import time
 from pathlib import Path
 
+import grpc
+
 # 让生成的 stub 可以直接 import
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "generated"))
 import timeseries_analysis_pb2 as pb
 import timeseries_analysis_pb2_grpc as pb_grpc
 
-from task_registry import TaskKind, TaskStatus
+from analysis_engine import AnalysisEngine
+from result_repository import ResultRepository
+from task_registry import TaskKind, TaskRegistry, TaskStatus
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +39,7 @@ _STATUS_MAP = {
 }
 
 
-def _ack(task_id: str, accepted: bool, status, message: str) -> pb.TaskAck:
+def _ack(task_id: str, accepted: bool, status: int, message: str) -> pb.TaskAck:
     return pb.TaskAck(task_id=task_id, accepted=accepted,
                       status=status, message=message, updated_at_ms=_now_ms())
 
@@ -47,14 +51,20 @@ class AnalysisServicer(pb_grpc.TimeseriesAnalysisServiceServicer):
     每个 RPC 都是快路径（毫秒级返回，不阻塞 S）。
     """
 
-    def __init__(self, registry, repository, engine=None):
+    def __init__(self, registry: TaskRegistry, repository: ResultRepository,
+                 engine: AnalysisEngine | None = None):
         self._registry = registry        # TaskRegistry：任务配置 + 启停状态
         self._repository = repository    # ResultRepository：每任务最近结果
         self._engine = engine            # 保留引用（供工具/测试直接调用）
 
     # ---- 任务配置同步（注册制：只登记不跑，立即 ACK）----
 
-    def _sync_task(self, request, kind: TaskKind, name: str):
+    def _sync_task(
+        self,
+        request: pb.AnalysisSyncAnomalyTaskRequest | pb.AnalysisSyncForecastTaskRequest,
+        kind: TaskKind,
+        name: str,
+    ) -> pb.TaskAck:
         """注册/更新任务并同步配置版本；版本变化时清理旧版本模型（保留最近 2 版）。
 
         模型缓存 key 带版本，版本变 → key 变 → 下个 tick 必然重训；
@@ -72,15 +82,18 @@ class AnalysisServicer(pb_grpc.TimeseriesAnalysisServiceServicer):
         return _ack(task.task_id, True, pb.ANALYSIS_STATUS_SUCCESS,
                     "任务已注册，由调度器周期执行")
 
-    def SyncAnomalyTask(self, request, context):
+    def SyncAnomalyTask(self, request: pb.AnalysisSyncAnomalyTaskRequest,
+                        context: grpc.ServicerContext) -> pb.TaskAck:
         return self._sync_task(request, TaskKind.ANOMALY, "AnomalyTask")
 
-    def SyncForecastTask(self, request, context):
+    def SyncForecastTask(self, request: pb.AnalysisSyncForecastTaskRequest,
+                         context: grpc.ServicerContext) -> pb.TaskAck:
         return self._sync_task(request, TaskKind.FORECAST, "ForecastTask")
 
     # ---- 任务状态（真正生效：停用/删除/恢复）----
 
-    def UpdateTaskStatus(self, request, context):
+    def UpdateTaskStatus(self, request: pb.AnalysisUpdateTaskStatusRequest,
+                         context: grpc.ServicerContext) -> pb.TaskAck:
         local = _STATUS_MAP.get(request.status)
         if local is None:
             logger.warning("UpdateTaskStatus: 未知任务状态 %s（task_id=%s）",
@@ -101,19 +114,21 @@ class AnalysisServicer(pb_grpc.TimeseriesAnalysisServiceServicer):
 
     # ---- 结果查询（轮询 ResultRepository）----
 
-    def QueryAnomalyResults(self, request, context):
+    def QueryAnomalyResults(self, request: pb.QueryAnomalyResultsRequest,
+                            context: grpc.ServicerContext) -> pb.QueryAnomalyResultsResponse:
         q = request.query
         logger.info("QueryAnomalyResults: task_id=%s", q.task_id)
         results = self._query_results(q)
         return pb.QueryAnomalyResultsResponse(task_id=q.task_id, results=results)
 
-    def QueryForecastResults(self, request, context):
+    def QueryForecastResults(self, request: pb.QueryForecastResultsRequest,
+                             context: grpc.ServicerContext) -> pb.QueryForecastResultsResponse:
         q = request.query
         logger.info("QueryForecastResults: task_id=%s", q.task_id)
         results = self._query_results(q)
         return pb.QueryForecastResultsResponse(task_id=q.task_id, results=results)
 
-    def _query_results(self, q) -> list:
+    def _query_results(self, q: pb.ResultQuery) -> list:
         """按 ResultQuery 取结果：latest_only 取最近一条，否则取历史（limit 限条数）。"""
         if q.latest_only:
             latest = self._repository.latest(q.task_id)
@@ -122,14 +137,16 @@ class AnalysisServicer(pb_grpc.TimeseriesAnalysisServiceServicer):
 
     # ---- 归因建议（空壳，返回 NOT_IMPLEMENTED）----
 
-    def GenerateDiagnosis(self, request, context):
+    def GenerateDiagnosis(self, request: pb.AnalysisDecisionRequest,
+                          context: grpc.ServicerContext) -> pb.AnalysisDecisionResult:
         logger.info("GenerateDiagnosis: event_id=%s", request.event_id)
         return pb.AnalysisDecisionResult(
             event_id=request.event_id,
             status=pb.ANALYSIS_STATUS_NOT_IMPLEMENTED,
             message="异常归因尚未实现", content="", basis_ids=[])
 
-    def GenerateSuggestion(self, request, context):
+    def GenerateSuggestion(self, request: pb.AnalysisDecisionRequest,
+                           context: grpc.ServicerContext) -> pb.AnalysisDecisionResult:
         logger.info("GenerateSuggestion: event_id=%s", request.event_id)
         return pb.AnalysisDecisionResult(
             event_id=request.event_id,

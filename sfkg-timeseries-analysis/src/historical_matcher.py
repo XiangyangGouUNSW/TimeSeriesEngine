@@ -27,6 +27,7 @@ v1 匹配规则（保守、可解释、低误报，明确为占位逻辑）：
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -60,7 +61,7 @@ class HistoricalEventIndex:
     生产注意：add 是 O(1) 幂等插入，重复同步同一事件不会产生重复项。
     """
 
-    def __init__(self, events: list[HistoricalEvent] | None = None):
+    def __init__(self, events: list[HistoricalEvent] | None = None) -> None:
         self._events: list[HistoricalEvent] = []
         self._by_id: dict[str, int] = {}
         for e in (events or []):
@@ -129,7 +130,7 @@ class HistoricalEventMatcher:
     model_type = "historical-match"
 
     def __init__(self, sequence_ids: list[str] | None = None,
-                 min_deviation_z: float = 2.0, top_k: int = 3):
+                 min_deviation_z: float = 2.0, top_k: int = 3) -> None:
         self.sequence_ids = list(sequence_ids or [])
         self.min_deviation_z = min_deviation_z    # v1 匹配阈值（窗口内最大 z-score）
         self.top_k = top_k
@@ -215,7 +216,7 @@ class HistoricalEventMatcher:
 
     # ---- 持久化（ModelStore 磁盘缓存 + loader 分发） ----
 
-    def save(self, path) -> None:
+    def save(self, path: str | Path) -> None:
         torch.save({
             "model_type": self.model_type,
             "sequence_ids": self.sequence_ids,
@@ -230,5 +231,5 @@ class HistoricalEventMatcher:
         self.top_k = int(ckpt.get("top_k", 3))
         self.index = HistoricalEventIndex.from_dict(ckpt.get("index"))
 
-    def load(self, path) -> None:
+    def load(self, path: str | Path) -> None:
         self.load_dict(torch.load(path, map_location="cpu"))

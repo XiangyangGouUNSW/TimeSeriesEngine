@@ -83,11 +83,14 @@ def serve() -> None:
         train_queue_size=sched_cfg.get("train_queue_size", 8),
         infer_queue_size=sched_cfg.get("infer_queue_size", 32),
         train_workers=sched_cfg.get("train_workers", 1),
-        infer_workers=sched_cfg.get("infer_workers", 2))
+        infer_workers=sched_cfg.get("infer_workers", 2),
+        train_timeout_s=sched_cfg.get("train_timeout_s", 300.0),
+        infer_timeout_s=sched_cfg.get("infer_timeout_s", 60.0))
     servicer = AnalysisServicer(registry=registry, repository=repository,
                                 engine=engine)
 
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
+    server = grpc.server(futures.ThreadPoolExecutor(
+        max_workers=server_cfg.get("max_workers", 4)))
     pb_grpc.add_TimeseriesAnalysisServiceServicer_to_server(servicer, server)
     server.add_insecure_port(f"{server_cfg['address']}:{server_cfg['port']}")
     server.start()

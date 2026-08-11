@@ -1,7 +1,12 @@
 """P 端分析引擎：把「收任务 → 查C → 训练 → 预测 → 调C检查 → 调S写」串起来。
 
-框架版：内部逻辑简单（AR 模型 + 假约束检查 + S 写事件），
-目标是跑通三方调用链、产生可见输出，证明通讯成功。
+异常链路：methods 决定检测类型（KNOWN_METHODS 过滤，空 → DEFAULT_METHODS），
+训练用历史、检测用 C 对齐后的实时窗口，逐点写 S 异常事件（不聚合）。
+预测链路：数据推断路由目标类型（连续→PatchTST / 因变量离散→CatBoost /
+自变量离散→保持当前值），实时窗口预测未来，包成 AlignedWindowData 调 C
+checkConstraints，违规写 S 预警。
+模型复用 ModelStore（内存+磁盘，config_version 进 key 失效重训，loader 按
+model_type 分发）。训练只走历史，推理只走实时窗口（对齐归属 C）。
 """
 
 from __future__ import annotations
@@ -11,6 +16,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any, Callable
 
 # 让生成的 stub 可以直接 import
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "generated"))
@@ -20,12 +26,15 @@ import timeseries_analysis_pb2 as pb        # P↔S 的消息（ForecastResult/A
 import timeseries_core_pb2 as cpb           # P↔C 的消息（AlignedWindowData）
 import torch
 
+from analysis_result_client import AnalysisResultClient
 from anomaly_models import KNOWN_METHODS, build_anomaly_model
 from catboost_forecaster import (
     CatBoostForecaster,
     ConstantForecaster,
     UnsupportedTargetError,
 )
+from core_client import CoreDataClient
+from data_types import HistoricalDataChunk, SequenceDataScale
 from historical_matcher import HistoricalEventMatcher
 from patchtst_forecaster import PatchTSTForecaster
 from task_registry import TaskKind
@@ -37,7 +46,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_METHODS = ["CAUSAL_PATTERN"]
 
 
-def _is_missing(v) -> bool:
+def _is_missing(v: Any) -> bool:
     """判断值是否缺失（float NaN / None；string 不触发 np.isnan 报错）。"""
     if v is None:
         return True
@@ -47,23 +56,40 @@ def _is_missing(v) -> bool:
         return False
 
 
+class _SlideNotAdvanced(Exception):
+    """窗口最新时间推进不足 slide_step_ms，本轮检测跳过（不是失败）。
+
+    用异常做控制流：_run_anomaly_models 内部拿不到"跳过"的合适返回值，
+    run_anomaly 捕获后转成 SUCCESS + 跳过消息（默认任务一定成功的语义）。
+    """
+
+
 class AnalysisEngine:
     """把调用链串起来的引擎。"""
 
-    def __init__(self, core_client, result_client, config: dict, model_store=None,
-                 historical_event_provider=None):
+    def __init__(self,
+                 core_client: CoreDataClient,
+                 result_client: AnalysisResultClient | None,
+                 config: dict,
+                 model_store: ModelStore | None = None,
+                 historical_event_provider: Callable[[pb.AnomalyTaskConfig],
+                                                     list[HistoricalEvent]] | None = None):
         self.core = core_client        # GrpcCoreDataClient（调 C 取数据/检查）
         self.sender = result_client    # AnalysisResultClient（调 S 写事件）
         self.cfg = config
         self.store = model_store or ModelStore()   # 模型复用缓存（内存+磁盘）
         self._historical_event_provider = historical_event_provider  # 确认历史事件源（框架预留）
+        # per-task 窗口水位 {task_id: 上次处理的窗口最新时间 ms}。
+        # slide_step_ms 节流靠它判定"窗口推进了多少新数据"（防同一窗口重复检测）。
+        self._anomaly_watermarks: dict[str, int] = {}
         self._train_locks: dict = {}   # {key: Lock}，同 key 并发训练只训一次
         self._train_locks_lock = threading.RLock()  # 保护 _train_locks
         self._register_model_loader()
 
     # ================= 预测链路 =================
 
-    def run_forecast(self, task, config_version: int = 0) -> pb.ForecastResult:
+    def run_forecast(self, task: pb.ForecastTaskConfig,
+                     config_version: int = 0) -> pb.ForecastResult:
         now = int(time.time() * 1000)
         target_ids = list(task.target_sequence_ids)
         if not target_ids:
@@ -115,6 +141,7 @@ class AnalysisEngine:
             # ⑤ 有风险 → 调 S 写预警
             if not satisfied and violations:
                 ok = self.sender.send_event(
+                    task_id=task.task_id,
                     event_type=pb.ANOMALY_EVENT_TYPE_WARNING,
                     event_time_ms=out_ts[0],
                     sequence_ids=[target],
@@ -168,7 +195,7 @@ class AnalysisEngine:
 
         self.store.set_loader(loader)
 
-    def _min_train_points(self, task) -> int:
+    def _min_train_points(self, task: pb.ForecastTaskConfig) -> int:
         """训练最少点数 = context + prediction（用配置），任务给了 minimum_points 优先。"""
         if task.minimum_points and task.minimum_points > 0:
             return task.minimum_points
@@ -176,7 +203,7 @@ class AnalysisEngine:
         return (int(f.get("context_length", 96))
                 + int(f.get("prediction_length", 24)))
 
-    def _context_length(self, task) -> int:
+    def _context_length(self, task: pb.ForecastTaskConfig) -> int:
         # ForecastTaskConfig 无 context_length（那是 AnomalyTaskConfig 的），用 getattr 兜底
         ctx = getattr(task, "context_length", None) or 0
         if ctx > 0:
@@ -191,8 +218,11 @@ class AnalysisEngine:
         """异常模型缓存 key：版本进 key，版本变 → key 变 → 必然重训。"""
         return f"{task_id}:{method}@v{ver}"
 
-    def _get_or_train_forecaster(self, task, all_ids, scales,
-                                 config_version: int = 0):
+    def _get_or_train_forecaster(
+            self, task: pb.ForecastTaskConfig, all_ids: list[str],
+            scales: list[SequenceDataScale],
+            config_version: int = 0
+    ) -> PatchTSTForecaster | CatBoostForecaster | ConstantForecaster:
         """缓存命中返回模型；未命中训练 PatchTST 并存入 store。
 
         版本进 key：{task_id}@v{config_version}。版本变 → key 变 → 必然重训，
@@ -298,7 +328,8 @@ class AnalysisEngine:
 
     # ================= 异常链路 =================
 
-    def run_anomaly(self, task, config_version: int = 0) -> pb.AnomalyResult:
+    def run_anomaly(self, task: pb.AnomalyTaskConfig,
+                    config_version: int = 0) -> pb.AnomalyResult:
         now = int(time.time() * 1000)
         findings = []   # 收集异常（模型检测）
 
@@ -327,6 +358,7 @@ class AnalysisEngine:
             for f in findings:
                 ts = getattr(f, "detected_time_ms", None) or now
                 ok = self.sender.send_event(
+                    task_id=task.task_id,
                     event_type=pb.ANOMALY_EVENT_TYPE_ANOMALY,
                     event_time_ms=ts,
                     sequence_ids=list(task.sequence_ids),
@@ -342,6 +374,14 @@ class AnalysisEngine:
                 generated_at_ms=now, status=pb.ANALYSIS_STATUS_SUCCESS,
                 message=f"异常检测完成，发现 {len(findings)} 条",
                 findings=findings, model_version="shell-v1")
+        except _SlideNotAdvanced as e:
+            # 窗口未推进到 slide 步长：本轮跳过（正常结果，非失败，可查询可观察）。
+            logger.info("[engine] 任务 %s %s（本轮跳过）", task.task_id, e)
+            return pb.AnomalyResult(
+                task_id=task.task_id, run_id=f"run-{now}",
+                generated_at_ms=now, status=pb.ANALYSIS_STATUS_SUCCESS,
+                message=f"窗口未推进到 slide_step_ms，本轮跳过（{e}）",
+                findings=[], model_version="")
         except Exception as e:
             logger.info(f"[engine] 异常链路异常：{e}")
             return pb.AnomalyResult(
@@ -349,7 +389,8 @@ class AnalysisEngine:
                 generated_at_ms=now, status=pb.ANALYSIS_STATUS_FAILED,
                 message=f"异常检测失败：{e}", findings=[], model_version="")
 
-    def needs_training(self, task, kind: TaskKind, config_version: int = 0) -> bool:
+    def needs_training(self, task: pb.AnomalyTaskConfig | pb.ForecastTaskConfig,
+                       kind: TaskKind, config_version: int = 0) -> bool:
         """任务模型（按当前版本）是否未就绪——决定进训练队列还是推理队列。
 
         调度器 producer 每 tick 调一次。判定与 _get_or_train_forecaster /
@@ -368,7 +409,8 @@ class AnalysisEngine:
             self._anomaly_key(task.task_id, m, config_version))
             for m in model_methods)
 
-    def _run_anomaly_models(self, task, model_methods: list[str],
+    def _run_anomaly_models(self, task: pb.AnomalyTaskConfig,
+                            model_methods: list[str],
                             config_version: int = 0) -> list[dict]:
         """按检测类型复用/训练异常模型，检测模式偏离。
 
@@ -414,6 +456,10 @@ class AnalysisEngine:
                 correlation_prior=corr_prior,
                 coupled_pairs=coupled_pairs,
                 sequence_ids=seq_ids,
+                # 历史语义匹配超参（其他方法忽略这些 kwargs）；命中阈值可调低误报
+                min_deviation_z=self.cfg.get("historical_match", {}).get(
+                    "min_deviation_z", 2.0),
+                top_k=self.cfg.get("historical_match", {}).get("top_k", 3),
             )
             if model is None:
                 logger.warning("[engine] 未知检测方法 %s，跳过", method)
@@ -434,6 +480,18 @@ class AnalysisEngine:
         ws = int(self.cfg["inference"]["window_size"])
         matrix = self._clean_matrix(np.array(window.values[-ws:], dtype=np.float32))
         times = window.timestamps_ms[-ws:]
+
+        # slide_step_ms 节流：窗口最新时间推进不足步长 → 本轮跳过检测。
+        # 防"同一异常窗口在 C 端还没滑走前反复检出、反复写 S"（全貌文档 §11.2 水位去重）。
+        # 首跑无水位 → 照跑并记水位；跳过轮不更新水位（等窗口推进）。
+        slide_ms = int(getattr(task, "slide_step_ms", 0) or 0)
+        if slide_ms > 0 and times:
+            latest = times[-1]
+            prev = self._anomaly_watermarks.get(task.task_id)
+            if prev is not None and latest - prev < slide_ms:
+                raise _SlideNotAdvanced(
+                    f"窗口最新时间推进 {latest - prev}ms < slide_step_ms={slide_ms}ms")
+            self._anomaly_watermarks[task.task_id] = latest
 
         # ④ 逐模型训练/检测：单模型异常不影响其他模型
         for method, model in ready.items():
@@ -459,7 +517,8 @@ class AnalysisEngine:
                 logger.info(f"[engine] 模型 {method} 检测异常：{e}")
         return findings
 
-    def _confirmed_historical_events(self, task) -> list:
+    def _confirmed_historical_events(self,
+                                     task: pb.AnomalyTaskConfig) -> list[HistoricalEvent]:
         """确认历史事件 → 历史语义匹配索引的输入源（框架预留）。
 
         数据来源待定：S 目前只通过 semantic_context.confirmed_historical_event_ids
@@ -477,7 +536,8 @@ class AnalysisEngine:
                 logger.info("[engine] 历史事件 provider 异常，按空处理：%s", e)
         return []
 
-    def _extract_roles(self, task, seq_ids) -> tuple[str | None, list[str]]:
+    def _extract_roles(self, task: pb.AnomalyTaskConfig,
+                       seq_ids: list[str]) -> tuple[str | None, list[str]]:
         """从 semantic_context.sequences 的 role 确定因变量/自变量序列 ID。
 
         返回 (target_sequence_id, source_sequence_ids)。
@@ -500,7 +560,8 @@ class AnalysisEngine:
             source_ids = [sid for sid in seq_ids if sid != target_id]
         return target_id, source_ids
 
-    def _extract_coupled_pairs(self, task, seq_ids) -> list[tuple[int, int]]:
+    def _extract_coupled_pairs(self, task: pb.AnomalyTaskConfig,
+                               seq_ids: list[str]) -> list[tuple[int, int]]:
         """从 semantic_context.relations 提取互耦对（列索引）。
 
         互耦识别两种方式（S 端互耦取值对齐前先都支持）：
@@ -531,7 +592,8 @@ class AnalysisEngine:
                 pairs.add(tuple(sorted((seq_index[src], seq_index[tgt]))))
         return sorted(pairs)
 
-    def _get_correlation_prior(self, target_id, source_ids, seq_ids) -> dict[int, float] | None:
+    def _get_correlation_prior(self, target_id: str, source_ids: list[str],
+                               seq_ids: list[str]) -> dict[int, float] | None:
         """调 C computeBasicStatistics 拿相关性先验，转成 {列索引: 系数}。"""
         by_id = self.core.get_correlation_vector(target_id, source_ids)
         if not by_id:
@@ -539,7 +601,7 @@ class AnalysisEngine:
         seq_index = {sid: i for i, sid in enumerate(seq_ids)}
         return {seq_index[sid]: coef for sid, coef in by_id.items() if sid in seq_index}
 
-    def _get_history_matrix(self, seq_ids) -> np.ndarray:
+    def _get_history_matrix(self, seq_ids: list[str]) -> np.ndarray:
         """从 C 拉历史数据，转成 [time, seq_count] 矩阵。"""
         chunk = self.core.get_history(seq_ids)
         return np.array(chunk.values, dtype=float)
@@ -571,7 +633,7 @@ class AnalysisEngine:
             col[np.isnan(col)] = 0.0
         return m
 
-    def _infer_column_kinds(self, chunk) -> dict[str, str]:
+    def _infer_column_kinds(self, chunk: HistoricalDataChunk) -> dict[str, str]:
         """按历史原始取值类型推断每列是连续还是离散（数据推断路由，不改 proto）。
 
         必须在 np.array(chunk.values, float32) 之前调用——chunk.values 保留 C 端
@@ -593,16 +655,20 @@ class AnalysisEngine:
                 kinds[sid] = "continuous"
         return kinds
 
-    def _forecast_result(self, task, status, message,
-                         timestamps=None, sequence_ids=None, values=None,
-                         model_version: str = "patchtst-shell-v1"):
+    def _forecast_result(self, task: pb.ForecastTaskConfig, status: int,
+                         message: str, timestamps: list[int] | None = None,
+                         sequence_ids: list[str] | None = None,
+                         values: list[float] | None = None,
+                         model_version: str = "patchtst-shell-v1"
+                         ) -> pb.ForecastResult:
         return pb.ForecastResult(
             task_id=task.task_id, run_id=f"run-{int(time.time()*1000)}",
             generated_at_ms=int(time.time()*1000), status=status, message=message,
             timestamps_ms=timestamps or [], sequence_ids=sequence_ids or [],
             values=values or [], risk_findings=[], model_version=model_version)
 
-    def _build_aligned(self, target, timestamps, preds):
+    def _build_aligned(self, target: str, timestamps: list[int],
+                       preds: list[float]) -> cpb.AlignedWindowData:
         """把预测值包成 C 端认识的 AlignedWindowData（供 checkConstraints）。"""
         samples = [
             cpb.AlignedSample(time=t, values=[

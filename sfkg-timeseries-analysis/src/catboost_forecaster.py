@@ -15,6 +15,8 @@ import os
 import pickle
 import tempfile
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -38,7 +40,9 @@ class UnsupportedTargetError(Exception):
 
 # ---------- CatBoost 序列化：pickle 主、.cbm 临时文件兜底（带格式标签） ----------
 
-def _catboost_to_bytes(model) -> tuple[str, bytes]:
+# model 是 catboost.CatBoostRegressor 实例；catboost 为惰性导入（可能缺失），
+# 静态类型无法引用其真实类，用 Any。
+def _catboost_to_bytes(model: Any) -> tuple[str, bytes]:
     """序列化 CatBoost 模型。catboost 1.x 的 save_model 只保证路径入参，
     BytesIO 未文档化；pickle 优先（现代版本 CatBoostRegressor 可 pickle），
     失败则落到 .cbm 临时文件读字节。"""
@@ -55,7 +59,7 @@ def _catboost_to_bytes(model) -> tuple[str, bytes]:
             os.unlink(tmp)
 
 
-def _catboost_from_bytes(data: bytes, fmt: str):
+def _catboost_from_bytes(data: bytes, fmt: str) -> Any:
     if fmt == "cbm":
         with tempfile.NamedTemporaryFile(suffix=".cbm", delete=False) as f:
             tmp = f.name
@@ -99,7 +103,7 @@ class CatBoostForecaster:
     catboost_params: dict | None = None
     model_type: str = "catboost"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if _CatBoostRegressor is None:
             raise ImportError(
                 "CatBoostForecaster 需要 catboost。先安装：pip install 'catboost>=1.2'")
@@ -121,7 +125,7 @@ class CatBoostForecaster:
 
     # ================= 训练 =================
 
-    def fit(self, history_matrix) -> None:
+    def fit(self, history_matrix: np.ndarray) -> None:
         """history_matrix: [T, C] 历史（行=时间，列=sequence_ids，engine 已 _clean_matrix）。
 
         连续列喂内部 PatchTST（连续特征来源）；CatBoost 训练集 = 每行当前工况
@@ -180,7 +184,8 @@ class CatBoostForecaster:
 
     # ================= 推理 =================
 
-    def forecast(self, window_matrix, steps: int | None = None) -> dict[str, list[float]]:
+    def forecast(self, window_matrix: np.ndarray,
+                 steps: int | None = None) -> dict[str, list[float]]:
         """window_matrix: [context, C] 最近对齐窗口（engine 已 _clean_matrix）。
 
         连续列 PatchTST 预测 → 自变量离散列保持窗口末值 → 逐步组特征喂 CatBoost
@@ -224,7 +229,7 @@ class CatBoostForecaster:
 
     # ================= 持久化 =================
 
-    def save(self, path) -> None:
+    def save(self, path: str | Path) -> None:
         if self._model is None:
             raise RuntimeError("还没训练，先调用 fit()")
         fmt, blob = _catboost_to_bytes(self._model)
@@ -255,7 +260,7 @@ class CatBoostForecaster:
         d = ckpt.get("internal_patchtst")
         self._patchtst = PatchTSTForecaster.from_dict(d) if d else None
 
-    def load(self, path) -> None:
+    def load(self, path: str | Path) -> None:
         self.load_dict(torch.load(path, map_location="cpu"))
 
 
@@ -270,10 +275,10 @@ class ConstantForecaster:
     target_sequence_id: str | None = None
     model_type: str = "constant"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self._last_value: float | None = None
 
-    def fit(self, history_matrix) -> None:
+    def fit(self, history_matrix: np.ndarray) -> None:
         m = np.asarray(history_matrix, dtype=np.float32)
         if (self.target_sequence_id is not None
                 and self.target_sequence_id in self.sequence_ids):
@@ -282,7 +287,8 @@ class ConstantForecaster:
             if len(valid):
                 self._last_value = float(valid[-1])
 
-    def forecast(self, window_matrix, steps: int | None = None) -> dict[str, list[float]]:
+    def forecast(self, window_matrix: np.ndarray,
+                 steps: int | None = None) -> dict[str, list[float]]:
         m = np.asarray(window_matrix, dtype=np.float32)
         last = self._last_value if self._last_value is not None else 0.0
         if (self.target_sequence_id is not None
@@ -294,7 +300,7 @@ class ConstantForecaster:
         n = steps if steps is not None else 24
         return {self.target_sequence_id: [last] * n}
 
-    def save(self, path) -> None:
+    def save(self, path: str | Path) -> None:
         torch.save({"model_type": self.model_type,
                     "sequence_ids": self.sequence_ids,
                     "target_sequence_id": self.target_sequence_id,
@@ -305,5 +311,5 @@ class ConstantForecaster:
         self.target_sequence_id = ckpt.get("target_sequence_id")
         self._last_value = ckpt.get("last_value")
 
-    def load(self, path) -> None:
+    def load(self, path: str | Path) -> None:
         self.load_dict(torch.load(path, map_location="cpu"))

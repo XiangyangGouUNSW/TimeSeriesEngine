@@ -3,6 +3,7 @@
 server:
   address: "0.0.0.0"        # P 端对外 gRPC 服务监听地址（供 S 端调用）
   port: 50053               # P 端对外 gRPC 服务端口
+  max_workers: 4            # gRPC 并发处理线程数（S 端调用并发上限，按 S 端 QPS 调）
 
 core:
   provider: "mock"          # mock = 本地 ETT 假装 C 端；grpc = 连真的 C 端
@@ -54,6 +55,10 @@ inference:
   window_size: 100             # 异常检测：取实时窗口最近多少行当输入
   horizon_steps: 24            # 预测未来多少步
 
+historical_match:
+  min_deviation_z: 2.0         # 历史语义匹配命中阈值：窗口内最大 z-score ≥ 该值才报（低误报）
+  top_k: 3                     # 每窗口最多报多少条历史相似命中（真实匹配核心等 S 事件明细协议）
+
 scheduler:
   interval_seconds: 10         # 固定周期触发间隔：每 N 秒扫描一次所有 ENABLED 任务
                                # （演示/联调可调短，如 3）
@@ -61,6 +66,8 @@ scheduler:
   infer_queue_size: 32         # 推理队列有界深度
   train_workers: 1             # 训练 worker 数：重型训练串行，避免抢 torch 全局线程池
   infer_workers: 2             # 在线检测/预测 worker 数（并行度）
+  train_timeout_s: 300         # 训练类任务单次执行超时上限（s），到点丢弃本轮、下 tick 重试
+  infer_timeout_s: 60          # 推理类任务单次执行超时上限（s）
 
 result_repository:
   maxlen: 50                   # 每任务结果仓库保留最近多少条（Query 轮询）

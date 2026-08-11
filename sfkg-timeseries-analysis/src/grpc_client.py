@@ -15,9 +15,10 @@ import sys
 from pathlib import Path
 
 import grpc
+from typing import Any, Callable
 
 from core_client import CoreDataClient, raw_points_to_aligned
-from data_types import SequenceDataScale, HistoricalDataChunk, AlignedWindow
+from data_types import RawValue, SequenceDataScale, HistoricalDataChunk, AlignedWindow
 
 # 让生成的 stub 可以直接 import（flat 方式，避免生成代码的绝对 import 出问题）
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "generated"))
@@ -43,14 +44,14 @@ class GrpcCoreDataClient(CoreDataClient):
 
     # ---- 工具 ----
 
-    def _check(self, response) -> None:
+    def _check(self, response: Any) -> None:
         """检查 operation.code；不是 OK 就抛异常。"""
         if response.operation.code != pb.OPERATION_CODE_OK:
             raise CoreDataException(
                 f"Core 返回 {pb.OperationCode.Name(response.operation.code)}: "
                 f"{response.operation.message}")
 
-    def _call(self, method, request):
+    def _call(self, method: Callable[..., Any], request: Any) -> Any:
         """统一包一层：gRPC 网络错误转成 CoreDataException。"""
         try:
             resp = method(request, timeout=self._timeout)
@@ -111,7 +112,7 @@ class GrpcCoreDataClient(CoreDataClient):
             is_last_chunk=True,
         )
 
-    def get_real_time_window(self, sequence_ids: list[str]):
+    def get_real_time_window(self, sequence_ids: list[str]) -> pb.WindowData:
         """调 C 的 queryWindowData 取实时窗口（检测/预测的模型输入）。
 
         返回 C 的 WindowData（按序列组织的原始点，未对齐）。
@@ -175,7 +176,7 @@ class GrpcCoreDataClient(CoreDataClient):
         return bucket
 
     def _aligned_to_window(
-        self, aligned, sequence_ids: list[str]) -> AlignedWindow:
+        self, aligned: pb.AlignedWindowData, sequence_ids: list[str]) -> AlignedWindow:
         """C 的 AlignedWindowData（统一时间轴）→ AlignedWindow（行=时间，列=序列）。
 
         对齐已由 C 完成，这里只是把「按时间组织的多值样本」摆成模型要的矩阵。
@@ -200,7 +201,10 @@ class GrpcCoreDataClient(CoreDataClient):
             values=rows,
         )
 
-    def check_constraints(self, constraint_ids: list[str], aligned_data):
+    def check_constraints(
+        self, constraint_ids: list[str],
+        aligned_data: pb.AlignedWindowData,
+    ) -> tuple[bool, list[pb.ConstraintViolation]]:
         """调 C 的 checkConstraints 检查预测值是否违反约束（仅预测预警用）。
 
         aligned_data: 把预测值包成 AlignedWindowData（P 端 _build_aligned 生成），
@@ -242,7 +246,7 @@ class GrpcCoreDataClient(CoreDataClient):
         cv = resp.correlation_vector
         return {c.independent_sequence_id: c.coefficient for c in cv.correlations}
 
-    def _to_point(self, raw):
+    def _to_point(self, raw: pb.RawTimeseriesPoint) -> tuple[int, str, RawValue] | None:
         """proto RawTimeseriesPoint → (time, sequence_id, value)。
         value 的 oneof 没设置（空值）返回 None，调用处过滤。
         """

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import threading
 from collections import deque
+from typing import Any
 
 
 class ResultRepository:
@@ -17,7 +18,7 @@ class ResultRepository:
         self._results: dict[str, deque] = {}
         self._lock = threading.RLock()
 
-    def put(self, task_id: str, result) -> None:
+    def put(self, task_id: str, result: Any) -> None:
         """追加一条结果；超 maxlen 自动丢最旧。"""
         with self._lock:
             q = self._results.get(task_id)
@@ -26,7 +27,7 @@ class ResultRepository:
                 self._results[task_id] = q
             q.append(result)
 
-    def latest(self, task_id: str):
+    def latest(self, task_id: str) -> Any:
         """最近一条结果；任务无结果返回 None。"""
         with self._lock:
             q = self._results.get(task_id)

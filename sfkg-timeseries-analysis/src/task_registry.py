@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import enum
 import threading
+from typing import Any
 
 
 class TaskKind(str, enum.Enum):
@@ -30,7 +31,8 @@ class TaskRecord:
     模型缓存 key 带版本（{task_id}@v{ver}），版本变 → key 变 → 必然重训。
     """
 
-    def __init__(self, task_id: str, kind: TaskKind, task,
+    def __init__(self, task_id: str, kind: TaskKind,
+                 task: Any,  # proto 任务配置：pb.AnomalyTaskConfig | pb.ForecastTaskConfig
                  status: TaskStatus = TaskStatus.ENABLED,
                  config_version: int = 0):
         self.task_id = task_id
@@ -48,7 +50,8 @@ class TaskRegistry:
         self._tasks: dict[str, TaskRecord] = {}
         self._lock = threading.RLock()
 
-    def register(self, task, kind: TaskKind, config_version: int = 0) -> TaskRecord:
+    def register(self, task: Any,  # proto 任务配置：pb.AnomalyTaskConfig | pb.ForecastTaskConfig
+                 kind: TaskKind, config_version: int = 0) -> TaskRecord:
         """注册（新建=ENABLED）或更新（保留原状态 + 同步配置版本）。"""
         with self._lock:
             rec = self._tasks.get(task.task_id)

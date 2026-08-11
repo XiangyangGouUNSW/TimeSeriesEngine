@@ -6,7 +6,10 @@
   3. 队列满不崩：有界队列满 → 跳过下轮，inflight 无泄漏；
   4. 训练不阻塞推理：训练重型任务占训练 worker，推理任务独立出结果；
   5. 优雅退出：stop() 后 worker 收哨兵退出，无残留线程；
-  6. needs_training 未知方法/只约束 → 永不进训练队列。
+  6. needs_training 未知方法/只约束 → 永不进训练队列；
+  7. 单任务执行超时：挂起任务到点丢弃本轮、释放 worker，后续任务不受影响；
+  8. worker 崩溃恢复：消费路径抛异常不杀 worker，重试后任务照常完成；
+  9. 高并发注入：30 任务 × 4 推理 worker 全出结果，inflight 无泄漏。
 
 用法（sfkg 环境）：
   python tools/test_scheduler_queues.py
@@ -16,6 +19,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -90,6 +94,39 @@ class FakeEngine:
         time.sleep(self.infer_delay)
         self.run_events.append((task.task_id, config_version))
         return ("anomaly", task.task_id, config_version)
+
+
+class HungEngine(FakeEngine):
+    """run_forecast 对指定任务永久阻塞：验证单任务超时丢弃本轮 + worker 释放。
+
+    其余任务走 FakeEngine 正常逻辑（保证"挂起任务不拖累别人"）。
+    """
+
+    def __init__(self, hang_task_id: str):
+        super().__init__()
+        self.hang_task_id = hang_task_id
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def run_forecast(self, task, config_version: int = 0):
+        if task.task_id == self.hang_task_id:
+            self.started.set()
+            self.release.wait()          # 测试内永不 set → 挂死，靠任务级超时兜底
+        return super().run_forecast(task, config_version)
+
+
+class FlakyRegistry(TaskRegistry):
+    """get() 前 N 次抛异常：模拟 worker 消费路径上的临时故障（崩溃保护用例）。"""
+
+    def __init__(self, fail_times: int = 1):
+        super().__init__()
+        self._fail_left = fail_times
+
+    def get(self, task_id: str):
+        if self._fail_left > 0:
+            self._fail_left -= 1
+            raise RuntimeError("模拟注册表崩溃")
+        return super().get(task_id)
 
 
 def wait_until(cond, timeout: float, desc: str) -> bool:
@@ -274,6 +311,91 @@ def test_needs_training_edges() -> None:
     _ok("预测模型未训 → 需训练")
 
 
+# ================= 7. 单任务执行超时 =================
+
+def test_job_timeout() -> None:
+    print("\n[单任务执行超时：丢弃本轮 + 释放 worker]")
+    engine = HungEngine(hang_task_id="t-hang")
+    registry = TaskRegistry()
+    repo = ResultRepository(maxlen=5)
+    sched = Scheduler(engine, registry, repo, interval_seconds=0.1,
+                      train_queue_size=4, infer_queue_size=4,
+                      train_workers=1, infer_workers=1, infer_timeout_s=0.3)
+    registry.register(_ftask("t-hang"), TaskKind.FORECAST, 0)
+    engine.store.save("t-hang@v0", object())      # 模型就绪 → 走推理池
+    registry.register(_ftask("t-quick"), TaskKind.FORECAST, 0)
+    engine.store.save("t-quick@v0", object())
+    sched.start()
+    try:
+        assert wait_until(lambda: engine.started.is_set(), 2,
+                          "t-hang 进入执行"), "t-hang 应开始跑（挂住）"
+        time.sleep(0.6)                           # 超过 0.3s 超时上限
+        assert repo.latest("t-hang") is None, "超时任务本轮不应落库"
+        assert wait_until(lambda: repo.latest("t-quick") is not None, 3,
+                          "超时后 worker 释放，t-quick 出结果"), \
+            "挂起任务不应占死 worker（超时释放）"
+        _ok("挂起任务超时丢弃本轮，worker 释放，后续任务正常出结果")
+    finally:
+        sched.stop()
+        sched.join(timeout=5)
+
+
+# ================= 8. worker 崩溃恢复 =================
+
+def test_worker_crash_recovery() -> None:
+    print("\n[worker 崩溃恢复：消费路径异常不杀 worker]")
+    engine = FakeEngine()                          # 零耗时
+    registry = FlakyRegistry(fail_times=1)         # 第一次 get() 崩溃
+    repo = ResultRepository(maxlen=5)
+    sched = Scheduler(engine, registry, repo, interval_seconds=0.2,
+                      train_queue_size=4, infer_queue_size=4,
+                      train_workers=1, infer_workers=1)
+    registry.register(_ftask("t-a"), TaskKind.FORECAST, 0)
+    registry.register(_ftask("t-b"), TaskKind.FORECAST, 0)
+    sched.start()
+    try:
+        # 消费路径 get() 崩一次：worker 不死亡，t-a 下 tick 重试成功
+        assert wait_until(lambda: repo.latest("t-a") is not None, 5,
+                          "t-a 出结果（崩溃后重试成功）"), \
+            "崩溃后 worker 应继续消费并重试 t-a"
+        assert wait_until(lambda: repo.latest("t-b") is not None, 5,
+                          "t-b 出结果"), "t-b 应不受崩溃影响"
+        for w in sched._train_workers + sched._infer_workers:
+            assert w.is_alive(), f"{w.name} 应存活（崩溃保护）"
+        _ok("get() 崩溃 1 次 → worker 存活，t-a/t-b 均出结果")
+    finally:
+        sched.stop()
+        sched.join(timeout=5)
+
+
+# ================= 9. 高并发注入 =================
+
+def test_high_concurrency() -> None:
+    print("\n[高并发注入：30 任务 × 4 推理 worker]")
+    engine = FakeEngine(infer_delay=0.02)
+    registry = TaskRegistry()
+    repo = ResultRepository(maxlen=50)
+    sched = Scheduler(engine, registry, repo, interval_seconds=0.1,
+                      train_queue_size=16, infer_queue_size=16,
+                      train_workers=1, infer_workers=4, infer_timeout_s=60)
+    for i in range(30):
+        registry.register(_ftask(f"t-{i}"), TaskKind.FORECAST, 0)
+        engine.store.save(f"t-{i}@v0", object())   # 模型全就绪 → 全走推理池
+    sched.start()
+    try:
+        # 直接等真实不变量：30 个任务结果全部落地（别数 run_events，append 早于 put，会竞态）
+        assert wait_until(
+            lambda: all(repo.latest(f"t-{i}") is not None for i in range(30)),
+            10, "30 个任务全部出结果"), "高并发注入不应丢任务"
+        _ok(f"30 任务全部出结果（{len(engine.run_events)} 次执行）")
+    finally:
+        sched.stop()
+        sched.join(timeout=5)
+        assert len(sched._train_inflight) == 0 and len(sched._infer_inflight) == 0, \
+            "高并发后 inflight 无泄漏"
+        _ok("高并发后 inflight 无泄漏")
+
+
 def main() -> None:
     import logging
     logging.basicConfig(level=logging.WARNING)
@@ -283,6 +405,9 @@ def main() -> None:
     test_train_not_blocking_inference()
     test_graceful_shutdown()
     test_needs_training_edges()
+    test_job_timeout()
+    test_worker_crash_recovery()
+    test_high_concurrency()
     print(f"\n队列/隔离专项测试通过 ✓（{_PASS} 项断言）")
 
 
