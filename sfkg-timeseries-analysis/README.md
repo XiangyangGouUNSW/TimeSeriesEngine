@@ -10,9 +10,17 @@ Python 时序分析模块：模型异常检测、时序预测与预警、归因�
   训练用）、`queryWindowData`（实时窗口）、`alignWindowData`（C 端对齐）、
   `computeBasicStatistics`（相关性先验）、`checkConstraints`（约束检查）；
 - **P↔S 服务（空壳）**：7 个 RPC（任务同步 / 任务状态 / 结果查询 / 归因），S 端可调通；
-- **模型**：异常检测（GCAD / DBSCAN / MUTUAL_COUPLING 等）+ 时序预测（PatchTST
-  + 离散序列 CatBoost）；`查规模 → 达标训练一次 → 可推理`，训练结果内存/磁盘缓存，
-  首训复用；
+- **模型**：异常检测（GCAD / DBSCAN / TREND_SHIFT / MUTUAL_COUPLING /
+  HISTORICAL_MATCH 历史语义匹配框架）+ 时序预测（PatchTST + 离散序列 CatBoost）；
+  `查规模 → 达标训练一次 → 可推理`，训练结果内存/磁盘缓存，首训复用；
+- **历史语义匹配（HISTORICAL_MATCH）**：第四种异常检测方法（框架已就位）——
+  确认历史事件增量进索引（`HistoricalEventIndex`，按 event_id 幂等），
+  `HistoricalEventMatcher` 接口对齐其他异常模型（fit/detect/save/load），存盘带
+  `model_type="historical-match"`，loader 按标记分发；**匹配核心为占位逻辑**（v1 只做
+  序列集合 ⊆ 窗口任务 + 窗口内最大 z-score 偏差的结构化匹配），真实相似度模型
+  （前兆匹配 / 窗口形状编码）后续接入；确认事件数据源可插拔（engine 构造时注入
+  `historical_event_provider`），无来源时为空索引 → 无命中（安全）；命中写入与异常/
+  预警共用 S 的 ReceiveAnomalyResult 同一 RPC；
 - **离散序列预测**（按技术方案 [54][56] 三种数据类型三种预测法）：训练时按目标列历史
   原始取值类型**数据推断路由**——int64/bool → 离散、double → 连续、string（标签类）→
   `NOT_IMPLEMENTED` 干净结果；**自变量类离散**（无特征）→ 保持当前值（计划值接口未来

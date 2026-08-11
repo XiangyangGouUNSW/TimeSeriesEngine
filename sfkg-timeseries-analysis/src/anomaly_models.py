@@ -24,7 +24,8 @@ _MAX_THREADS = int(os.environ.get("SFKG_MAX_THREADS", "4"))
 # 已知检测方法（engine.needs_training 据此判断任务是否需要训练；
 # build_anomaly_model 顶部据此早退，两处判定不漂移）
 KNOWN_METHODS = frozenset({"DISCRETE_OUTLIER", "CAUSAL_PATTERN",
-                           "TREND_SHIFT", "MUTUAL_COUPLING"})
+                           "TREND_SHIFT", "MUTUAL_COUPLING",
+                           "HISTORICAL_MATCH"})
 
 
 class AnomalyModel:
@@ -434,5 +435,14 @@ def build_anomaly_model(method: str, **kwargs) -> AnomalyModel | None:
             lag=kwargs.get("lag", 3),
             residual_quantile=kwargs.get("residual_quantile", 0.95),
             alpha=kwargs.get("alpha", 0.01),
+        )
+    if method == "HISTORICAL_MATCH":
+        # 历史语义匹配（框架）：懒导入避免循环依赖；索引由确认事件增量构建，
+        # 匹配核心为占位逻辑（见 historical_matcher.HistoricalEventMatcher）。
+        from historical_matcher import HistoricalEventMatcher
+        return HistoricalEventMatcher(
+            sequence_ids=kwargs.get("sequence_ids"),
+            min_deviation_z=kwargs.get("min_deviation_z", 2.0),
+            top_k=kwargs.get("top_k", 3),
         )
     return None

@@ -26,6 +26,7 @@ from catboost_forecaster import (
     ConstantForecaster,
     UnsupportedTargetError,
 )
+from historical_matcher import HistoricalEventMatcher
 from patchtst_forecaster import PatchTSTForecaster
 from task_registry import TaskKind
 from training_loop import ModelStore
@@ -49,11 +50,13 @@ def _is_missing(v) -> bool:
 class AnalysisEngine:
     """把调用链串起来的引擎。"""
 
-    def __init__(self, core_client, result_client, config: dict, model_store=None):
+    def __init__(self, core_client, result_client, config: dict, model_store=None,
+                 historical_event_provider=None):
         self.core = core_client        # GrpcCoreDataClient（调 C 取数据/检查）
         self.sender = result_client    # AnalysisResultClient（调 S 写事件）
         self.cfg = config
         self.store = model_store or ModelStore()   # 模型复用缓存（内存+磁盘）
+        self._historical_event_provider = historical_event_provider  # 确认历史事件源（框架预留）
         self._train_locks: dict = {}   # {key: Lock}，同 key 并发训练只训一次
         self._train_locks_lock = threading.RLock()  # 保护 _train_locks
         self._register_model_loader()
@@ -153,6 +156,10 @@ class AnalysisEngine:
             if mtype == "constant":
                 fc = ConstantForecaster(sequence_ids=ckpt["sequence_ids"],
                                         target_sequence_id=ckpt.get("target_sequence_id"))
+                fc.load_dict(ckpt)
+                return fc
+            if mtype == "historical-match":
+                fc = HistoricalEventMatcher()
                 fc.load_dict(ckpt)
                 return fc
             fc = PatchTSTForecaster(sequence_ids=[])
@@ -406,10 +413,14 @@ class AnalysisEngine:
                 source_indices=source_indices,
                 correlation_prior=corr_prior,
                 coupled_pairs=coupled_pairs,
+                sequence_ids=seq_ids,
             )
             if model is None:
                 logger.warning("[engine] 未知检测方法 %s，跳过", method)
                 continue
+            if isinstance(model, HistoricalEventMatcher):
+                # 历史语义匹配：索引 = 确认历史事件（数据源可插拔，v1 空 → 无命中）
+                model.load_confirmed_events(self._confirmed_historical_events(task))
             ready[method] = model
             to_train.append(method)
 
@@ -447,6 +458,24 @@ class AnalysisEngine:
             except Exception as e:
                 logger.info(f"[engine] 模型 {method} 检测异常：{e}")
         return findings
+
+    def _confirmed_historical_events(self, task) -> list:
+        """确认历史事件 → 历史语义匹配索引的输入源（框架预留）。
+
+        数据来源待定：S 目前只通过 semantic_context.confirmed_historical_event_ids
+        给事件 ID 引用，P 不检索图谱（设计原则）也拿不到事件特征。v1 把来源做成
+        可插拔 provider（AnalysisEngine 构造时注入，取 task → list[HistoricalEvent]）；
+        无 provider → 空索引 → HISTORICAL_MATCH 无命中（安全），等 S 确认事件特征
+        协议后再填真实来源。
+        """
+        if self._historical_event_provider is not None:
+            try:
+                evs = self._historical_event_provider(task)
+                if evs:
+                    return list(evs)
+            except Exception as e:
+                logger.info("[engine] 历史事件 provider 异常，按空处理：%s", e)
+        return []
 
     def _extract_roles(self, task, seq_ids) -> tuple[str | None, list[str]]:
         """从 semantic_context.sequences 的 role 确定因变量/自变量序列 ID。
