@@ -6,5 +6,6 @@
   "dataSourceId": "ETTh1.csv",
   "dataType": "double",
   "seriesKind": "CONTINUOUS",
-  "accessStatus": "ENABLE"
+  "accessStatus": "ENABLE",
+  "user": null
 }

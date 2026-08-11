@@ -1,5 +1,6 @@
 package com.sfkg.timeseries.service.impl;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -84,11 +85,20 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
                 BeanUtils.copyProperties(request, e);
             }
             e.setSequenceId(sequenceId);
-            if (e.getId() == null) {
-                e.setId(sequenceId);
-            }
             e.setCategoryName(resolveCategoryName(e.getCategoryId()));
             e.setDeviceInstanceName(resolveDeviceInstanceName(e.getDeviceInstanceId()));
+            // audit fields
+            LocalDateTime now = LocalDateTime.now();
+            String user = request != null ? request.getUser() : null;
+            if (existing == null) {
+                e.setCreateTime(now);
+                e.setCreateUser(user);
+            } else {
+                e.setCreateTime(existing.getCreateTime());
+                e.setCreateUser(existing.getCreateUser());
+            }
+            e.setUpdateTime(now);
+            e.setUpdateUser(user);
             return e;
         });
 

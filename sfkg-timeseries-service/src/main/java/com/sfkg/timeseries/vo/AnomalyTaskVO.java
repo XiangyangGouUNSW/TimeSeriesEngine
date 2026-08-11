@@ -1,5 +1,6 @@
 package com.sfkg.timeseries.vo;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import lombok.Data;
 
@@ -15,4 +16,8 @@ public class AnomalyTaskVO {
     private Long slideStepMs;
     private Integer minimumPoints;
     private String status;
+    private LocalDateTime createTime;
+    private LocalDateTime updateTime;
+    private String createUser;
+    private String updateUser;
 }

@@ -11,6 +11,7 @@ public class EventSaveRequest {
     private String eventName;
     private String eventType;
     private String eventSource;
+    private String taskId;
     private Collection<String> relatedSequences;
     private Collection<String> relatedRules;
     private String eventDescription;
@@ -21,4 +22,5 @@ public class EventSaveRequest {
     private String diagnosisResult;
     private String diagnosisBasis;
     private String disposalResult;
+    private String user;
 }

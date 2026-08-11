@@ -70,6 +70,18 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
             if (e.getEventTime() == null) {
                 e.setEventTime(LocalDateTime.now());
             }
+            // audit fields
+            LocalDateTime now = LocalDateTime.now();
+            String user = request != null ? request.getUser() : null;
+            if (existing == null) {
+                e.setCreateTime(now);
+                e.setCreateUser(user);
+            } else {
+                e.setCreateTime(e.getCreateTime() != null ? e.getCreateTime() : now);
+                e.setCreateUser(e.getCreateUser());
+            }
+            e.setUpdateTime(now);
+            e.setUpdateUser(user);
             return e;
         });
 
@@ -99,6 +111,10 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
                 e.setCreateTime(now);
             }
             e.setUpdateTime(now);
+            // preserve createUser if existing, don't overwrite with null
+            if (e.getCreateUser() == null && existing != null) {
+                e.setCreateUser(existing.getCreateUser());
+            }
             return e;
         });
 

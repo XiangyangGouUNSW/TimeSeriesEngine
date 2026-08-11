@@ -18,6 +18,7 @@ public class ConstraintSaveRequest {
     private List<ConstraintTermDTO> terms;
     private String effectiveStatus;
     private String confirmStatus;
+    private String user;
 
     @Data
     public static class ConstraintTermDTO {

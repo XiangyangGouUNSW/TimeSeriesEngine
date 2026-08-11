@@ -16,4 +16,5 @@ public class AnomalyTaskSaveRequest {
     private Integer minimumPoints;
     private List<String> constraintIds;
     private String status;
+    private String user;
 }

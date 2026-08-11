@@ -11,6 +11,7 @@ public class TimeseriesEvent {
     private String eventName;
     private String eventType;
     private String eventSource;
+    private String taskId;
     private Collection<String> relatedSequences;
     private Collection<String> relatedRules;
     private String eventDescription;

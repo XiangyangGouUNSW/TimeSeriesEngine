@@ -17,5 +17,6 @@
     }
   ],
   "effectiveStatus": "ENABLE",
-  "confirmStatus": "CONFIRMED"
+  "confirmStatus": "CONFIRMED",
+  "user": null
 }

@@ -63,6 +63,7 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
                 "ANOMALY"));
         event.setEventSource(result != null && result.getSource() != null
                 ? result.getSource() : "ANOMALY_DETECTION");
+        event.setTaskId(result != null ? result.getTaskId() : null);
         event.setEventLevel(stripSeverityPrefix(result == null ? null : result.getAnomalyLevel()));
         event.setRelatedSequences(result == null || result.getSequenceId() == null
                 ? List.of()
@@ -72,7 +73,12 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
                 ? result.getEventTime() : LocalDateTime.now());
         event.setEventDescription(result != null
                 ? buildAnomalyDescription(result) : null);
-
+        event.setConfirmStatus("PENDING");
+        event.setHandleStatus("UNHANDLED");
+        // audit fields
+        LocalDateTime now = LocalDateTime.now();
+        event.setCreateTime(now);
+        event.setUpdateTime(now);
         eventMapper.insert(event);
         memoryCache.computeEvent(eventId, existing -> event);
         return eventId;

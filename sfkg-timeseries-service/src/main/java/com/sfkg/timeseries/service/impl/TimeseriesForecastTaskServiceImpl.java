@@ -1,5 +1,6 @@
 package com.sfkg.timeseries.service.impl;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -78,6 +79,18 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
                 BeanUtils.copyProperties(request, e);
             }
             e.setTaskId(taskId);
+            // audit fields
+            LocalDateTime now = LocalDateTime.now();
+            String user = request != null ? request.getUser() : null;
+            if (existing == null) {
+                e.setCreateTime(now);
+                e.setCreateUser(user);
+            } else {
+                e.setCreateTime(existing.getCreateTime());
+                e.setCreateUser(existing.getCreateUser());
+            }
+            e.setUpdateTime(now);
+            e.setUpdateUser(user);
             return e;
         });
 
@@ -111,6 +124,15 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
             TimeseriesForecastTask e = existing != null ? existing : new TimeseriesForecastTask();
             e.setTaskId(request.getTaskId());
             e.setStatus(request.getStatus());
+            // audit fields
+            LocalDateTime now = LocalDateTime.now();
+            if (existing == null) {
+                e.setCreateTime(now);
+            } else {
+                e.setCreateTime(existing.getCreateTime());
+                e.setCreateUser(existing.getCreateUser());
+            }
+            e.setUpdateTime(now);
             return e;
         });
 

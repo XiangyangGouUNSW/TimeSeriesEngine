@@ -23,23 +23,7 @@ public class TimeseriesInstanceConfigFileMapper implements TimeseriesInstanceCon
 
     @Override
     public void insert(TimeseriesInstanceConfig entity) {
-        if (entity != null && entity.getId() == null) {
-            entity.setId(entity.getSequenceId());
-        }
         store.upsert(item -> sameBusinessKey(entity, item), entity);
-    }
-
-    @Override
-    public void updateById(TimeseriesInstanceConfig entity) {
-        insert(entity);
-    }
-
-    @Override
-    public TimeseriesInstanceConfig selectById(String id) {
-        return store.readAll().stream()
-                .filter(entity -> Objects.equals(id, entity.getId()))
-                .findFirst()
-                .orElse(null);
     }
 
     @Override
@@ -66,10 +50,7 @@ public class TimeseriesInstanceConfigFileMapper implements TimeseriesInstanceCon
         if (incoming == null || stored == null) {
             return false;
         }
-        if (incoming.getSequenceId() != null) {
-            return Objects.equals(incoming.getSequenceId(), stored.getSequenceId());
-        }
-        return Objects.equals(incoming.getId(), stored.getId());
+        return Objects.equals(incoming.getSequenceId(), stored.getSequenceId());
     }
 
     private boolean matches(Object condition, TimeseriesInstanceConfig entity) {

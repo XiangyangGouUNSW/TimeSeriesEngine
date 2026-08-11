@@ -8,6 +8,7 @@ import lombok.Data;
 public class TimeseriesAnomalyResult {
 
     private String resultId;
+    private String taskId;
     private String eventType;
     private LocalDateTime eventTime;
     private List<String> sequenceIds;

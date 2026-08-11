@@ -6,7 +6,6 @@ import lombok.Data;
 @Data
 public class TimeseriesInstanceConfig {
 
-    private String id;
     private String sequenceId;
     private String instanceName;
     private String externalSequenceId;
@@ -19,4 +18,8 @@ public class TimeseriesInstanceConfig {
     private String dataType;
     private String seriesKind;
     private LocalDateTime lastDataTime;
+    private LocalDateTime createTime;
+    private LocalDateTime updateTime;
+    private String createUser;
+    private String updateUser;
 }

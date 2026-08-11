@@ -1,6 +1,7 @@
 package com.sfkg.timeseries.vo;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.Collection;
 import lombok.Data;
 
@@ -18,4 +19,8 @@ public class RelationVO {
     private String relationDescription;
     private String effectiveStatus;
     private String confirmStatus;
+    private LocalDateTime createTime;
+    private LocalDateTime updateTime;
+    private String createUser;
+    private String updateUser;
 }

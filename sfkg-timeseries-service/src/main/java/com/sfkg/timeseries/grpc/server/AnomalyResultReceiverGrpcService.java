@@ -59,8 +59,8 @@ public class AnomalyResultReceiverGrpcService
     public void receiveAnomalyResult(AnomalyResultMessage request,
                                      StreamObserver<Empty> responseObserver) {
         try {
-            LOG.info("gRPC receiveAnomalyResult: eventType={}, severity={}, source={}, seqs={}",
-                    request.getEventType(), request.getSeverity(), request.getSource(),
+            LOG.info("gRPC receiveAnomalyResult: taskId={}, eventType={}, severity={}, source={}, seqs={}",
+                    request.getTaskId(), request.getEventType(), request.getSeverity(), request.getSource(),
                     request.getSequenceIdsList());
 
             cacheManager.ensureTableLoaded(CachedTable.ANOMALY_RESULT);
@@ -72,6 +72,7 @@ public class AnomalyResultReceiverGrpcService
             // create an event from this anomaly result
             AnomalyResultVO vo = new AnomalyResultVO();
             vo.setResultId(entity.getResultId());
+            vo.setTaskId(entity.getTaskId());
             vo.setSequenceId(entity.getSequenceIds() != null && !entity.getSequenceIds().isEmpty()
                     ? String.join(",", entity.getSequenceIds()) : null);
             vo.setAnomalyLevel(entity.getSeverity());
@@ -113,9 +114,15 @@ public class AnomalyResultReceiverGrpcService
             event.setEventName("forecast event on " + taskId);
             event.setEventType("WARNING");
             event.setEventSource("FORECAST");
+            event.setTaskId(taskId);
             event.setEventLevel("MEDIUM");
             event.setEventTime(LocalDateTime.now());
             event.setRelatedSequences(entity.getSequenceIds());
+            event.setConfirmStatus("PENDING");
+            event.setHandleStatus("UNHANDLED");
+            LocalDateTime now = LocalDateTime.now();
+            event.setCreateTime(now);
+            event.setUpdateTime(now);
             eventMapper.insert(event);
             memoryCache.putEvent(event);
 
@@ -131,6 +138,7 @@ public class AnomalyResultReceiverGrpcService
     private TimeseriesAnomalyResult toEntity(AnomalyResultMessage msg) {
         TimeseriesAnomalyResult entity = new TimeseriesAnomalyResult();
         String source = msg.getSource().name();
+        entity.setTaskId(emptyToNull(msg.getTaskId()));
         String seqs = String.join("_", msg.getSequenceIdsList());
         entity.setResultId(source + "_" + seqs + "_" + msg.getEventTimeMs());
         entity.setEventType(msg.getEventType().name());

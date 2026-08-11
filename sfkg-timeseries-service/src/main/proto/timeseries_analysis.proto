@@ -82,12 +82,13 @@ message TimeRange {
 // ── Anomaly result receiver messages ──────────────────────────────
 
 message AnomalyResultMessage {
-  AnomalyEventType event_type = 1;
-  int64 event_time_ms = 2;
-  repeated string sequence_ids = 3;
-  repeated double values = 4;
-  Severity severity = 5;
-  AnomalySource source = 6;
+  string task_id = 1;
+  AnomalyEventType event_type = 2;
+  int64 event_time_ms = 3;
+  repeated string sequence_ids = 4;
+  repeated double values = 5;
+  Severity severity = 6;
+  AnomalySource source = 7;
 }
 
 // ── Forecast result receiver message ──────────────────────────────

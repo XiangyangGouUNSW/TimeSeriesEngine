@@ -7,10 +7,6 @@ public interface TimeseriesInstanceConfigMapper {
 
     void insert(TimeseriesInstanceConfig entity);
 
-    void updateById(TimeseriesInstanceConfig entity);
-
-    TimeseriesInstanceConfig selectById(String id);
-
     TimeseriesInstanceConfig selectBySequenceId(String sequenceId);
 
     List<TimeseriesInstanceConfig> selectByCondition(Object condition);

@@ -64,6 +64,11 @@ public class ConstraintResultReceiverGrpcService
                 event.setEventDescription(
                         "violated constraints " + entity.getViolatedConstraintIds()
                         + " on sequences " + entity.getSequenceIds());
+                event.setConfirmStatus("PENDING");
+                event.setHandleStatus("UNHANDLED");
+                LocalDateTime now = LocalDateTime.now();
+                event.setCreateTime(now);
+                event.setUpdateTime(now);
                 eventMapper.insert(event);
                 memoryCache.putEvent(event);
                 LOG.info("constraint violation event created: eventId={}", event.getEventId());

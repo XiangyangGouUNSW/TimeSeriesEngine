@@ -58,6 +58,12 @@ public class TimeseriesForecastResultServiceImpl implements TimeseriesForecastRe
                 ? List.of()
                 : List.of(result.getSequenceId()));
         event.setEventTime(LocalDateTime.now());
+        event.setTaskId(result != null ? result.getTaskId() : null);
+        event.setConfirmStatus("PENDING");
+        event.setHandleStatus("UNHANDLED");
+        LocalDateTime now = LocalDateTime.now();
+        event.setCreateTime(now);
+        event.setUpdateTime(now);
 
         eventMapper.insert(event);
         memoryCache.computeEvent(eventId, existing -> event);

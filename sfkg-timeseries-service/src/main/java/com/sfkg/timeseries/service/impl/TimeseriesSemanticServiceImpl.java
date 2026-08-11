@@ -1,6 +1,7 @@
 package com.sfkg.timeseries.service.impl;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -110,6 +111,18 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 BeanUtils.copyProperties(request, e);
             }
             e.setCategoryId(categoryId);
+            // audit fields
+            LocalDateTime now = LocalDateTime.now();
+            String user = request != null ? request.getUser() : null;
+            if (existing == null) {
+                e.setCreateTime(now);
+                e.setCreateUser(user);
+            } else {
+                e.setCreateTime(existing.getCreateTime());
+                e.setCreateUser(existing.getCreateUser());
+            }
+            e.setUpdateTime(now);
+            e.setUpdateUser(user);
             return e;
         });
 
@@ -130,6 +143,15 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             if (request.getConfirmStatus() != null) {
                 e.setConfirmStatus(request.getConfirmStatus());
             }
+            // audit fields
+            LocalDateTime now = LocalDateTime.now();
+            if (existing == null) {
+                e.setCreateTime(now);
+            } else {
+                e.setCreateTime(existing.getCreateTime());
+                e.setCreateUser(existing.getCreateUser());
+            }
+            e.setUpdateTime(now);
             return e;
         });
         categoryMapper.updateById(entity);
@@ -187,6 +209,18 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 }
             }
             e.setConstraintId(constraintId);
+            // audit fields
+            LocalDateTime now = LocalDateTime.now();
+            String user = request != null ? request.getUser() : null;
+            if (existing == null) {
+                e.setCreateTime(now);
+                e.setCreateUser(user);
+            } else {
+                e.setCreateTime(existing.getCreateTime());
+                e.setCreateUser(existing.getCreateUser());
+            }
+            e.setUpdateTime(now);
+            e.setUpdateUser(user);
             return e;
         });
 
@@ -210,6 +244,15 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             if (request.getEffectiveStatus() != null) {
                 e.setEffectiveStatus(request.getEffectiveStatus());
             }
+            // audit fields
+            LocalDateTime now = LocalDateTime.now();
+            if (existing == null) {
+                e.setCreateTime(now);
+            } else {
+                e.setCreateTime(existing.getCreateTime());
+                e.setCreateUser(existing.getCreateUser());
+            }
+            e.setUpdateTime(now);
             return e;
         });
         constraintMapper.updateById(entity);
@@ -267,6 +310,18 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             }
             e.setRelationId(relationId);
             e.setTargetCategoryName(resolveCategoryName(e.getTargetSequenceId()));
+            // audit fields
+            LocalDateTime now = LocalDateTime.now();
+            String user = request != null ? request.getUser() : null;
+            if (existing == null) {
+                e.setCreateTime(now);
+                e.setCreateUser(user);
+            } else {
+                e.setCreateTime(existing.getCreateTime());
+                e.setCreateUser(existing.getCreateUser());
+            }
+            e.setUpdateTime(now);
+            e.setUpdateUser(user);
             return e;
         });
 
@@ -290,6 +345,15 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             if (request.getEffectiveStatus() != null) {
                 e.setEffectiveStatus(request.getEffectiveStatus());
             }
+            // audit fields
+            LocalDateTime now = LocalDateTime.now();
+            if (existing == null) {
+                e.setCreateTime(now);
+            } else {
+                e.setCreateTime(existing.getCreateTime());
+                e.setCreateUser(existing.getCreateUser());
+            }
+            e.setUpdateTime(now);
             return e;
         });
         relationMapper.updateById(entity);

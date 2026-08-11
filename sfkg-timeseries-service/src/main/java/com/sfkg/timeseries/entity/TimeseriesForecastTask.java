@@ -1,5 +1,6 @@
 package com.sfkg.timeseries.entity;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import lombok.Data;
 
@@ -17,4 +18,8 @@ public class TimeseriesForecastTask {
     private Collection<String> constraintIds;
     private String warningRule;
     private String status;
+    private LocalDateTime createTime;
+    private LocalDateTime updateTime;
+    private String createUser;
+    private String updateUser;
 }
