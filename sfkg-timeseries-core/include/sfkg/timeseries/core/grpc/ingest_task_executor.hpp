@@ -1,0 +1,78 @@
+#pragma once
+
+#include <cstddef>
+#include <condition_variable>
+#include <deque>
+#include <functional>
+#include <future>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <thread>
+#include <vector>
+
+#include "sfkg/timeseries/core/types.hpp"
+
+namespace sfkg::timeseries::core::grpc {
+
+// Results produced by the two sides of one logical IngestData task. The
+// executor does not decide the business meaning of these results; the gRPC
+// layer still combines them into the existing response format.
+struct IngestPipelineResult {
+    OperationResult storage_result;
+    OperationResult window_result;
+    OperationResult derived_result;
+    OperationResult constraint_notification_result;
+};
+
+struct IngestTaskSubmission {
+    bool accepted{false};
+    OperationResult admission;
+    std::future<IngestPipelineResult> completion;
+};
+
+// A bounded pair of worker queues. One task is admitted to both lanes before
+// either lane starts, so a full lane rejects the whole ingest request instead
+// of creating an accidental cold-only or hot-only write.
+class IngestTaskExecutor final {
+public:
+    using ColdWriteFunction =
+        std::function<OperationResult(const TimeseriesBatch&)>;
+    using HotUpdateFunction =
+        std::function<IngestPipelineResult(const TimeseriesBatch&)>;
+
+    IngestTaskExecutor();
+    ~IngestTaskExecutor();
+
+    IngestTaskExecutor(const IngestTaskExecutor&) = delete;
+    IngestTaskExecutor& operator=(const IngestTaskExecutor&) = delete;
+
+    IngestTaskSubmission trySubmit(
+        std::shared_ptr<const IngestResult> resolved,
+        ColdWriteFunction cold_write,
+        HotUpdateFunction hot_update);
+
+private:
+    struct Task;
+
+    void workerLoop(bool cold_lane);
+    void completeCold(
+        const std::shared_ptr<Task>& task,
+        OperationResult result);
+    void completeHot(
+        const std::shared_ptr<Task>& task,
+        IngestPipelineResult result);
+    void completeTask(const std::shared_ptr<Task>& task);
+
+    std::mutex queue_mutex_;
+    std::condition_variable queue_condition_;
+    std::deque<std::shared_ptr<Task>> cold_queue_;
+    std::deque<std::shared_ptr<Task>> hot_queue_;
+    const std::size_t queue_capacity_;
+    std::size_t pending_tasks_{0};
+    bool stopping_{false};
+    std::vector<std::thread> cold_workers_;
+    std::vector<std::thread> hot_workers_;
+};
+
+}  // namespace sfkg::timeseries::core::grpc

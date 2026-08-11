@@ -6,6 +6,7 @@
 #include "sfkg/timeseries/core/alignment_service.hpp"
 #include "sfkg/timeseries/core/constraint_check_engine.hpp"
 #include "sfkg/timeseries/core/grpc/constraint_result_receiver_client.hpp"
+#include "sfkg/timeseries/core/grpc/ingest_task_executor.hpp"
 #include "sfkg/timeseries/core/derived_series_service.hpp"
 #include "sfkg/timeseries/core/history_query_service.hpp"
 #include "sfkg/timeseries/core/ingest_service.hpp"
@@ -40,7 +41,8 @@ public:
           history_service_(history_service),
           config_registry_(config_registry),
           derived_series_service_(config_registry, window_service),
-          constraint_result_receiver_(constraint_result_receiver) {}
+          constraint_result_receiver_(constraint_result_receiver),
+          ingest_task_executor_() {}
 
     ::grpc::Status syncInstanceConfigs(
         ::grpc::ServerContext* context,
@@ -105,6 +107,9 @@ public:
         pb::QueryHistoryOverviewResponse* response) override;
 
 private:
+    IngestPipelineResult processHotIngest(
+        const TimeseriesBatch& data);
+
     IngestService& ingest_service_;
     StorageService& storage_service_;
     WindowService& window_service_;
@@ -115,6 +120,7 @@ private:
     RuntimeConfigRegistry& config_registry_;
     DerivedSeriesService derived_series_service_;
     ConstraintResultReceiverClient& constraint_result_receiver_;
+    IngestTaskExecutor ingest_task_executor_;
 };
 
 }  // namespace sfkg::timeseries::core::grpc

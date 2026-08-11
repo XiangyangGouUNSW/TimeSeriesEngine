@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -84,6 +85,27 @@ bool parseKeepDays(const std::string& text, std::uint32_t* days) {
         return false;
     }
     *days = static_cast<std::uint32_t>(parsed);
+    return true;
+}
+
+bool parsePositiveSize(const std::string& text, std::size_t* value) {
+    if (text.empty()) {
+        return false;
+    }
+    std::uint64_t parsed = 0;
+    for (const char ch : text) {
+        if (!std::isdigit(static_cast<unsigned char>(ch))) {
+            return false;
+        }
+        parsed = parsed * 10U + static_cast<unsigned>(ch - '0');
+        if (parsed > 64) {
+            return false;
+        }
+    }
+    if (parsed == 0) {
+        return false;
+    }
+    *value = static_cast<std::size_t>(parsed);
     return true;
 }
 
@@ -467,14 +489,22 @@ struct TaosClient::Impl {
         envOr("SFKG_TAOS_RAW_STABLE", "raw_timeseries_data");
     std::uint16_t port{};
     std::uint32_t keep_days{};
+    std::size_t write_connection_count{4};
     std::string config_error;
     std::string connection_error;
-    // These locks serialize use of the shared connection objects. They do not
-    // imply that writes and queries share one connection or one lock.
-    mutable std::mutex write_mutex;
+    // Each write worker selects one connection and only serializes with other
+    // users of that same connection. This is a connection-pool policy, not a
+    // claim that TDengine writes are globally required to be single-threaded.
+    struct WriteConnection {
+#if SFKG_WITH_TAOS
+        TAOS* connection{};
+#endif
+        mutable std::mutex mutex;
+    };
+    std::vector<std::unique_ptr<WriteConnection>> write_connections;
+    // Query operations intentionally use a separate connection and lock.
     mutable std::mutex query_mutex;
 #if SFKG_WITH_TAOS
-    TAOS* write_connection{};
     TAOS* query_connection{};
 #endif
 };
@@ -501,20 +531,46 @@ TaosClient::TaosClient() : impl_(std::make_unique<Impl>()) {
             return;
         }
     }
+    if (const char* connections = std::getenv("SFKG_TAOS_WRITE_CONNECTIONS")) {
+        if (!parsePositiveSize(connections, &impl_->write_connection_count)) {
+            impl_->config_error =
+                "SFKG_TAOS_WRITE_CONNECTIONS must be an integer in [1, 64]";
+            return;
+        }
+    }
 #if SFKG_WITH_TAOS
     static std::once_flag init_flag;
     std::call_once(init_flag, [] {
         taos_options(TSDB_OPTION_CONFIGDIR, SFKG_TAOS_CONFIG_DIR);
         taos_init();
     });
-    impl_->write_connection = taos_connect(
-        impl_->host.c_str(), impl_->user.c_str(), impl_->password.c_str(),
-        nullptr, impl_->port);
+    impl_->write_connections.reserve(impl_->write_connection_count);
+    std::string first_connection_error;
+    for (std::size_t index = 0;
+         index < impl_->write_connection_count;
+         ++index) {
+        auto connection = std::make_unique<Impl::WriteConnection>();
+        connection->connection = taos_connect(
+            impl_->host.c_str(), impl_->user.c_str(), impl_->password.c_str(),
+            nullptr, impl_->port);
+        if (connection->connection == nullptr && first_connection_error.empty()) {
+            first_connection_error = taos_errstr(nullptr);
+        }
+        impl_->write_connections.push_back(std::move(connection));
+    }
     impl_->query_connection = taos_connect(
         impl_->host.c_str(), impl_->user.c_str(), impl_->password.c_str(),
         nullptr, impl_->port);
-    if (impl_->write_connection == nullptr || impl_->query_connection == nullptr) {
-        impl_->connection_error = taos_errstr(nullptr);
+    const bool missing_write_connection = std::any_of(
+        impl_->write_connections.begin(),
+        impl_->write_connections.end(),
+        [](const auto& connection) {
+            return connection == nullptr || connection->connection == nullptr;
+        });
+    if (missing_write_connection || impl_->query_connection == nullptr) {
+        impl_->connection_error = first_connection_error.empty()
+            ? taos_errstr(nullptr)
+            : first_connection_error;
         if (impl_->connection_error.empty()) {
             impl_->connection_error = "TDengine connection failed";
         }
@@ -526,8 +582,10 @@ TaosClient::TaosClient() : impl_(std::make_unique<Impl>()) {
 
 TaosClient::~TaosClient() {
 #if SFKG_WITH_TAOS
-    if (impl_->write_connection != nullptr) {
-        taos_close(impl_->write_connection);
+    for (auto& connection : impl_->write_connections) {
+        if (connection != nullptr && connection->connection != nullptr) {
+            taos_close(connection->connection);
+        }
     }
     if (impl_->query_connection != nullptr) {
         taos_close(impl_->query_connection);
@@ -542,11 +600,12 @@ OperationResult TaosClient::ensureSchema() {
 #if !SFKG_WITH_TAOS
     return internalError("TDengine support was disabled at configure time");
 #else
-    // Schema setup changes the shared write connection state. The query
-    // connection is selected under query_mutex below; keep this lock order
-    // documented for future reconnect/lifecycle changes.
-    std::lock_guard lock(impl_->write_mutex);
-    if (impl_->write_connection == nullptr) {
+    if (impl_->write_connections.empty()) {
+        return unavailable("TDengine is unreachable: " + impl_->connection_error);
+    }
+    auto& first = *impl_->write_connections.front();
+    std::lock_guard first_lock(first.mutex);
+    if (first.connection == nullptr) {
         return unavailable("TDengine is unreachable: " + impl_->connection_error);
     }
     const std::string database = quoteIdentifier(impl_->database);
@@ -555,7 +614,7 @@ OperationResult TaosClient::ensureSchema() {
     if (impl_->keep_days != 0) {
         create_db += " KEEP " + std::to_string(impl_->keep_days);
     }
-    ResultGuard result{taos_query(impl_->write_connection, create_db.c_str())};
+    ResultGuard result{taos_query(first.connection, create_db.c_str())};
     if (result.result == nullptr || taos_errno(result.result) != 0) {
         return queryError(result.result, "create database");
     }
@@ -565,14 +624,27 @@ OperationResult TaosClient::ensureSchema() {
         "(ts TIMESTAMP, d_value DOUBLE, i_value BIGINT, b_value BOOL, "
         "s_value NCHAR(256)) TAGS (sequence_id NCHAR(128), value_type TINYINT)";
     taos_free_result(result.result);
-    result.result = taos_query(impl_->write_connection, create_stable.c_str());
+    result.result = taos_query(first.connection, create_stable.c_str());
     if (result.result == nullptr || taos_errno(result.result) != 0) {
         return queryError(result.result, "create raw data stable");
     }
-    if (taos_select_db(impl_->write_connection, impl_->database.c_str()) != 0) {
+    if (taos_select_db(first.connection, impl_->database.c_str()) != 0) {
         const std::string message = "select TDengine database for writes: " +
             std::string(taos_errstr(nullptr));
         return looksUnavailable(message) ? unavailable(message) : internalError(message);
+    }
+    for (std::size_t index = 1;
+         index < impl_->write_connections.size();
+         ++index) {
+        auto& connection = *impl_->write_connections[index];
+        std::lock_guard connection_lock(connection.mutex);
+        if (connection.connection == nullptr ||
+            taos_select_db(connection.connection, impl_->database.c_str()) != 0) {
+            return unavailable(
+                "select TDengine database for write connection " +
+                std::to_string(index) + ": " +
+                std::string(taos_errstr(nullptr)));
+        }
     }
     {
         // This is a separate connection, so selecting its database does not
@@ -596,13 +668,17 @@ OperationResult TaosClient::dropDatabaseForTesting() {
 #if !SFKG_WITH_TAOS
     return internalError("TDengine support was disabled at configure time");
 #else
-    std::lock_guard lock(impl_->write_mutex);
-    if (impl_->write_connection == nullptr) {
+    if (impl_->write_connections.empty()) {
+        return unavailable("TDengine is unreachable: " + impl_->connection_error);
+    }
+    auto& connection = *impl_->write_connections.front();
+    std::lock_guard lock(connection.mutex);
+    if (connection.connection == nullptr) {
         return unavailable("TDengine is unreachable: " + impl_->connection_error);
     }
     const std::string sql =
         "DROP DATABASE IF EXISTS " + quoteIdentifier(impl_->database);
-    ResultGuard result{taos_query(impl_->write_connection, sql.c_str())};
+    ResultGuard result{taos_query(connection.connection, sql.c_str())};
     if (result.result == nullptr || taos_errno(result.result) != 0) {
         return queryError(result.result, "drop test database");
     }
@@ -679,8 +755,18 @@ OperationResult TaosClient::insertRaw(const TimeseriesBatch& batch) {
         return internalError(std::string("prepare raw values: ") + exception.what());
     }
 
-    std::lock_guard lock(impl_->write_mutex);
-    if (impl_->write_connection == nullptr) {
+    if (impl_->write_connections.empty()) {
+        return unavailable("TDengine is unreachable: " + impl_->connection_error);
+    }
+    // Keep a batch for the same leading sequence on one connection. This
+    // avoids introducing a new cross-connection ordering policy for one
+    // sequence while still distributing independent sequences across the
+    // connection pool.
+    const auto connection_index = std::hash<SequenceId>{}(
+        batch.points.front().sequence_id) % impl_->write_connections.size();
+    auto& connection = *impl_->write_connections[connection_index];
+    std::lock_guard lock(connection.mutex);
+    if (connection.connection == nullptr) {
         return unavailable("TDengine is unreachable: " + impl_->connection_error);
     }
     const std::string sql =
@@ -689,7 +775,7 @@ OperationResult TaosClient::insertRaw(const TimeseriesBatch& batch) {
         " TAGS(?,?) VALUES (?,?,?,?,?)";
     TAOS_STMT2_OPTION option{0, true, true, nullptr, nullptr};
     std::unique_ptr<TAOS_STMT2, decltype(&taos_stmt2_close)> statement(
-        taos_stmt2_init(impl_->write_connection, &option), taos_stmt2_close);
+        taos_stmt2_init(connection.connection, &option), taos_stmt2_close);
     if (!statement) {
         return unavailable("initialize TDengine stmt2: connection unavailable");
     }

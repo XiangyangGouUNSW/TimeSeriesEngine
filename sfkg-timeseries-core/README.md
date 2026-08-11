@@ -8,7 +8,8 @@
 ## 当前实现范围
 
 - 运行时实例配置、约束和关联关系支持增量同步与更新；
-- `IngestData` 已完成识别、标准化、冷数据写入和热窗口更新的控制流程；
+- `IngestData` 已完成识别、标准化、冷热并行写入和热窗口更新的控制流程；
+- 接入任务使用有界冷热队列，队列满时返回 `OPERATION_CODE_UNAVAILABLE`；
 - TDengine 原始数据写入、历史数据查询和历史概览查询可运行；
 - `ConstraintCheckEngine` 支持单序列 `WindowData`、多序列 `AlignedWindowData`、固定采样偏移和约束违反明细；
 - `AlignmentService` 已支持普通分桶对齐和固定 lag 的具体序列关系对齐；
@@ -112,23 +113,53 @@ TDengine 确认就绪后，在普通终端执行：
 ```bash
 cd /home/yumiduo/attempt/暑期项目/sfkg-timeseries-core
 
-LD_LIBRARY_PATH=/home/yumiduo/sfkg/tdengine/lib \
-SFKG_TAOS_HOST=127.0.0.1 \
-SFKG_TAOS_PORT=6030 \
-SFKG_TAOS_USER=root \
-SFKG_TAOS_PASSWORD=taosdata \
-SFKG_TAOS_DB=sfkg_timeseries \
-SFKG_TAOS_RAW_STABLE=raw_timeseries_data \
-SFKG_CONSTRAINT_RESULT_RECEIVER_ADDRESS=222.29.156.142:9105 \
-SFKG_TIMESERIES_CORE_ADDRESS=0.0.0.0:50051 \
-./build-taos/sfkg-timeseries-core-server 0.0.0.0:50051
+env \
+  -u grpc_proxy \
+  -u http_proxy \
+  -u https_proxy \
+  -u HTTP_PROXY \
+  -u HTTPS_PROXY \
+  -u ALL_PROXY \
+  -u all_proxy \
+  LD_LIBRARY_PATH=/home/yumiduo/sfkg/tdengine/lib \
+  no_grpc_proxy=222.29.156.142 \
+  no_proxy=localhost,127.0.0.1,222.29.156.142 \
+  NO_PROXY=localhost,127.0.0.1,222.29.156.142 \
+  SFKG_TAOS_HOST=127.0.0.1 \
+  SFKG_TAOS_PORT=6030 \
+  SFKG_TAOS_USER=root \
+  SFKG_TAOS_PASSWORD=taosdata \
+  SFKG_TAOS_DB=sfkg_timeseries \
+  SFKG_TAOS_KEEP_DAYS=365000 \
+  SFKG_TAOS_RAW_STABLE=raw_timeseries_data \
+  SFKG_TAOS_WRITE_CONNECTIONS=4 \
+  SFKG_INGEST_COLD_WORKERS=4 \
+  SFKG_INGEST_HOT_WORKERS=1 \
+  SFKG_INGEST_QUEUE_CAPACITY=128 \
+  SFKG_CONSTRAINT_RESULT_RECEIVER_ADDRESS=222.29.156.142:9105 \
+  SFKG_TIMESERIES_CORE_ADDRESS=0.0.0.0:50051 \
+  ./build-taos/sfkg-timeseries-core-server 0.0.0.0:50051
 ```
+
+启动 Core 时需要为统一服务地址绕过本机 HTTP 代理，否则 gRPC 可能会错误连接到
+本地代理端口而无法调用 `ReceiveConstraintResult`。上述命令只对 Core 进程清除代理，
+不会改变当前终端或其他程序的代理配置。
 
 `SFKG_TAOS_RAW_STABLE` 默认值为 `raw_timeseries_data`，用于指定原始时序数据的超级表名称；
 自定义名称时，Core 会按当前原始数据结构创建并查询对应超级表。
 
 `SFKG_CONSTRAINT_RESULT_RECEIVER_ADDRESS` 用于指定约束异常结果接收服务，默认值为
 `222.29.156.142:9105`。如果不设置，Core 仍会使用该默认地址。
+
+写入并发相关配置为：
+
+- `SFKG_TAOS_WRITE_CONNECTIONS`：TDengine 写连接数，默认 4，范围为 1～64；
+- `SFKG_INGEST_COLD_WORKERS`：冷数据写入工作线程数，默认 4；
+- `SFKG_INGEST_HOT_WORKERS`：热窗口工作线程数，默认 1；当前热窗口由全局锁保护，建议先保持 1；
+- `SFKG_INGEST_QUEUE_CAPACITY`：最多同时接纳的 IngestData 批次数，默认 128。
+
+队列容量按批次而不是单条记录计算。一个请求只有在冷热两条通道都成功预留容量后才会
+执行；队列满时不会执行部分写入，调用方可以根据 `OPERATION_CODE_UNAVAILABLE` 重试。
 
 Core 正常启动后应打印：
 
@@ -183,6 +214,27 @@ SFKG_TAOS_KEEP_DAYS=365000
 ```sql
 ALTER DATABASE sfkg_timeseries KEEP 365000d;
 ```
+
+### 5. 清空测试数据库数据
+
+测试需要清空数据时，可以使用仓库自带脚本。脚本只删除
+`sfkg_timeseries.raw_timeseries_data` 中的数据，保留数据库、超级表和子表结构：
+
+```bash
+cd /home/yumiduo/attempt/暑期项目/sfkg-timeseries-core
+./scripts/clear_sfkg_timeseries_db.sh
+```
+
+脚本会先要求输入 `sfkg_timeseries` 确认。确认 Core 当前没有继续写入后，
+也可以使用 `--yes` 跳过交互确认：
+
+```bash
+./scripts/clear_sfkg_timeseries_db.sh --yes
+```
+
+该脚本可以在普通终端执行，也可以在 `sfkg-tdengine` tmux 会话中新开窗口执行；
+tmux 中的 TDengine 进程不需要停止。若 Core 正在接收数据，清理期间可能又产生新数据，
+因此测试重置时应先停止 Core 或暂停统一服务的写入。
 
 调整 `KEEP` 不会恢复之前已经被拒绝或删除的数据；这类数据需要在调整后重新接入。
 

@@ -4,6 +4,7 @@
 #include <chrono>
 #include <exception>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -20,6 +21,16 @@ namespace {
 OperationResult failedPrecondition(std::string message) {
     return internal::makeOperationResult(
         OperationCode::FailedPrecondition, 0, 0, std::move(message));
+}
+
+OperationResult unavailable(
+    std::size_t failed_count,
+    std::string message) {
+    return internal::makeOperationResult(
+        OperationCode::Unavailable,
+        0,
+        failed_count,
+        std::move(message));
 }
 
 OperationResult internalError(std::string message) {
@@ -443,6 +454,104 @@ OperationResult withConstraintNotificationFailure(
     });
 }
 
+IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
+    const TimeseriesBatch& data) {
+    IngestPipelineResult result;
+    result.window_result = window_service_.buildTimeWindow(data);
+    if (isSuccessful(result.window_result.code)) {
+        result.derived_result = derived_series_service_.refresh();
+    } else {
+        result.derived_result = failedPrecondition(
+            "derived refresh skipped because hot window update failed");
+    }
+
+    result.constraint_notification_result = internal::ok(
+        0, "constraint check skipped because hot window update failed");
+    if (!isSuccessful(result.window_result.code)) {
+        return result;
+    }
+
+    const auto enabled_rules = config_registry_.allEnabledConstraints();
+    if (enabled_rules.empty()) {
+        result.constraint_notification_result = internal::ok(
+            0, "no enabled constraints; notification skipped");
+        return result;
+    }
+
+    std::vector<SequenceId> requested_sequence_ids;
+    std::unordered_set<SequenceId> requested_sequence_set;
+    for (const auto& rule : enabled_rules) {
+        for (const auto& sequence_id : mappedSequenceIds(rule)) {
+            if (requested_sequence_set.insert(sequence_id).second) {
+                requested_sequence_ids.push_back(sequence_id);
+            }
+        }
+    }
+
+    if (requested_sequence_ids.empty()) {
+        result.constraint_notification_result = internal::invalidArgument(
+            "enabled constraints contain no mapped sequences");
+        return result;
+    }
+
+    const auto window = window_service_.queryWindowData({
+        requested_sequence_ids, std::nullopt, std::nullopt});
+    if (!isSuccessful(window.operation.code)) {
+        result.constraint_notification_result = window.operation;
+        return result;
+    }
+    if (window.data.sequence_values.empty()) {
+        result.constraint_notification_result = internal::ok(
+            0,
+            "constraint check skipped because hot window has no applicable data");
+        return result;
+    }
+
+    const auto check = runContinuousConstraintCheck(
+        window.data,
+        enabled_rules,
+        alignment_service_,
+        constraint_engine_);
+    if (!isSuccessful(check.operation.code)) {
+        result.constraint_notification_result = check.operation;
+        return result;
+    }
+    if (check.violations.empty()) {
+        result.constraint_notification_result = internal::ok(
+            check.evaluated_count,
+            "no constraint violations; notification skipped");
+        return result;
+    }
+
+    std::unordered_map<std::string, std::vector<SequenceId>>
+        sequences_by_constraint;
+    for (const auto& rule : enabled_rules) {
+        sequences_by_constraint[rule.constraint_id] = mappedSequenceIds(rule);
+    }
+
+    std::vector<std::string> violated_constraint_ids;
+    std::vector<SequenceId> violated_sequence_ids;
+    for (const auto& violation : check.violations) {
+        appendUnique(&violated_constraint_ids, violation.constraint_id);
+        const auto found = sequences_by_constraint.find(
+            violation.constraint_id);
+        if (found != sequences_by_constraint.end()) {
+            for (const auto& sequence_id : found->second) {
+                appendUnique(&violated_sequence_ids, sequence_id);
+            }
+        }
+    }
+    std::sort(
+        violated_constraint_ids.begin(), violated_constraint_ids.end());
+    std::sort(violated_sequence_ids.begin(), violated_sequence_ids.end());
+    result.constraint_notification_result =
+        constraint_result_receiver_.receiveConstraintResult(
+            window.data.window_end_time,
+            violated_constraint_ids,
+            violated_sequence_ids);
+    return result;
+}
+
 ::grpc::Status TimeseriesCoreGrpcService::ingestData(
     ::grpc::ServerContext* context,
     const pb::IngestDataRequest* request,
@@ -475,30 +584,52 @@ OperationResult withConstraintNotificationFailure(
             input.push_back(std::move(converted));
         }
 
-        const IngestResult resolved =
-            ingest_service_.ingestAndResolveData(input);
+        auto resolved = std::make_shared<IngestResult>(
+            ingest_service_.ingestAndResolveData(input));
         conversion::toProto(
-            resolved.operation, response->mutable_resolve_result());
+            resolved->operation, response->mutable_resolve_result());
 
         OperationResult storage_result;
         OperationResult window_result;
         OperationResult derived_result;
-        if (isSuccessful(resolved.operation.code)) {
-            // First version: attempt both destinations independently in the
-            // request thread. This is a logical dual write, not an atomic
-            // transaction: one destination may succeed while the other fails.
-            // Future work can move these calls to independent workers or a
-            // write queue, add batch/request IDs for idempotent retries, and
-            // add compensation so cold storage remains the rebuildable source
-            // of truth for the hot window.
-            storage_result = storage_service_.writeRawData(resolved.resolved_data);
-            window_result = window_service_.buildTimeWindow(
-                resolved.resolved_data);
-            if (isSuccessful(window_result.code)) {
-                derived_result = derived_series_service_.refresh();
+        OperationResult constraint_notification_result = internal::ok(
+            0, "constraint check skipped because hot window update failed");
+        OperationResult ingest_result;
+        if (isSuccessful(resolved->operation.code)) {
+            auto submission = ingest_task_executor_.trySubmit(
+                resolved,
+                [this](const TimeseriesBatch& data) {
+                    return storage_service_.writeRawData(data);
+                },
+                [this](const TimeseriesBatch& data) {
+                    return processHotIngest(data);
+                });
+            if (!submission.accepted) {
+                const auto failed_count = resolved->resolved_data.points.size();
+                storage_result = unavailable(
+                    failed_count, submission.admission.message);
+                window_result = unavailable(
+                    failed_count, submission.admission.message);
+                derived_result = unavailable(
+                    failed_count, "derived refresh skipped: ingest task was not admitted");
+                constraint_notification_result = internal::ok(
+                    0, "constraint check skipped: ingest task was not admitted");
+                ingest_result = unavailable(
+                    resolved->operation.success_count +
+                        resolved->operation.failed_count,
+                    submission.admission.message);
             } else {
-                derived_result = failedPrecondition(
-                    "derived refresh skipped because hot window update failed");
+                const auto pipeline = submission.completion.get();
+                storage_result = pipeline.storage_result;
+                window_result = pipeline.window_result;
+                derived_result = pipeline.derived_result;
+                constraint_notification_result =
+                    pipeline.constraint_notification_result;
+                ingest_result = combineIngestResults(
+                    resolved->operation,
+                    storage_result,
+                    window_result,
+                    derived_result);
             }
         } else {
             storage_result = failedPrecondition(
@@ -507,6 +638,11 @@ OperationResult withConstraintNotificationFailure(
                 "window update skipped because ingest resolution did not succeed");
             derived_result = failedPrecondition(
                 "derived refresh skipped because ingest resolution did not succeed");
+            ingest_result = combineIngestResults(
+                resolved->operation,
+                storage_result,
+                window_result,
+                derived_result);
         }
 
         conversion::toProto(
@@ -516,95 +652,6 @@ OperationResult withConstraintNotificationFailure(
         conversion::toProto(
             derived_result, response->mutable_derived_result());
 
-        OperationResult constraint_notification_result = internal::ok(
-            0, "constraint check skipped because hot window update failed");
-        OperationResult ingest_result = combineIngestResults(
-            resolved.operation, storage_result, window_result, derived_result);
-        if (isSuccessful(window_result.code)) {
-            const auto enabled_rules =
-                config_registry_.allEnabledConstraints();
-            if (enabled_rules.empty()) {
-                constraint_notification_result = internal::ok(
-                    0, "no enabled constraints; notification skipped");
-            } else {
-                std::vector<SequenceId> requested_sequence_ids;
-                std::unordered_set<SequenceId> requested_sequence_set;
-                for (const auto& rule : enabled_rules) {
-                    for (const auto& sequence_id : mappedSequenceIds(rule)) {
-                        if (requested_sequence_set.insert(sequence_id).second) {
-                            requested_sequence_ids.push_back(sequence_id);
-                        }
-                    }
-                }
-
-                if (requested_sequence_ids.empty()) {
-                    constraint_notification_result = internal::invalidArgument(
-                        "enabled constraints contain no mapped sequences");
-                } else {
-                    const auto window = window_service_.queryWindowData({
-                        requested_sequence_ids, std::nullopt, std::nullopt});
-                    if (!isSuccessful(window.operation.code)) {
-                        constraint_notification_result = window.operation;
-                    } else if (window.data.sequence_values.empty()) {
-                        constraint_notification_result = internal::ok(
-                            0,
-                            "constraint check skipped because hot window has "
-                            "no applicable data");
-                    } else {
-                        const auto check = runContinuousConstraintCheck(
-                            window.data,
-                            enabled_rules,
-                            alignment_service_,
-                            constraint_engine_);
-                        if (!isSuccessful(check.operation.code)) {
-                            constraint_notification_result = check.operation;
-                        } else if (check.violations.empty()) {
-                            constraint_notification_result = internal::ok(
-                                check.evaluated_count,
-                                "no constraint violations; notification "
-                                "skipped");
-                        } else {
-                            std::unordered_map<
-                                std::string, std::vector<SequenceId>>
-                                sequences_by_constraint;
-                            for (const auto& rule : enabled_rules) {
-                                sequences_by_constraint[rule.constraint_id] =
-                                    mappedSequenceIds(rule);
-                            }
-
-                            std::vector<std::string> violated_constraint_ids;
-                            std::vector<SequenceId> violated_sequence_ids;
-                            for (const auto& violation : check.violations) {
-                                appendUnique(
-                                    &violated_constraint_ids,
-                                    violation.constraint_id);
-                                const auto found = sequences_by_constraint.find(
-                                    violation.constraint_id);
-                                if (found != sequences_by_constraint.end()) {
-                                    for (const auto& sequence_id : found->second) {
-                                        appendUnique(
-                                            &violated_sequence_ids,
-                                            sequence_id);
-                                    }
-                                }
-                            }
-                            std::sort(
-                                violated_constraint_ids.begin(),
-                                violated_constraint_ids.end());
-                            std::sort(
-                                violated_sequence_ids.begin(),
-                                violated_sequence_ids.end());
-                            constraint_notification_result =
-                                constraint_result_receiver_
-                                    .receiveConstraintResult(
-                                        window.data.window_end_time,
-                                        violated_constraint_ids,
-                                        violated_sequence_ids);
-                        }
-                    }
-                }
-            }
-        }
         conversion::toProto(
             constraint_notification_result,
             response->mutable_constraint_notification_result());
@@ -613,7 +660,7 @@ OperationResult withConstraintNotificationFailure(
         conversion::toProto(ingest_result, response->mutable_operation());
         if (request->return_resolved_data()) {
             conversion::toProto(
-                resolved.resolved_data, response->mutable_resolved_data());
+                resolved->resolved_data, response->mutable_resolved_data());
         }
         return ::grpc::Status::OK;
     });

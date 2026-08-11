@@ -113,6 +113,7 @@ if(SFKG_BUILD_GRPC)
 
     add_library(sfkg_timeseries_grpc
         src/grpc/constraint_result_receiver_client.cpp
+        src/grpc/ingest_task_executor.cpp
         src/grpc/proto_conversion.cpp
         src/grpc/timeseries_core_grpc_service.cpp)
     target_include_directories(sfkg_timeseries_grpc
@@ -215,6 +216,14 @@ if(SFKG_BUILD_TESTS)
         add_test(
             NAME constraint_result_receiver_client_test
             COMMAND constraint_result_receiver_client_test)
+
+        add_executable(ingest_task_executor_test
+            tests/ingest_task_executor_test.cpp)
+        target_link_libraries(ingest_task_executor_test
+            PRIVATE sfkg_timeseries_grpc)
+        add_test(
+            NAME ingest_task_executor_test
+            COMMAND ingest_task_executor_test)
     endif()
 
     if(SFKG_WITH_TAOS)
