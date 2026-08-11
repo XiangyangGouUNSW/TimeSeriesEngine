@@ -99,8 +99,9 @@ def main() -> None:
         print(f"[2] 二次预测 status={pb.AnalysisStatus.Name(r2.status)}（应命中缓存）")
 
         # 3. 磁盘持久化：训练后应已写文件，新 store 识别为就绪
+        #    模型 key 带配置版本（默认 0）：{task_id}@v{config_version}
         store2 = ModelStore(model_dir=tmp)
-        ok = store2.is_ready("task-patchtst-001")
+        ok = store2.is_ready("task-patchtst-001@v0")
         print(f"[3] 磁盘缓存就绪：{ok}")
         assert ok, "训练后的模型文件应存在且可识别"
 

@@ -50,8 +50,12 @@ inference:
   horizon_steps: 24            # 预测未来多少步
 
 scheduler:
-  interval_seconds: 10         # 固定周期触发间隔：每 N 秒跑一次所有 ENABLED 任务
+  interval_seconds: 10         # 固定周期触发间隔：每 N 秒扫描一次所有 ENABLED 任务
                                # （演示/联调可调短，如 3）
+  train_queue_size: 8          # 训练队列有界深度，满则跳过下轮（不阻塞不丢配置）
+  infer_queue_size: 32         # 推理队列有界深度
+  train_workers: 1             # 训练 worker 数：重型训练串行，避免抢 torch 全局线程池
+  infer_workers: 2             # 在线检测/预测 worker 数（并行度）
 
 result_repository:
   maxlen: 50                   # 每任务结果仓库保留最近多少条（Query 轮询）

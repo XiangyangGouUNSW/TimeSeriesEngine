@@ -12,6 +12,13 @@ Python 时序分析模块：模型异常检测、时序预测与预警、归因�
 - **P↔S 服务（空壳）**：7 个 RPC（任务同步 / 任务状态 / 结果查询 / 归因），S 端可调通；
 - **模型**：异常检测（GCAD / DBSCAN / MUTUAL_COUPLING 等）+ 时序预测（PatchTST）；
   `查规模 → 达标训练一次 → 可推理`，训练结果内存/磁盘缓存，首训复用；
+- **模型版本**：`config_version` 进模型缓存 key（`{task_id}@v{ver}` /
+  `{task_id}:{method}@v{ver}`），版本变 → key 变 → 自动重训；**保留最近 2 个版本**
+  （回滚到上一配置秒级复用旧模型不重训，磁盘有界）；
+- **任务调度**：注册制生命周期（Sync 注册 → Scheduler 周期扫描 → 结果查询）；
+  **双队列双 worker 池**——训练队列（默认 1 worker 串行）与推理队列（默认 2 worker 并行）
+  分离，重型训练不阻塞其他任务的在线检测/预测；队列有界满则跳过下轮、inflight 去重、
+  worker 消费前重校验（启停/删除/类型重建/版本变更中途的过时任务丢弃）、优雅退出；
 - **数据规则**：训练用历史数据；检测/预测输入一律用 C 端对齐后的实时窗口
   （P 只 reshape，不自己做对齐）；
 - **归因建议**：接口返回 `NOT_IMPLEMENTED`（空壳）。
@@ -62,7 +69,8 @@ python app/analysis_server.py
 
 ## 配置
 
-见 `config.yaml`：C 端地址/端口、数据规模门槛、模型参数、对外服务端口。
+见 `config.yaml`：C 端地址/端口、数据规模门槛、模型参数、对外服务端口、调度器参数
+（`scheduler` 节：扫描周期、训练/推理队列深度与 worker 数）。
 
 ## 目录结构
 
@@ -83,3 +91,6 @@ python app/analysis_server.py
 - 数据用公开数据集 ETT-small（`data/ETT-small/ETTh1.csv`，变压器油温等 7 列），只用于测试流程。
 - 80 核机器上需限 OpenMP/torch 线程（`SFKG_MAX_THREADS`，默认 4），否则 sklearn 拟合
   会因线程过订阅卡死（见 `anomaly_models.py` / `patchtst_forecaster.py`）。
+- **训练/推理隔离**：`scheduler.train_workers`（默认 1，重型训练串行）与
+  `scheduler.infer_workers`（默认 2，在线推理并行）分离——训练再重也不抢推理 worker；
+  队列有界，满则跳过下轮不阻塞，worker 消费前重校验保证启停/版本变更即时生效。

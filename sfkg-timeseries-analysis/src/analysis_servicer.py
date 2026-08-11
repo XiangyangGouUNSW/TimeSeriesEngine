@@ -54,21 +54,29 @@ class AnalysisServicer(pb_grpc.TimeseriesAnalysisServiceServicer):
 
     # ---- 任务配置同步（注册制：只登记不跑，立即 ACK）----
 
-    def SyncAnomalyTask(self, request, context):
+    def _sync_task(self, request, kind: TaskKind, name: str):
+        """注册/更新任务并同步配置版本；版本变化时清理旧版本模型（保留最近 2 版）。
+
+        模型缓存 key 带版本，版本变 → key 变 → 下个 tick 必然重训；
+        invalidate_task 只做磁盘/内存清理（保留当前版本，回滚到上一个版本可复用）。
+        """
         task = request.task
-        self._registry.register(task, TaskKind.ANOMALY)
-        logger.info("SyncAnomalyTask: task_id=%s 已注册（调度器周期执行）",
-                    task.task_id)
+        ver = int(request.config_version)
+        old = self._registry.get(task.task_id)
+        self._registry.register(task, kind, ver)
+        if (old is not None and old.config_version != ver
+                and self._engine is not None):
+            self._engine.invalidate_task(task.task_id, keep_version=ver)
+        logger.info("Sync%s: task_id=%s config_version=%d 已注册（调度器周期执行）",
+                    name, task.task_id, ver)
         return _ack(task.task_id, True, pb.ANALYSIS_STATUS_SUCCESS,
                     "任务已注册，由调度器周期执行")
 
+    def SyncAnomalyTask(self, request, context):
+        return self._sync_task(request, TaskKind.ANOMALY, "AnomalyTask")
+
     def SyncForecastTask(self, request, context):
-        task = request.task
-        self._registry.register(task, TaskKind.FORECAST)
-        logger.info("SyncForecastTask: task_id=%s 已注册（调度器周期执行）",
-                    task.task_id)
-        return _ack(task.task_id, True, pb.ANALYSIS_STATUS_SUCCESS,
-                    "任务已注册，由调度器周期执行")
+        return self._sync_task(request, TaskKind.FORECAST, "ForecastTask")
 
     # ---- 任务状态（真正生效：停用/删除/恢复）----
 
@@ -83,6 +91,9 @@ class AnalysisServicer(pb_grpc.TimeseriesAnalysisServiceServicer):
         if not ok:
             return _ack(request.task_id, False, pb.ANALYSIS_STATUS_FAILED,
                         "任务不存在")
+        # 删除任务时清掉它的模型（生命周期卫生：删任务不该留孤儿模型文件）
+        if local == TaskStatus.DELETED and self._engine is not None:
+            self._engine.invalidate_task(request.task_id)
         name = pb.AnalysisTaskStatus.Name(request.status)
         logger.info("UpdateTaskStatus: task_id=%s → %s", request.task_id, name)
         return _ack(request.task_id, True, pb.ANALYSIS_STATUS_SUCCESS,

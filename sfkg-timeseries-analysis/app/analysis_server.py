@@ -77,8 +77,13 @@ def serve() -> None:
     engine = AnalysisEngine(core_client, s_client, cfg)
     registry = TaskRegistry()
     repository = ResultRepository(maxlen=repo_cfg.get("maxlen", 50))
-    scheduler = Scheduler(engine, registry, repository,
-                          interval_seconds=sched_cfg.get("interval_seconds", 10.0))
+    scheduler = Scheduler(
+        engine, registry, repository,
+        interval_seconds=sched_cfg.get("interval_seconds", 10.0),
+        train_queue_size=sched_cfg.get("train_queue_size", 8),
+        infer_queue_size=sched_cfg.get("infer_queue_size", 32),
+        train_workers=sched_cfg.get("train_workers", 1),
+        infer_workers=sched_cfg.get("infer_workers", 2))
     servicer = AnalysisServicer(registry=registry, repository=repository,
                                 engine=engine)
 
@@ -90,8 +95,9 @@ def serve() -> None:
     print(f"P 端服务已启动，监听 {server_cfg['address']}:{server_cfg['port']}")
     print(f"  C 端: {core_address}:{core_port} | S 端: "
           f"{s_cfg.get('address')}:{s_cfg.get('port')}")
-    print(f"  调度器: 每 {sched_cfg.get('interval_seconds', 10)}s "
-          f"跑一次 ENABLED 任务")
+    print(f"  调度器: 每 {sched_cfg.get('interval_seconds', 10)}s 扫描 ENABLED 任务，"
+          f"训练 worker {sched_cfg.get('train_workers', 1)} 个 / "
+          f"推理 worker {sched_cfg.get('infer_workers', 2)} 个")
 
     server.wait_for_termination()
 

@@ -21,6 +21,11 @@ from threadpoolctl import threadpool_limits
 # 60s+ 不收敛。训练一律限线程数，避免和 gRPC 服务线程争抢 CPU（生产并发是硬性要求）。
 _MAX_THREADS = int(os.environ.get("SFKG_MAX_THREADS", "4"))
 
+# 已知检测方法（engine.needs_training 据此判断任务是否需要训练；
+# build_anomaly_model 顶部据此早退，两处判定不漂移）
+KNOWN_METHODS = frozenset({"DISCRETE_OUTLIER", "CAUSAL_PATTERN",
+                           "TREND_SHIFT", "MUTUAL_COUPLING"})
+
 
 class AnomalyModel:
     """异常模型接口。所有异常模型实现 fit/detect，方便替换测试。"""
@@ -398,6 +403,8 @@ class MutualCouplingModel(AnomalyModel):
 # 模型工厂：按方法名创建模型（便于后续替换/扩展）
 def build_anomaly_model(method: str, **kwargs) -> AnomalyModel | None:
     """根据方法名返回模型实例；未知方法返回 None。"""
+    if method not in KNOWN_METHODS:
+        return None
     if method == "DISCRETE_OUTLIER":
         return DbscanAnomalyModel(eps=kwargs.get("eps", 0.5),
                                   min_samples=kwargs.get("min_samples", 5))

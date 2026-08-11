@@ -64,6 +64,22 @@ def test_registry() -> None:
     assert not reg.set_status("t-not-exist", TaskStatus.DISABLED), "任务不存在返回 False"
     _ok("任务不存在返回 False")
 
+    # config_version：register 更新版本、保留启停状态；is_enabled 反映实时状态
+    rec = reg.register(types.SimpleNamespace(task_id="t-ver"), TaskKind.FORECAST,
+                       config_version=1)
+    assert rec.config_version == 1 and reg.get("t-ver").config_version == 1, \
+        "register 应记录 config_version"
+    reg.set_status("t-ver", TaskStatus.DISABLED)
+    reg.register(types.SimpleNamespace(task_id="t-ver"), TaskKind.FORECAST,
+                 config_version=2)
+    assert reg.get("t-ver").config_version == 2, "版本更新应覆盖旧版本"
+    assert reg.get("t-ver").status == TaskStatus.DISABLED, "版本更新保留启停状态"
+    assert not reg.is_enabled("t-ver"), "is_enabled 应反映 DISABLED"
+    reg.set_status("t-ver", TaskStatus.ENABLED)
+    assert reg.is_enabled("t-ver"), "is_enabled 应反映 ENABLED"
+    assert not reg.is_enabled("t-not-exist"), "不存在任务 is_enabled=False"
+    _ok("config_version 记录/更新 + is_enabled")
+
 
 # ================= 检测类型解析 =================
 
@@ -86,7 +102,7 @@ def _parse_engine():
     engine = AnalysisEngine(core_client=FakeCore(), result_client=None,
                             config={"inference": {"window_size": 100}})
     seen = []
-    engine._run_anomaly_models = lambda t, mm: seen.append(list(mm)) or []
+    engine._run_anomaly_models = lambda t, mm, cv=0: seen.append(list(mm)) or []
     return engine, seen
 
 

@@ -14,7 +14,9 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import sys
+import tempfile
 import time
 from concurrent import futures
 from pathlib import Path
@@ -35,6 +37,7 @@ from grpc_client import GrpcCoreDataClient
 from task_registry import TaskRegistry
 from result_repository import ResultRepository
 from scheduler import Scheduler
+from training_loop import ModelStore
 from fake_core_server import FakeCoreService
 
 TARGET = "ETTh1_OT"
@@ -113,10 +116,12 @@ def main() -> None:
     core_server = start_fake_core()
     print(f"假 C 已起（localhost:{CORE_PORT}）")
     scheduler = None
+    tmp = tempfile.mkdtemp(prefix="sched-test-")   # 模型存临时目录，不污染模块目录
     try:
         core = GrpcCoreDataClient("localhost", CORE_PORT)
         sender = FakeSender()
-        engine = AnalysisEngine(core_client=core, result_client=sender, config=_cfg())
+        engine = AnalysisEngine(core_client=core, result_client=sender,
+                                config=_cfg(), model_store=ModelStore(model_dir=tmp))
         registry = TaskRegistry()
         repository = ResultRepository(maxlen=5)
         scheduler = Scheduler(engine, registry, repository, interval_seconds=INTERVAL)
@@ -147,8 +152,8 @@ def main() -> None:
         assert ok, "异常任务应在调度周期内出结果"
         a_res = repository.latest("task-sched-anomaly-001")
         assert a_res.status == pb.ANALYSIS_STATUS_SUCCESS
-        assert engine.store.get("task-sched-anomaly-001:CAUSAL_PATTERN") is not None, \
-            "GCAD 模型应已首训并存 store"
+        assert engine.store.get("task-sched-anomaly-001:CAUSAL_PATTERN@v0") is not None, \
+            "GCAD 模型应已首训并存 store（key 带版本 @v0）"
         print(f"[3] 异常任务出结果 ✓ status=SUCCESS，"
               f"findings={len(a_res.findings)} 条，GCAD 已入 store")
 
@@ -159,8 +164,8 @@ def main() -> None:
         f_res = repository.latest("task-sched-forecast-001")
         assert f_res.status == pb.ANALYSIS_STATUS_SUCCESS
         assert len(f_res.values) == 24, "预测 24 步"
-        assert engine.store.get("task-sched-forecast-001") is not None, \
-            "预测模型应已存 store"
+        assert engine.store.get("task-sched-forecast-001@v0") is not None, \
+            "预测模型应已存 store（key 带版本 @v0）"
         print(f"[4] 预测任务首训出结果 ✓ 模型已就绪")
 
         # 4b. 再跑几个周期：应命中缓存不重训（捕获"跳过训练"日志）
@@ -202,6 +207,7 @@ def main() -> None:
             scheduler.stop()
             scheduler.join(timeout=5)
         core_server.stop(0)
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

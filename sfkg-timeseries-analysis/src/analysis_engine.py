@@ -19,8 +19,9 @@ import numpy as np
 import timeseries_analysis_pb2 as pb        # P↔S 的消息（ForecastResult/AnomalyResult）
 import timeseries_core_pb2 as cpb           # P↔C 的消息（AlignedWindowData）
 
-from anomaly_models import build_anomaly_model
+from anomaly_models import KNOWN_METHODS, build_anomaly_model
 from patchtst_forecaster import PatchTSTForecaster
+from task_registry import TaskKind
 from training_loop import ModelStore
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ class AnalysisEngine:
 
     # ================= 预测链路 =================
 
-    def run_forecast(self, task) -> pb.ForecastResult:
+    def run_forecast(self, task, config_version: int = 0) -> pb.ForecastResult:
         now = int(time.time() * 1000)
         target_ids = list(task.target_sequence_ids)
         if not target_ids:
@@ -65,7 +66,8 @@ class AnalysisEngine:
                                              f"数据不足：{'，'.join(missing)}（需要 {need}）")
 
             # ② 预测模型复用：缓存命中就跳过训练，否则训练并保存
-            model = self._get_or_train_forecaster(task, all_ids, scales)
+            model = self._get_or_train_forecaster(task, all_ids, scales,
+                                                  config_version)
 
             # ③ 取实时窗口（对齐成矩阵）预测未来。训练才用历史，推理一律实时窗口
             ctx = self._context_length(task)
@@ -137,13 +139,23 @@ class AnalysisEngine:
             return ctx
         return int(self.cfg.get("forecast_model", {}).get("context_length", 96))
 
-    def _get_or_train_forecaster(self, task, all_ids, scales):
+    def _forecast_key(self, task_id: str, ver: int) -> str:
+        """预测模型缓存 key：版本进 key，版本变 → key 变 → 必然重训。"""
+        return f"{task_id}@v{ver}"
+
+    def _anomaly_key(self, task_id: str, method: str, ver: int) -> str:
+        """异常模型缓存 key：版本进 key，版本变 → key 变 → 必然重训。"""
+        return f"{task_id}:{method}@v{ver}"
+
+    def _get_or_train_forecaster(self, task, all_ids, scales,
+                                 config_version: int = 0):
         """缓存命中返回模型；未命中训练 PatchTST 并存入 store。
 
-        无版本管理：key = task_id，训好一直复用。同 key 并发到达时
+        版本进 key：{task_id}@v{config_version}。版本变 → key 变 → 必然重训，
+        天然免疫「旧版本在飞训练覆盖新版本 key」的竞态。同 key 并发到达时
         拿 per-task 锁 double-check，只训一次。
         """
-        key = task.task_id
+        key = self._forecast_key(task.task_id, config_version)
         model = self.store.get(key)
         if model is not None:
             logger.info(f"[engine] ②命中预测模型缓存 task_id={key}，跳过训练")
@@ -194,9 +206,22 @@ class AnalysisEngine:
                 self._train_locks[key] = lock
             return lock
 
+    def invalidate_task(self, task_id: str, keep_version: int | None = None) -> None:
+        """清理任务的旧版本模型（保留最近 2 版，见 ModelStore.invalidate_task）。
+
+        keep_version=None 全删（任务删除）。顺带 prune _train_locks，
+        防其随版本数缓慢增长。
+        """
+        self.store.invalidate_task(task_id, keep_version)
+        with self._train_locks_lock:
+            stale = [k for k in self._train_locks
+                     if k.startswith(f"{task_id}:") or k.startswith(f"{task_id}@v")]
+            for k in stale:
+                self._train_locks.pop(k, None)
+
     # ================= 异常链路 =================
 
-    def run_anomaly(self, task) -> pb.AnomalyResult:
+    def run_anomaly(self, task, config_version: int = 0) -> pb.AnomalyResult:
         now = int(time.time() * 1000)
         findings = []   # 收集异常（模型检测）
 
@@ -209,7 +234,8 @@ class AnalysisEngine:
             # ① 模型检测（模式偏离异常；无模型方法则跳过）。
             #    推理输入 = 实时窗口对齐矩阵（见 _run_anomaly_models ③）；训练才用历史。
             if model_methods:
-                for f in self._run_anomaly_models(task, model_methods):
+                for f in self._run_anomaly_models(task, model_methods,
+                                                  config_version):
                     finding = pb.AnomalyFinding(
                         anomaly_type=f["anomaly_type"], severity=f["severity"],
                         description=f["description"])
@@ -246,11 +272,32 @@ class AnalysisEngine:
                 generated_at_ms=now, status=pb.ANALYSIS_STATUS_FAILED,
                 message=f"异常检测失败：{e}", findings=[], model_version="")
 
-    def _run_anomaly_models(self, task, model_methods: list[str]) -> list[dict]:
+    def needs_training(self, task, kind: TaskKind, config_version: int = 0) -> bool:
+        """任务模型（按当前版本）是否未就绪——决定进训练队列还是推理队列。
+
+        调度器 producer 每 tick 调一次。判定与 _get_or_train_forecaster /
+        _run_anomaly_models 内部一致（KNOWN_METHODS 过滤未知方法，
+        只含未知方法/只约束的任务永不进训练队列）。
+        """
+        if kind == TaskKind.FORECAST:
+            return not self.store.is_ready(
+                self._forecast_key(task.task_id, config_version))
+        methods = list(task.methods) or DEFAULT_METHODS
+        model_methods = [m for m in methods
+                         if m != "CONSTRAINT_CHECK" and m in KNOWN_METHODS]
+        if not model_methods:
+            return False
+        return any(not self.store.is_ready(
+            self._anomaly_key(task.task_id, m, config_version))
+            for m in model_methods)
+
+    def _run_anomaly_models(self, task, model_methods: list[str],
+                            config_version: int = 0) -> list[dict]:
         """按检测类型复用/训练异常模型，检测模式偏离。
 
-        模型首训复用：key = "{task_id}:{method}"，训好一直复用（无重训/版本）；
-        未知方法名 → logger.warning 跳过；仅当存在未训方法时才拉历史数据。
+        模型首训复用：key = "{task_id}:{method}@v{ver}"，训好一直复用；
+        版本变 → key 变 → 必然重训。未知方法名 → logger.warning 跳过；
+        仅当存在未训方法时才拉历史数据。
 
         多自变量→单因变量场景：
           - 因变量/自变量由 semantic_context.sequences 的 role（TARGET/FEATURE）确定；
@@ -278,7 +325,7 @@ class AnalysisEngine:
         ready: dict[str, object] = {}
         to_train: list[str] = []
         for method in model_methods:
-            key = f"{task.task_id}:{method}"
+            key = self._anomaly_key(task.task_id, method, config_version)
             model = self.store.get(key)
             if model is not None:
                 ready[method] = model
@@ -312,9 +359,13 @@ class AnalysisEngine:
             try:
                 if method in to_train:
                     model.fit(history)
-                    self.store.save(f"{task.task_id}:{method}", model)
-                    logger.info("[engine] 首训异常模型 %s（key=%s:%s）",
-                                method, task.task_id, method)
+                    self.store.save(
+                        self._anomaly_key(task.task_id, method, config_version),
+                        model)
+                    logger.info("[engine] 首训异常模型 %s（key=%s）",
+                                method,
+                                self._anomaly_key(task.task_id, method,
+                                                  config_version))
                 detected = model.detect(matrix)
                 for f in detected:
                     idx = f.get("index")

@@ -7,10 +7,24 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def _version_of(key: str) -> int | None:
+    """从 key 尾部取配置版本；无 @v 后缀（legacy 未带版本）返回 None。"""
+    m = re.search(r"@v(\d+)$", key)
+    return int(m.group(1)) if m else None
+
+
+def _belongs_to_task(key: str, task_id: str) -> bool:
+    """key 是否属于该任务：预测 {task_id}@v{ver} / 异常 {task_id}:{method}@v{ver} / legacy {task_id}。"""
+    return (key == task_id
+            or key.startswith(f"{task_id}@v")
+            or key.startswith(f"{task_id}:"))
 
 
 class ModelStore:
@@ -72,6 +86,43 @@ class ModelStore:
         if p.exists():
             p.unlink()
         logger.info("[ModelStore] invalidate %s", key)
+
+    def invalidate_task(self, task_id: str, keep_version: int | None = None) -> None:
+        """按任务清理版本化模型，保留最近 2 个版本（keep_version 和 keep_version-1）。
+
+        语义：keep_version=None 全删（任务删除）；keep_version=N 保留 {N, N-1}
+        （发布回滚到上一个配置可秒级复用旧模型，磁盘有界）。
+        legacy 无版本 key 一律视为待清理。
+        """
+        keep = {keep_version, keep_version - 1} if keep_version is not None else set()
+        stale = []
+        with self._lock:
+            for key in list(self._models):
+                if not _belongs_to_task(key, task_id):
+                    continue
+                v = _version_of(key)
+                if keep_version is not None and v is not None and v in keep:
+                    continue
+                stale.append(key)
+            for key in stale:
+                self._models.pop(key, None)
+        # 磁盘文件：内存之外还可能有历史遗留（重启前的旧版本）
+        if self._model_dir.exists():
+            for p in self._model_dir.iterdir():
+                if p.suffix != ".pt":
+                    continue
+                if not _belongs_to_task(p.stem, task_id):
+                    continue
+                v = _version_of(p.stem)
+                if keep_version is not None and v is not None and v in keep:
+                    continue
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+        if stale:
+            logger.info("[ModelStore] invalidate_task %s 清理 %d 个旧版本（保留 %s）",
+                        task_id, len(stale), sorted(keep) if keep else "全部")
 
     # ---- 具体模型类型的加载方式（由上层注入）----
 
