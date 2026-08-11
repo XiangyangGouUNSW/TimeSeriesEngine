@@ -239,6 +239,14 @@ if(SFKG_BUILD_TESTS)
         add_test(
             NAME direct_ingest_history_roundtrip_test
             COMMAND direct_ingest_history_roundtrip_test)
+
+        add_executable(sharded_taos_write_test
+            tests/sharded_taos_write_test.cpp)
+        target_link_libraries(sharded_taos_write_test
+            PRIVATE sfkg_timeseries_domain)
+        add_test(
+            NAME sharded_taos_write_test
+            COMMAND sharded_taos_write_test)
     endif()
 endif()
 
@@ -251,4 +259,11 @@ if(SFKG_BUILD_DEMOS AND SFKG_WITH_TAOS)
         tools/etth1_direct_ingest_demo.cpp)
     target_link_libraries(etth1-direct-ingest-demo
         PRIVATE sfkg_timeseries_domain)
+endif()
+
+if(SFKG_BUILD_GRPC AND SFKG_WITH_TAOS)
+    add_executable(local-ingest-parallel-benchmark
+        tools/local_ingest_parallel_benchmark.cpp)
+    target_link_libraries(local-ingest-parallel-benchmark
+        PRIVATE sfkg_timeseries_grpc)
 endif()

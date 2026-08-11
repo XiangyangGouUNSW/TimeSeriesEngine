@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <limits>
 #include <string>
+#include <unordered_set>
 
 #include "operation_helpers.hpp"
 
@@ -27,13 +28,18 @@ OperationResult WindowService::configureWindowSize(std::int64_t window_size) {
 
 OperationResult WindowService::buildTimeWindow(
     const TimeseriesBatch& data) {
-    return updateWindow(data, std::nullopt);
+    return updateWindowIncremental(data, std::nullopt).operation;
 }
 
 OperationResult WindowService::buildTimeWindow(
     const TimeseriesBatch& data,
     std::int64_t window_size) {
-    return updateWindow(data, window_size);
+    return updateWindowIncremental(data, window_size).operation;
+}
+
+WindowUpdateResult WindowService::buildTimeWindowIncremental(
+    const TimeseriesBatch& data) {
+    return updateWindowIncremental(data, std::nullopt);
 }
 
 OperationResult WindowService::replaceDerivedSequence(
@@ -63,36 +69,156 @@ OperationResult WindowService::replaceDerivedSequence(
     return internal::ok(data.points.size(), "derived hot window replaced");
 }
 
-OperationResult WindowService::updateWindow(
-    const TimeseriesBatch& data,
-    std::optional<std::int64_t> window_size_override) {
-    if (data.points.empty()) {
-        return internal::invalidArgument("window input must not be empty");
-    }
-    if (window_size_override && *window_size_override <= 0) {
+OperationResult WindowService::patchDerivedSequence(
+    const SequenceId& sequence_id,
+    Timestamp start_time,
+    Timestamp end_time,
+    const TimeseriesBatch& data) {
+    if (sequence_id.empty()) {
         return internal::invalidArgument(
-            "window_size must be positive");
+            "derived sequence_id must not be empty");
+    }
+    if (start_time > end_time) {
+        return internal::invalidArgument(
+            "derived patch start time must not be after end time");
     }
     for (const auto& point : data.points) {
-        if (point.sequence_id.empty()) {
+        if (point.sequence_id != sequence_id) {
             return internal::invalidArgument(
-                "window point sequence_id must not be empty");
+                "derived point sequence_id does not match output sequence");
+        }
+        if (point.time < start_time || point.time > end_time) {
+            return internal::invalidArgument(
+                "derived patch contains a point outside its affected range");
         }
     }
 
     std::lock_guard lock(mutex_);
+    auto sequence = sequence_windows_.find(sequence_id);
+    if (sequence != sequence_windows_.end()) {
+        auto& points = sequence->second;
+        auto begin = points.lower_bound(start_time);
+        auto finish = end_time == std::numeric_limits<Timestamp>::max()
+            ? points.end()
+            : points.upper_bound(end_time);
+        points.erase(begin, finish);
+        if (points.empty()) {
+            sequence_windows_.erase(sequence);
+        }
+    }
+    auto& output = sequence_windows_[sequence_id];
+    for (const auto& point : data.points) {
+        output[point.time] = point;
+    }
+    if (output.empty()) {
+        sequence_windows_.erase(sequence_id);
+    }
+    pruneExpiredPoints();
+    return internal::ok(data.points.size(), "derived hot window patched");
+}
+
+OperationResult WindowService::updateWindow(
+    const TimeseriesBatch& data,
+    std::optional<std::int64_t> window_size_override) {
+    return updateWindowIncremental(data, window_size_override).operation;
+}
+
+WindowUpdateResult WindowService::updateWindowIncremental(
+    const TimeseriesBatch& data,
+    std::optional<std::int64_t> window_size_override) {
+    WindowUpdateResult result;
+    if (data.points.empty()) {
+        result.operation = internal::invalidArgument(
+            "window input must not be empty");
+        return result;
+    }
+    if (window_size_override && *window_size_override <= 0) {
+        result.operation = internal::invalidArgument(
+            "window_size must be positive");
+        return result;
+    }
+    for (const auto& point : data.points) {
+        if (point.sequence_id.empty()) {
+            result.operation = internal::invalidArgument(
+                "window point sequence_id must not be empty");
+            return result;
+        }
+    }
+
+    result.incremental_safe = true;
+    std::lock_guard lock(mutex_);
+    const auto old_watermark = watermark_;
+    const auto old_window_size = window_size_;
     if (window_size_override) {
         window_size_ = *window_size_override;
     }
+
+    std::unordered_set<SequenceId> seen_sequence_ids;
+    result.changed_sequence_ids.reserve(data.points.size());
     for (const auto& point : data.points) {
-        sequence_windows_[point.sequence_id][point.time] = point;
+        if (seen_sequence_ids.insert(point.sequence_id).second) {
+            result.changed_sequence_ids.push_back(point.sequence_id);
+        }
+        if (!result.affected_start_time ||
+            point.time < *result.affected_start_time) {
+            result.affected_start_time = point.time;
+        }
+        if (!result.affected_end_time ||
+            point.time > *result.affected_end_time) {
+            result.affected_end_time = point.time;
+        }
+
+        auto& sequence = sequence_windows_[point.sequence_id];
+        if (sequence.find(point.time) != sequence.end() ||
+            (!sequence.empty() && point.time < sequence.rbegin()->first)) {
+            // An out-of-order insert can change sample-offset anchors and
+            // interpolation results across a wider portion of the window.
+            // Replacing an existing timestamp is treated the same way: its
+            // new value may change later interpolation results.
+            result.incremental_safe = false;
+        }
+        sequence[point.time] = point;
         if (!watermark_ || point.time > *watermark_) {
             watermark_ = point.time;
         }
     }
 
+    if (old_watermark && watermark_) {
+        const auto old_start = *old_watermark <
+                std::numeric_limits<Timestamp>::min() + old_window_size
+            ? std::numeric_limits<Timestamp>::min()
+            : *old_watermark - old_window_size;
+        const auto new_start = *watermark_ <
+                std::numeric_limits<Timestamp>::min() + window_size_
+            ? std::numeric_limits<Timestamp>::min()
+            : *watermark_ - window_size_;
+        bool will_evict = false;
+        if (new_start > old_start || window_size_ != old_window_size) {
+            for (const auto& [sequence_id, sequence] : sequence_windows_) {
+                (void)sequence_id;
+                if (!sequence.empty() && sequence.begin()->first < new_start) {
+                    will_evict = true;
+                    break;
+                }
+            }
+        }
+        if (will_evict) {
+            // We intentionally fall back to a full refresh when the moving
+            // boundary advances; incremental consumers must remove expired
+            // derived values and constraint state as well.
+            result.incremental_safe = false;
+        }
+    }
+
     pruneExpiredPoints();
-    return internal::ok(data.points.size(), "hot window updated");
+    if (!result.incremental_safe &&
+        !result.affected_start_time.has_value()) {
+        result.affected_start_time = std::nullopt;
+        result.affected_end_time = std::nullopt;
+    }
+    result.operation = internal::ok(
+        data.points.size(), "hot window updated");
+    return result;
 }
 
 void WindowService::pruneExpiredPoints() {

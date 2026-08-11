@@ -9,6 +9,7 @@
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "sfkg/timeseries/core/types.hpp"
@@ -36,8 +37,9 @@ struct IngestTaskSubmission {
 // of creating an accidental cold-only or hot-only write.
 class IngestTaskExecutor final {
 public:
-    using ColdWriteFunction =
-        std::function<OperationResult(const TimeseriesBatch&)>;
+    using ColdWriteFunction = std::function<OperationResult(
+        std::size_t,
+        const TimeseriesBatch&)>;
     using HotUpdateFunction =
         std::function<IngestPipelineResult(const TimeseriesBatch&)>;
 
@@ -55,7 +57,9 @@ public:
 private:
     struct Task;
 
-    void workerLoop(bool cold_lane);
+    void coldWorkerLoop(std::size_t worker_index);
+    void hotWorkerLoop();
+    std::size_t writerForSequence(const SequenceId& sequence_id);
     void completeCold(
         const std::shared_ptr<Task>& task,
         OperationResult result);
@@ -65,10 +69,17 @@ private:
     void completeTask(const std::shared_ptr<Task>& task);
 
     std::mutex queue_mutex_;
+    // A sequence is assigned once for the lifetime of this Core process.
+    // This preserves same-sequence write serialization without relying on
+    // the distribution quality of std::hash for a small sequence set.
+    std::mutex routing_mutex_;
+    std::unordered_map<SequenceId, std::size_t> sequence_writers_;
+    std::size_t next_writer_index_{0};
     std::condition_variable queue_condition_;
-    std::deque<std::shared_ptr<Task>> cold_queue_;
-    std::deque<std::shared_ptr<Task>> hot_queue_;
+    const std::size_t cold_worker_count_;
     const std::size_t queue_capacity_;
+    std::vector<std::deque<std::shared_ptr<Task>>> cold_queues_;
+    std::deque<std::shared_ptr<Task>> hot_queue_;
     std::size_t pending_tasks_{0};
     bool stopping_{false};
     std::vector<std::thread> cold_workers_;

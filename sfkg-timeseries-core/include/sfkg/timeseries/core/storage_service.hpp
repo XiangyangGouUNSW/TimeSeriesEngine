@@ -11,6 +11,9 @@ public:
         : taos_client_(taos_client) {}
 
     OperationResult writeRawData(const TimeseriesBatch& data);
+    OperationResult writeRawDataOnConnection(
+        std::size_t connection_index,
+        const TimeseriesBatch& data);
 
 private:
     internal::TaosClient& taos_client_;

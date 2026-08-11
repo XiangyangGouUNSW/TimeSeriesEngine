@@ -1,8 +1,10 @@
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <string>
 #include <thread>
 
 #include "sfkg/timeseries/core/grpc/ingest_task_executor.hpp"
@@ -11,29 +13,40 @@ namespace core = sfkg::timeseries::core;
 namespace grpc_core = sfkg::timeseries::core::grpc;
 
 int main() {
-    setenv("SFKG_INGEST_COLD_WORKERS", "1", 1);
+    setenv("SFKG_INGEST_COLD_WORKERS", "2", 1);
     setenv("SFKG_INGEST_HOT_WORKERS", "1", 1);
     setenv("SFKG_INGEST_QUEUE_CAPACITY", "1", 1);
 
     auto resolved = std::make_shared<core::IngestResult>();
     resolved->operation = {
-        core::OperationCode::Ok, 1, 0, "resolved"};
-    resolved->resolved_data.points.push_back({1, "executor-sequence", 1.0});
+        core::OperationCode::Ok, 2, 0, "resolved"};
+    const std::string first_sequence = "executor-sequence-a";
+    const std::string second_sequence = "executor-sequence-b";
+    resolved->resolved_data.points.push_back({1, first_sequence, 1.0});
+    resolved->resolved_data.points.push_back({2, second_sequence, 2.0});
 
     grpc_core::IngestTaskExecutor executor;
+    std::atomic<std::size_t> cold_callback_count{0};
+    std::atomic<std::size_t> cold_point_count{0};
     const auto started = std::chrono::steady_clock::now();
     auto first = executor.trySubmit(
         resolved,
-        [](const core::TimeseriesBatch&) {
+        [&](std::size_t, const core::TimeseriesBatch& data) {
+            assert(!data.points.empty());
+            for (const auto& point : data.points) {
+                assert(point.sequence_id == data.points.front().sequence_id);
+            }
+            ++cold_callback_count;
+            cold_point_count += data.points.size();
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             return core::OperationResult{
-                core::OperationCode::Ok, 1, 0, "cold"};
+                core::OperationCode::Ok, data.points.size(), 0, "cold"};
         },
         [](const core::TimeseriesBatch&) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             grpc_core::IngestPipelineResult result;
             result.window_result = {
-                core::OperationCode::Ok, 1, 0, "hot"};
+                core::OperationCode::Ok, 2, 0, "hot"};
             result.derived_result = {
                 core::OperationCode::Ok, 1, 0, "derived"};
             result.constraint_notification_result = {
@@ -44,14 +57,14 @@ int main() {
 
     auto rejected = executor.trySubmit(
         resolved,
-        [](const core::TimeseriesBatch&) {
+        [](std::size_t, const core::TimeseriesBatch&) {
             return core::OperationResult{
                 core::OperationCode::Ok, 1, 0, "cold"};
         },
         [](const core::TimeseriesBatch&) {
             grpc_core::IngestPipelineResult result;
             result.window_result = {
-                core::OperationCode::Ok, 1, 0, "hot"};
+                core::OperationCode::Ok, 2, 0, "hot"};
             result.derived_result = {
                 core::OperationCode::Ok, 1, 0, "derived"};
             result.constraint_notification_result = {
@@ -65,6 +78,9 @@ int main() {
     const auto elapsed_ms = std::chrono::duration_cast<
         std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
     assert(completed.storage_result.code == core::OperationCode::Ok);
+    assert(completed.storage_result.success_count == 2);
+    assert(cold_callback_count == 2);
+    assert(cold_point_count == 2);
     assert(completed.window_result.code == core::OperationCode::Ok);
     assert(elapsed_ms.count() < 180);
 

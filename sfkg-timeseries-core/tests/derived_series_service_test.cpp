@@ -73,6 +73,31 @@ int main() {
     assert(std::abs(valueAt(queried.data, "linear-output", 5) - 23.0) < 1e-9);
     assert(std::abs(valueAt(queried.data, "linear-output", 10) - 27.0) < 1e-9);
 
+    const auto append_update = window.buildTimeWindowIncremental({{
+        {20, "a", 20.0},
+        {20, "b", 4.0},
+    }});
+    assert(append_update.operation.code == OperationCode::Ok);
+    assert(append_update.incremental_safe);
+    result = derived.refresh(append_update);
+    assert(result.code == OperationCode::Ok);
+    queried = window.queryWindowData({{"linear-output"}, std::nullopt,
+                                      std::nullopt});
+    assert(std::abs(valueAt(queried.data, "linear-output", 20) - 53.0) <
+           1e-9);
+
+    const auto out_of_order_update = window.buildTimeWindowIncremental({{
+        {5, "a", 20.0},
+    }});
+    assert(out_of_order_update.operation.code == OperationCode::Ok);
+    assert(!out_of_order_update.incremental_safe);
+    result = derived.refresh(out_of_order_update);
+    assert(result.code == OperationCode::Ok);
+    queried = window.queryWindowData({{"linear-output"}, std::nullopt,
+                                      std::nullopt});
+    assert(std::abs(valueAt(queried.data, "linear-output", 5) - 53.0) <
+           1e-9);
+
     auto left = std::make_shared<DerivedExpression>();
     left->kind = DerivedExpression::NodeKind::Sequence;
     left->sequence_id = "a";
@@ -93,7 +118,7 @@ int main() {
     assert(result.code == OperationCode::Ok);
     queried = window.queryWindowData({{"expression-output"}, std::nullopt,
                                       std::nullopt});
-    assert(std::abs(valueAt(queried.data, "expression-output", 5) - 20.0) <
+    assert(std::abs(valueAt(queried.data, "expression-output", 5) - 80.0) <
            1e-9);
 
     RuntimeDerivedSeriesConfig invalid;

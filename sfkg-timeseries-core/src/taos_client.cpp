@@ -17,6 +17,7 @@
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #if SFKG_WITH_TAOS
@@ -671,22 +672,68 @@ OperationResult TaosClient::dropDatabaseForTesting() {
     if (impl_->write_connections.empty()) {
         return unavailable("TDengine is unreachable: " + impl_->connection_error);
     }
-    auto& connection = *impl_->write_connections.front();
-    std::lock_guard lock(connection.mutex);
-    if (connection.connection == nullptr) {
-        return unavailable("TDengine is unreachable: " + impl_->connection_error);
+    // This method is intentionally test-only. Close every connection first;
+    // dropping a database through one connection while the remaining pooled
+    // connections still hold that database can make TDengine report
+    // "VGroup is offline" during a high-volume test cleanup.
+    for (auto& pooled : impl_->write_connections) {
+        if (pooled == nullptr) {
+            continue;
+        }
+        std::lock_guard lock(pooled->mutex);
+        if (pooled->connection != nullptr) {
+            taos_close(pooled->connection);
+            pooled->connection = nullptr;
+        }
+    }
+    {
+        std::lock_guard lock(impl_->query_mutex);
+        if (impl_->query_connection != nullptr) {
+            taos_close(impl_->query_connection);
+            impl_->query_connection = nullptr;
+        }
+    }
+
+    TAOS* drop_connection = taos_connect(
+        impl_->host.c_str(), impl_->user.c_str(), impl_->password.c_str(),
+        nullptr, impl_->port);
+    if (drop_connection == nullptr) {
+        return unavailable(
+            "TDengine is unreachable while dropping test database: " +
+            std::string(taos_errstr(nullptr)));
     }
     const std::string sql =
         "DROP DATABASE IF EXISTS " + quoteIdentifier(impl_->database);
-    ResultGuard result{taos_query(connection.connection, sql.c_str())};
+    ResultGuard result{taos_query(drop_connection, sql.c_str())};
     if (result.result == nullptr || taos_errno(result.result) != 0) {
-        return queryError(result.result, "drop test database");
+        const auto error = queryError(result.result, "drop test database");
+        taos_close(drop_connection);
+        return error;
     }
+    taos_close(drop_connection);
     return ok(0, "test database dropped");
 #endif
 }
 
 OperationResult TaosClient::insertRaw(const TimeseriesBatch& batch) {
+    if (batch.points.empty()) {
+        return invalidArgument("raw batch must not be empty");
+    }
+#if !SFKG_WITH_TAOS
+    return internalError("TDengine support was disabled at configure time");
+#else
+    if (impl_->write_connections.empty()) {
+        return unavailable("TDengine is unreachable: " + impl_->connection_error);
+    }
+    const auto connection_index = std::hash<SequenceId>{}(
+        batch.points.front().sequence_id) % impl_->write_connections.size();
+    return insertRawOnConnection(connection_index, batch);
+#endif
+}
+
+OperationResult TaosClient::insertRawOnConnection(
+    std::size_t connection_index,
+    const TimeseriesBatch& batch) {
     if (batch.points.empty()) {
         return invalidArgument("raw batch must not be empty");
     }
@@ -758,12 +805,10 @@ OperationResult TaosClient::insertRaw(const TimeseriesBatch& batch) {
     if (impl_->write_connections.empty()) {
         return unavailable("TDengine is unreachable: " + impl_->connection_error);
     }
-    // Keep a batch for the same leading sequence on one connection. This
-    // avoids introducing a new cross-connection ordering policy for one
-    // sequence while still distributing independent sequences across the
-    // connection pool.
-    const auto connection_index = std::hash<SequenceId>{}(
-        batch.points.front().sequence_id) % impl_->write_connections.size();
+    if (connection_index >= impl_->write_connections.size()) {
+        return invalidArgument(
+            "write connection index is outside the configured connection pool");
+    }
     auto& connection = *impl_->write_connections[connection_index];
     std::lock_guard lock(connection.mutex);
     if (connection.connection == nullptr) {
@@ -793,12 +838,36 @@ OperationResult TaosClient::insertRaw(const TimeseriesBatch& batch) {
         return stmtError(statement.get(), "execute raw insert");
     }
     if (affected_rows != static_cast<int>(batch.points.size())) {
-        return internalError("TDengine inserted an unexpected number of rows");
+        std::unordered_map<SequenceId, std::unordered_set<Timestamp>>
+            timestamps_by_sequence;
+        std::size_t unique_point_count = 0;
+        for (const auto& point : batch.points) {
+            if (timestamps_by_sequence[point.sequence_id].insert(point.time).
+                    second) {
+                ++unique_point_count;
+            }
+        }
+        const auto duplicate_point_count =
+            batch.points.size() - unique_point_count;
+        std::ostringstream message;
+        message << "TDengine inserted an unexpected number of rows: "
+                << "expected=" << batch.points.size()
+                << ", affected=" << affected_rows
+                << ", unique_points=" << unique_point_count
+                << ", duplicate_points=" << duplicate_point_count
+                << ", sequences=" << groups.size()
+                << ", write_connection=" << connection_index;
+        if (duplicate_point_count != 0) {
+            message << "; duplicate (sequence_id,timestamp) keys may have "
+                       "been upserted by TDengine";
+        } else {
+            message << "; no duplicate keys were found inside this batch";
+        }
+        return internalError(message.str());
     }
     return ok(batch.points.size(), "raw batch inserted");
 #endif
 }
-
 OperationResult TaosClient::queryRaw(
     const std::vector<SequenceId>& sequence_ids,
     Timestamp start,

@@ -107,6 +107,8 @@ public:
         pb::QueryHistoryOverviewResponse* response) override;
 
 private:
+    struct IngestDiagnostics;
+
     IngestPipelineResult processHotIngest(
         const TimeseriesBatch& data);
 

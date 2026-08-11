@@ -1,6 +1,8 @@
 #include "sfkg/timeseries/core/derived_series_service.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <set>
 #include <string>
@@ -11,6 +13,11 @@
 
 namespace sfkg::timeseries::core {
 namespace {
+
+bool isSuccessful(OperationCode code) {
+    return code == OperationCode::Ok ||
+        code == OperationCode::PartialSuccess;
+}
 
 using NumericSeries = std::map<Timestamp, double>;
 using NumericSeriesMap = std::unordered_map<SequenceId, NumericSeries>;
@@ -247,14 +254,54 @@ EvaluationResult evaluateFormula(
 }  // namespace
 
 OperationResult DerivedSeriesService::refresh() {
+    return refreshInternal(nullptr);
+}
+
+OperationResult DerivedSeriesService::refresh(
+    const WindowUpdateResult& update) {
+    return refreshInternal(&update);
+}
+
+OperationResult DerivedSeriesService::refreshInternal(
+    const WindowUpdateResult* update) {
+    if (update != nullptr && !isSuccessful(update->operation.code)) {
+        return update->operation;
+    }
+    const bool incremental = update != nullptr &&
+        update->incremental_safe &&
+        update->affected_start_time.has_value() &&
+        update->affected_end_time.has_value();
+
     std::lock_guard lock(refresh_mutex_);
     const auto configs = configs_.allDerivedSeries();
+    std::vector<SequenceId> changed_sequence_ids;
+    if (update != nullptr) {
+        changed_sequence_ids = update->changed_sequence_ids;
+    }
     std::size_t success_count = 0;
     std::size_t failed_count = 0;
     std::string first_error;
 
+    const auto changed = [&changed_sequence_ids](
+                             const std::set<SequenceId>& source_ids) {
+        return std::any_of(
+            source_ids.begin(), source_ids.end(),
+            [&changed_sequence_ids](const SequenceId& source_id) {
+                return std::find(
+                    changed_sequence_ids.begin(),
+                    changed_sequence_ids.end(),
+                    source_id) != changed_sequence_ids.end();
+            });
+    };
+
     for (const auto& config : configs) {
         if (!config.enabled) {
+            if (incremental) {
+                // A disabled configuration has no dependency to update.
+                // Configuration synchronization uses refresh() and clears it
+                // through the full path when necessary.
+                continue;
+            }
             const auto cleared = window_service_.replaceDerivedSequence(
                 config.derived_sequence_id, {});
             if (cleared.code != OperationCode::Ok && first_error.empty()) {
@@ -264,6 +311,9 @@ OperationResult DerivedSeriesService::refresh() {
         }
 
         const auto source_ids = sourcesFor(config);
+        if (incremental && !changed(source_ids)) {
+            continue;
+        }
         WindowQuery query;
         query.sequence_ids.assign(source_ids.begin(), source_ids.end());
         const auto window_result = window_service_.queryWindowData(query);
@@ -278,9 +328,11 @@ OperationResult DerivedSeriesService::refresh() {
         NumericSeriesMap values;
         std::unordered_map<SequenceId, SeriesKind> series_kinds;
         std::set<Timestamp> timestamps;
+        bool locally_incremental = incremental;
         for (const auto& source_id : source_ids) {
             const auto config_it = configs_.findInstance(source_id);
             if (!config_it) {
+                locally_incremental = false;
                 ++failed_count;
                 if (first_error.empty()) {
                     first_error = "derived source sequence is not registered: " +
@@ -289,6 +341,9 @@ OperationResult DerivedSeriesService::refresh() {
                 continue;
             }
             if (!continuousNumericConfig(*config_it)) {
+                // Discrete/nearest-value sources may change every later
+                // derived timestamp after a new point, so rebuild safely.
+                locally_incremental = false;
                 ++failed_count;
                 if (first_error.empty()) {
                     first_error =
@@ -320,10 +375,40 @@ OperationResult DerivedSeriesService::refresh() {
             }
         }
 
+        Timestamp patch_start = window_result.data.window_start_time;
+        Timestamp patch_end = window_result.data.window_end_time ==
+                std::numeric_limits<Timestamp>::min()
+            ? window_result.data.window_end_time
+            : window_result.data.window_end_time - 1;
+        if (locally_incremental) {
+            patch_start = *update->affected_start_time;
+            patch_end = *update->affected_end_time;
+            // A new right endpoint can change interpolation values at the
+            // preceding source point, so include one predecessor per source.
+            for (const auto& [source_id, source_points] :
+                 window_result.data.sequence_values) {
+                (void)source_id;
+                const auto first = std::lower_bound(
+                    source_points.begin(), source_points.end(), patch_start,
+                    [](const RawTimeseriesPoint& point, Timestamp time) {
+                        return point.time < time;
+                    });
+                if (first != source_points.begin()) {
+                    patch_start = std::min(patch_start, (first - 1)->time);
+                } else if (first != source_points.end()) {
+                    patch_start = std::min(patch_start, first->time);
+                }
+            }
+        }
+
         TimeseriesBatch derived;
         derived.points.reserve(timestamps.size());
         std::size_t expression_errors = 0;
         for (const auto time : timestamps) {
+            if (locally_incremental &&
+                (time < patch_start || time > patch_end)) {
+                continue;
+            }
             const auto evaluation = evaluateFormula(
                 config, time, values, series_kinds);
             if (evaluation.status == EvaluationStatus::Missing) {
@@ -340,8 +425,14 @@ OperationResult DerivedSeriesService::refresh() {
                 time, config.derived_sequence_id, evaluation.value});
         }
         failed_count += expression_errors;
-        const auto replaced = window_service_.replaceDerivedSequence(
-            config.derived_sequence_id, derived);
+        const auto replaced = locally_incremental
+            ? window_service_.patchDerivedSequence(
+                  config.derived_sequence_id,
+                  patch_start,
+                  patch_end,
+                  derived)
+            : window_service_.replaceDerivedSequence(
+                  config.derived_sequence_id, derived);
         if (replaced.code != OperationCode::Ok) {
             ++failed_count;
             if (first_error.empty()) {
@@ -349,6 +440,13 @@ OperationResult DerivedSeriesService::refresh() {
             }
         }
         success_count += derived.points.size();
+        if (update != nullptr &&
+            std::find(
+                changed_sequence_ids.begin(),
+                changed_sequence_ids.end(),
+                config.derived_sequence_id) == changed_sequence_ids.end()) {
+            changed_sequence_ids.push_back(config.derived_sequence_id);
+        }
     }
 
     if (failed_count != 0) {

@@ -21,6 +21,11 @@ public:
     // drop their configured database as part of ordinary shutdown.
     OperationResult dropDatabaseForTesting();
     OperationResult insertRaw(const TimeseriesBatch& batch);
+    // Used by the fixed writer shards. The shard index is mapped to one
+    // connection and is not selected from the first point in the batch.
+    OperationResult insertRawOnConnection(
+        std::size_t connection_index,
+        const TimeseriesBatch& batch);
     OperationResult queryRaw(
         const std::vector<SequenceId>& sequence_ids,
         Timestamp start,

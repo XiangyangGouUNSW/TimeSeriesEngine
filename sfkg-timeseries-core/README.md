@@ -51,6 +51,26 @@ cmake --build build-taos -j2
 ctest --test-dir build-taos --output-on-failure
 ```
 
+本地验证冷写分片和各阶段耗时时，可以运行独立压力工具。它不连接统一服务，默认模拟
+4 个生产者、100 个 Batch、每批 1000 条数据，共 100000 条；测试数据库使用独立进程名，
+结束后自动删除：
+
+```bash
+env LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/home/yumiduo/sfkg/tdengine/lib \
+  ./build-taos/local-ingest-parallel-benchmark
+```
+
+参数依次为 `批次数 每批点数 序列数 生产者数 writer数`，例如：
+
+```bash
+env LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/home/yumiduo/sfkg/tdengine/lib \
+  ./build-taos/local-ingest-parallel-benchmark 200 1000 20 4 8
+```
+
+工具会输出每个 `sequence_id` 的固定 writer 分配、各 writer 的批次数和点数、路由一致性校验、
+解析、冷写、热窗口/派生刷新以及提交到完成的耗时。该工具不包含统一服务网络和约束
+异常通知 RPC 的耗时。
+
 ## 正式运行方式
 
 运行时分成两个进程：
@@ -73,7 +93,7 @@ tmux new -s sfkg-tdengine
 进入 tmux 后，在其中执行：
 
 ```bash
-LD_LIBRARY_PATH=/home/yumiduo/sfkg/tdengine/lib \
+LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/home/yumiduo/sfkg/tdengine/lib \
 /home/yumiduo/sfkg/tdengine/bin/taosd \
 -c /home/yumiduo/sfkg/tdengine/cfg
 ```
@@ -83,7 +103,7 @@ LD_LIBRARY_PATH=/home/yumiduo/sfkg/tdengine/lib \
 检查服务状态：
 
 ```bash
-LD_LIBRARY_PATH=/home/yumiduo/sfkg/tdengine/lib \
+LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/home/yumiduo/sfkg/tdengine/lib \
 /home/yumiduo/sfkg/tdengine/bin/taos \
 -c /home/yumiduo/sfkg/tdengine/cfg -k
 ```
@@ -121,7 +141,7 @@ env \
   -u HTTPS_PROXY \
   -u ALL_PROXY \
   -u all_proxy \
-  LD_LIBRARY_PATH=/home/yumiduo/sfkg/tdengine/lib \
+  LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/home/yumiduo/sfkg/tdengine/lib \
   no_grpc_proxy=222.29.156.142 \
   no_proxy=localhost,127.0.0.1,222.29.156.142 \
   NO_PROXY=localhost,127.0.0.1,222.29.156.142 \
@@ -132,10 +152,12 @@ env \
   SFKG_TAOS_DB=sfkg_timeseries \
   SFKG_TAOS_KEEP_DAYS=365000 \
   SFKG_TAOS_RAW_STABLE=raw_timeseries_data \
-  SFKG_TAOS_WRITE_CONNECTIONS=4 \
-  SFKG_INGEST_COLD_WORKERS=4 \
+  SFKG_TAOS_WRITE_CONNECTIONS=8 \
+  SFKG_INGEST_COLD_WORKERS=8 \
   SFKG_INGEST_HOT_WORKERS=1 \
-  SFKG_INGEST_QUEUE_CAPACITY=128 \
+  SFKG_INGEST_QUEUE_CAPACITY=10 \
+  SFKG_INGEST_DIAGNOSTIC_LOG=1 \
+  SFKG_INGEST_DIAGNOSTIC_SAMPLE_EVERY=50 \
   SFKG_CONSTRAINT_RESULT_RECEIVER_ADDRESS=222.29.156.142:9105 \
   SFKG_TIMESERIES_CORE_ADDRESS=0.0.0.0:50051 \
   ./build-taos/sfkg-timeseries-core-server 0.0.0.0:50051
@@ -144,6 +166,25 @@ env \
 启动 Core 时需要为统一服务地址绕过本机 HTTP 代理，否则 gRPC 可能会错误连接到
 本地代理端口而无法调用 `ReceiveConstraintResult`。上述命令只对 Core 进程清除代理，
 不会改变当前终端或其他程序的代理配置。
+
+上面的启动命令会把 Core 的普通 RPC 日志和未处理异常直接输出到当前终端，例如
+`rpc=ingestData grpc_code=0 elapsed_ms=...`。如果需要同时观察 IngestData 的解析、排队、
+冷写、热窗口和业务错误详情，可以在上面命令的 `SFKG_INGEST_QUEUE_CAPACITY` 后面加入：
+
+```bash
+  SFKG_INGEST_DIAGNOSTIC_LOG=1 \
+  SFKG_INGEST_DIAGNOSTIC_SAMPLE_EVERY=100 \
+```
+
+此时每 100 个 IngestData 请求会额外输出一条 `ingest_diag`；如果该请求是业务失败，
+日志中还会包含 `operation_message`。如需同时保存日志，把启动命令的最后一行改成：
+
+```bash
+./build-taos/sfkg-timeseries-core-server 0.0.0.0:50051 \
+  2>&1 | tee /tmp/sfkg-timeseries-core.log
+```
+
+诊断日志默认关闭；正式吞吐测试不要开启全量诊断。
 
 `SFKG_TAOS_RAW_STABLE` 默认值为 `raw_timeseries_data`，用于指定原始时序数据的超级表名称；
 自定义名称时，Core 会按当前原始数据结构创建并查询对应超级表。
@@ -157,9 +198,26 @@ env \
 - `SFKG_INGEST_COLD_WORKERS`：冷数据写入工作线程数，默认 4；
 - `SFKG_INGEST_HOT_WORKERS`：热窗口工作线程数，默认 1；当前热窗口由全局锁保护，建议先保持 1；
 - `SFKG_INGEST_QUEUE_CAPACITY`：最多同时接纳的 IngestData 批次数，默认 128。
+- `SFKG_INGEST_DIAGNOSTIC_LOG`：设为 `1` 开启 IngestData 阶段诊断日志，默认关闭；
+- `SFKG_INGEST_DIAGNOSTIC_SAMPLE_EVERY`：诊断采样间隔，默认 1。联调压力测试建议设为
+  `100`，即每 100 个 IngestData 请求打印一条详细日志。
 
 队列容量按批次而不是单条记录计算。一个请求只有在冷热两条通道都成功预留容量后才会
 执行；队列满时不会执行部分写入，调用方可以根据 `OPERATION_CODE_UNAVAILABLE` 重试。
+当前实现要求 `SFKG_TAOS_WRITE_CONNECTIONS` 不小于 `SFKG_INGEST_COLD_WORKERS`，推荐两者设置为
+相同值。每个冷写线程拥有固定队列和固定连接；Core
+首次看到一个 `sequence_id` 时按轮询方式分配 writer，之后一个 Batch 会按 `sequence_id`
+分组后投递到对应 writer。不同序列可以并行，同一序列不会在多个 writer 之间迁移。
+
+诊断日志只输出请求数量、各阶段耗时、writer 统计和结果状态，不输出具体数据值。示例：
+
+```bash
+SFKG_INGEST_DIAGNOSTIC_LOG=1 \
+SFKG_INGEST_DIAGNOSTIC_SAMPLE_EVERY=100
+```
+
+详细日志会出现在 Core 进程的标准错误输出中；开启全量诊断会增加日志 I/O，不应作为正式
+吞吐测试配置。
 
 Core 正常启动后应打印：
 

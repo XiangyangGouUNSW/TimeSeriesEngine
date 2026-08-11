@@ -1,9 +1,12 @@
 #include "sfkg/timeseries/core/grpc/timeseries_core_grpc_service.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -16,7 +19,98 @@
 #include "operation_helpers.hpp"
 
 namespace sfkg::timeseries::core::grpc {
+
+struct TimeseriesCoreGrpcService::IngestDiagnostics {
+    using Clock = std::chrono::steady_clock;
+
+    struct WriterTiming {
+        std::size_t shard_count{0};
+        std::size_t point_count{0};
+        double write_sum_ms{0.0};
+        double write_max_ms{0.0};
+    };
+
+    std::mutex mutex;
+    Clock::time_point submitted{};
+    Clock::time_point first_lane_start{};
+    Clock::time_point first_cold_start{};
+    Clock::time_point last_cold_end{};
+    Clock::time_point hot_start{};
+    Clock::time_point hot_end{};
+    bool has_first_lane_start{false};
+    bool has_cold_start{false};
+    bool has_cold_end{false};
+    std::size_t request_points{0};
+    std::size_t resolved_points{0};
+    std::size_t cold_shard_count{0};
+    double resolve_ms{0.0};
+    std::unordered_map<std::size_t, WriterTiming> writers;
+};
+
 namespace {
+
+bool diagnosticFlagEnabled(const char* name) {
+    const char* configured = std::getenv(name);
+    return configured != nullptr &&
+        (std::string(configured) == "1" ||
+         std::string(configured) == "true" ||
+         std::string(configured) == "on");
+}
+
+std::size_t diagnosticSampleEvery() {
+    const char* configured = std::getenv(
+        "SFKG_INGEST_DIAGNOSTIC_SAMPLE_EVERY");
+    if (configured == nullptr || *configured == '\0') {
+        return 1;
+    }
+    std::size_t value = 0;
+    for (const char* cursor = configured; *cursor != '\0'; ++cursor) {
+        if (*cursor < '0' || *cursor > '9') {
+            return 1;
+        }
+        const auto digit = static_cast<std::size_t>(*cursor - '0');
+        if (value > (std::numeric_limits<std::size_t>::max() - digit) / 10) {
+            return 1;
+        }
+        value = value * 10 + digit;
+    }
+    return value == 0 ? 1 : value;
+}
+
+bool shouldCollectIngestDiagnostics() {
+    static const bool enabled = diagnosticFlagEnabled(
+        "SFKG_INGEST_DIAGNOSTIC_LOG");
+    static const auto sample_every = diagnosticSampleEvery();
+    static std::atomic<std::uint64_t> request_counter{0};
+    if (!enabled) {
+        return false;
+    }
+    const auto request_number = request_counter.fetch_add(
+        1, std::memory_order_relaxed) + 1;
+    return request_number % sample_every == 0;
+}
+
+const char* operationCodeName(OperationCode code) {
+    switch (code) {
+        case OperationCode::Ok:
+            return "OK";
+        case OperationCode::PartialSuccess:
+            return "PARTIAL_SUCCESS";
+        case OperationCode::InvalidArgument:
+            return "INVALID_ARGUMENT";
+        case OperationCode::NotFound:
+            return "NOT_FOUND";
+        case OperationCode::FailedPrecondition:
+            return "FAILED_PRECONDITION";
+        case OperationCode::Unavailable:
+            return "UNAVAILABLE";
+        case OperationCode::InternalError:
+            return "INTERNAL_ERROR";
+        case OperationCode::NotImplemented:
+            return "NOT_IMPLEMENTED";
+    }
+    return "UNKNOWN";
+}
 
 OperationResult failedPrecondition(std::string message) {
     return internal::makeOperationResult(
@@ -205,7 +299,8 @@ ConstraintCheckResult runContinuousConstraintCheck(
     const WindowData& window_data,
     const std::vector<ConstraintRule>& enabled_rules,
     const AlignmentService& alignment_service,
-    const ConstraintCheckEngine& constraint_engine) {
+    const ConstraintCheckEngine& constraint_engine,
+    const WindowUpdateResult* update) {
     ConstraintCheckResult result;
     result.satisfied = true;
     result.operation = internal::ok(
@@ -233,8 +328,49 @@ ConstraintCheckResult runContinuousConstraintCheck(
     }
 
     if (!single_sequence_rules.empty()) {
-        const auto single_result = constraint_engine.checkConstraints(
-            single_sequence_rules, window_data);
+        std::optional<ConstraintCheckRange> range;
+        if (update != nullptr && update->incremental_safe &&
+            update->affected_start_time && update->affected_end_time) {
+            range = ConstraintCheckRange{
+                *update->affected_start_time,
+                *update->affected_end_time};
+            for (const auto& rule : single_sequence_rules) {
+                const auto sequence_ids = mappedSequenceIds(rule);
+                if (sequence_ids.size() != 1) {
+                    range.reset();
+                    break;
+                }
+                const auto sequence = window_data.sequence_values.find(
+                    sequence_ids.front());
+                if (sequence == window_data.sequence_values.end()) {
+                    continue;
+                }
+                std::size_t max_offset = 0;
+                for (const auto& term : rule.terms) {
+                    max_offset = std::max(max_offset, term.sample_offset);
+                }
+                const auto first = std::lower_bound(
+                    sequence->second.begin(), sequence->second.end(),
+                    range->start_time,
+                    [](const RawTimeseriesPoint& point, Timestamp time) {
+                        return point.time < time;
+                    });
+                auto anchor = first;
+                while (anchor != sequence->second.begin() && max_offset != 0) {
+                    --anchor;
+                    --max_offset;
+                }
+                if (anchor != sequence->second.end()) {
+                    range->start_time = std::min(
+                        range->start_time, anchor->time);
+                }
+            }
+        }
+        const auto single_result = range
+            ? constraint_engine.checkConstraints(
+                  single_sequence_rules, window_data, range)
+            : constraint_engine.checkConstraints(
+                  single_sequence_rules, window_data);
         if (!isSuccessful(single_result.operation.code)) {
             return single_result;
         }
@@ -457,9 +593,11 @@ OperationResult withConstraintNotificationFailure(
 IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     const TimeseriesBatch& data) {
     IngestPipelineResult result;
-    result.window_result = window_service_.buildTimeWindow(data);
+    const auto window_update =
+        window_service_.buildTimeWindowIncremental(data);
+    result.window_result = window_update.operation;
     if (isSuccessful(result.window_result.code)) {
-        result.derived_result = derived_series_service_.refresh();
+        result.derived_result = derived_series_service_.refresh(window_update);
     } else {
         result.derived_result = failedPrecondition(
             "derived refresh skipped because hot window update failed");
@@ -511,7 +649,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
         window.data,
         enabled_rules,
         alignment_service_,
-        constraint_engine_);
+        constraint_engine_,
+        &window_update);
     if (!isSuccessful(check.operation.code)) {
         result.constraint_notification_result = check.operation;
         return result;
@@ -558,6 +697,13 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     pb::IngestDataResponse* response) {
     (void)context;
     return guardedCall("ingestData", response, [&] {
+        const auto request_started = std::chrono::steady_clock::now();
+        const auto diagnostics = shouldCollectIngestDiagnostics()
+            ? std::make_shared<IngestDiagnostics>()
+            : std::shared_ptr<IngestDiagnostics>{};
+        if (diagnostics) {
+            diagnostics->request_points = request->points_size();
+        }
         if (request->points().empty()) {
             const auto invalid = internal::invalidArgument(
                 "points must not be empty");
@@ -584,8 +730,16 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
             input.push_back(std::move(converted));
         }
 
+        const auto resolve_started = std::chrono::steady_clock::now();
         auto resolved = std::make_shared<IngestResult>(
             ingest_service_.ingestAndResolveData(input));
+        const auto resolve_finished = std::chrono::steady_clock::now();
+        if (diagnostics) {
+            diagnostics->resolved_points = resolved->resolved_data.points.size();
+            diagnostics->resolve_ms = std::chrono::duration<double, std::milli>(
+                resolve_finished - resolve_started).count();
+            diagnostics->submitted = std::chrono::steady_clock::now();
+        }
         conversion::toProto(
             resolved->operation, response->mutable_resolve_result());
 
@@ -598,11 +752,58 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
         if (isSuccessful(resolved->operation.code)) {
             auto submission = ingest_task_executor_.trySubmit(
                 resolved,
-                [this](const TimeseriesBatch& data) {
-                    return storage_service_.writeRawData(data);
+                [this, diagnostics](
+                    std::size_t writer_index,
+                    const TimeseriesBatch& data) {
+                    const auto started = std::chrono::steady_clock::now();
+                    const auto result = storage_service_.writeRawDataOnConnection(
+                        writer_index,
+                        data);
+                    const auto finished = std::chrono::steady_clock::now();
+                    if (diagnostics) {
+                        const auto elapsed = std::chrono::duration<double, std::milli>(
+                            finished - started).count();
+                        std::lock_guard lock(diagnostics->mutex);
+                        if (!diagnostics->has_first_lane_start ||
+                            started < diagnostics->first_lane_start) {
+                            diagnostics->first_lane_start = started;
+                            diagnostics->has_first_lane_start = true;
+                        }
+                        if (!diagnostics->has_cold_start ||
+                            started < diagnostics->first_cold_start) {
+                            diagnostics->first_cold_start = started;
+                            diagnostics->has_cold_start = true;
+                        }
+                        if (!diagnostics->has_cold_end ||
+                            finished > diagnostics->last_cold_end) {
+                            diagnostics->last_cold_end = finished;
+                        }
+                        diagnostics->has_cold_end = true;
+                        ++diagnostics->cold_shard_count;
+                        auto& writer = diagnostics->writers[writer_index];
+                        ++writer.shard_count;
+                        writer.point_count += data.points.size();
+                        writer.write_sum_ms += elapsed;
+                        writer.write_max_ms = std::max(
+                            writer.write_max_ms, elapsed);
+                    }
+                    return result;
                 },
-                [this](const TimeseriesBatch& data) {
-                    return processHotIngest(data);
+                [this, diagnostics](const TimeseriesBatch& data) {
+                    const auto started = std::chrono::steady_clock::now();
+                    const auto result = processHotIngest(data);
+                    const auto finished = std::chrono::steady_clock::now();
+                    if (diagnostics) {
+                        std::lock_guard lock(diagnostics->mutex);
+                        if (!diagnostics->has_first_lane_start ||
+                            started < diagnostics->first_lane_start) {
+                            diagnostics->first_lane_start = started;
+                            diagnostics->has_first_lane_start = true;
+                        }
+                        diagnostics->hot_start = started;
+                        diagnostics->hot_end = finished;
+                    }
+                    return result;
                 });
             if (!submission.accepted) {
                 const auto failed_count = resolved->resolved_data.points.size();
@@ -658,6 +859,64 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
         ingest_result = withConstraintNotificationFailure(
             std::move(ingest_result), constraint_notification_result);
         conversion::toProto(ingest_result, response->mutable_operation());
+        if (diagnostics) {
+            const auto completed = std::chrono::steady_clock::now();
+            std::lock_guard lock(diagnostics->mutex);
+            const auto duration = [](auto start, auto end) {
+                return std::chrono::duration<double, std::milli>(
+                    end - start).count();
+            };
+            const auto queue_wait_ms = diagnostics->has_first_lane_start
+                ? duration(diagnostics->submitted,
+                           diagnostics->first_lane_start)
+                : 0.0;
+            const auto cold_span_ms = diagnostics->has_cold_end
+                ? duration(diagnostics->first_cold_start,
+                           diagnostics->last_cold_end)
+                : 0.0;
+            const auto hot_ms = diagnostics->hot_end !=
+                    IngestDiagnostics::Clock::time_point{}
+                ? duration(diagnostics->hot_start, diagnostics->hot_end)
+                : 0.0;
+            std::ostringstream line;
+            line << "ingest_diag"
+                 << " request_points=" << diagnostics->request_points
+                 << " resolved_points=" << diagnostics->resolved_points
+                 << " cold_shards=" << diagnostics->cold_shard_count
+                 << " resolve_ms=" << diagnostics->resolve_ms
+                 << " queue_wait_ms=" << queue_wait_ms
+                 << " cold_span_ms=" << cold_span_ms
+                 << " hot_ms=" << hot_ms
+                 << " pipeline_ms=" << duration(
+                        diagnostics->submitted, completed)
+                 << " handler_ms=" << duration(request_started, completed)
+                 << " storage_code="
+                 << operationCodeName(storage_result.code)
+                 << " storage_success=" << storage_result.success_count
+                 << " storage_failed=" << storage_result.failed_count
+                 << " window_code="
+                 << operationCodeName(window_result.code)
+                 << " derived_code="
+                 << operationCodeName(derived_result.code)
+                 << " constraint_code="
+                 << operationCodeName(constraint_notification_result.code)
+                 << " operation_code="
+                 << operationCodeName(ingest_result.code);
+            for (const auto& [writer_index, writer] : diagnostics->writers) {
+                line << " writer_" << writer_index
+                     << "_shards=" << writer.shard_count
+                     << "_points=" << writer.point_count
+                     << "_write_sum_ms=" << writer.write_sum_ms
+                     << "_write_max_ms=" << writer.write_max_ms;
+            }
+            // PartialSuccess is accepted by the pipeline, but its message
+            // often contains the actual cold-storage or notification error.
+            if (ingest_result.code != OperationCode::Ok) {
+                line << " operation_message=\"" << ingest_result.message
+                     << "\"";
+            }
+            std::clog << line.str() << '\n';
+        }
         if (request->return_resolved_data()) {
             conversion::toProto(
                 resolved->resolved_data, response->mutable_resolved_data());

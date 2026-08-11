@@ -36,6 +36,12 @@ int main() {
     assert(result.violations.front().anchor_time == 1);
     assert(result.violations.front().evaluated_value == 11.0);
 
+    result = engine.checkConstraints(
+        {single_rule}, window, ConstraintCheckRange{2, 2});
+    assert(result.operation.code == OperationCode::Ok);
+    assert(result.operation.success_count == 1);
+    assert(result.satisfied);
+
     ConstraintRule multi_sequence = single_rule;
     multi_sequence.constraint_id = "temperature-pressure";
     multi_sequence.variable_mapping.emplace("p", "pressure-1");

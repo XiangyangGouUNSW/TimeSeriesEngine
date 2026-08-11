@@ -181,6 +181,13 @@ void finalizeResult(ConstraintCheckResult* result) {
 ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
     const std::vector<ConstraintRule>& rules,
     const WindowData& data) const {
+    return checkConstraints(rules, data, std::nullopt);
+}
+
+ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
+    const std::vector<ConstraintRule>& rules,
+    const WindowData& data,
+    const std::optional<ConstraintCheckRange>& range) const {
     if (rules.empty()) {
         return failure(internal::invalidArgument(
             "constraint rules must not be empty"));
@@ -226,6 +233,11 @@ ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
         for (std::size_t anchor = 0;
              anchor + max_offset < points.size();
              ++anchor) {
+            if (range &&
+                (points[anchor].time < range->start_time ||
+                 points[anchor].time > range->end_time)) {
+                continue;
+            }
             const bool evaluated = evaluateRuleAt(
                 rule,
                 mapped_sequences,
@@ -269,6 +281,13 @@ ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
 ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
     const std::vector<ConstraintRule>& rules,
     const AlignedWindowData& data) const {
+    return checkConstraints(rules, data, std::nullopt);
+}
+
+ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
+    const std::vector<ConstraintRule>& rules,
+    const AlignedWindowData& data,
+    const std::optional<ConstraintCheckRange>& range) const {
     if (rules.empty()) {
         return failure(internal::invalidArgument(
             "constraint rules must not be empty"));
@@ -306,6 +325,11 @@ ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
         for (std::size_t anchor = 0;
              anchor + max_offset < data.samples.size();
              ++anchor) {
+            if (range &&
+                (data.samples[anchor].time < range->start_time ||
+                 data.samples[anchor].time > range->end_time)) {
+                continue;
+            }
             const bool evaluated = evaluateRuleAt(
                 rule,
                 mapped_sequences,
