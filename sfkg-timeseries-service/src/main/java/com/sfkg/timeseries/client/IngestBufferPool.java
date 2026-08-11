@@ -79,7 +79,8 @@ public class IngestBufferPool {
         if (seqId == null) {
             return 0;
         }
-        return Math.abs(seqId.hashCode()) % props.getSenderThreads();
+        int h = seqId.hashCode();
+        return Math.abs(h ^ (h >>> 16)) % props.getSenderThreads();
     }
 
     /**

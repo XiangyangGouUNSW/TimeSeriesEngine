@@ -188,9 +188,12 @@ public class TimeseriesCoreGrpcClient {
                 TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(seqId);
                 String deviceId = inst != null && inst.getDeviceInstanceId() != null
                         ? inst.getDeviceInstanceId() : "_default";
+                // Use compound key to avoid overwriting sequences on same device
+                String ruleKey = deviceId + "::" + seqId;
                 Map<String, String> varMap = new LinkedHashMap<>();
                 varMap.put(firstVar, seqId);
                 // Match other variables to same device
+                boolean allMatched = true;
                 for (Map.Entry<String, List<String>> ve : expandedByVar.entrySet()) {
                     if (ve.getKey().equals(firstVar)) continue;
                     String match = ve.getValue().stream()
@@ -199,9 +202,16 @@ public class TimeseriesCoreGrpcClient {
                                 return i != null && deviceId.equals(i.getDeviceInstanceId());
                             })
                             .findFirst().orElse(null);
-                    if (match != null) varMap.put(ve.getKey(), match);
+                    if (match != null) {
+                        varMap.put(ve.getKey(), match);
+                    } else {
+                        allMatched = false;
+                        break;
+                    }
                 }
-                deviceRules.computeIfAbsent(deviceId, k -> new LinkedHashMap<>()).putAll(varMap);
+                if (allMatched) {
+                    deviceRules.computeIfAbsent(ruleKey, k -> new LinkedHashMap<>()).putAll(varMap);
+                }
             }
         } else {
             // No expansion — use raw mapping as-is
