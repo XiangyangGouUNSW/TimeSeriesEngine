@@ -3,6 +3,8 @@ package com.sfkg.timeseries.service.impl;
 import java.time.LocalDateTime;
 import java.util.List;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import com.sfkg.timeseries.cache.CachedTable;
@@ -17,6 +19,8 @@ import com.sfkg.timeseries.vo.AnomalyResultVO;
 
 @Service
 public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResultService {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(TimeseriesAnomalyResultServiceImpl.class);
 
     private final TimeseriesEventMapper eventMapper;
     private final TimeseriesMemoryCache memoryCache;
@@ -54,7 +58,7 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
         String source = result != null && result.getSource() != null ? result.getSource() : "ANOMALY";
         String seq = result != null && result.getSequenceId() != null
                 ? result.getSequenceId().replace(",", "_") : "UNKNOWN";
-        String ts = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyMMddHHmmss"));
+        String ts = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyMMddHHmmssSSS"));
         String eventId = "EVT_" + source + "_" + seq + "_" + ts;
         TimeseriesEvent event = new TimeseriesEvent();
         event.setEventId(eventId);
@@ -79,8 +83,16 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
         LocalDateTime now = LocalDateTime.now();
         event.setCreateTime(now);
         event.setUpdateTime(now);
-        eventMapper.insert(event);
-        memoryCache.computeEvent(eventId, existing -> event);
+
+        // idempotent: skip if event already exists
+        memoryCache.computeEvent(eventId, existing -> {
+            if (existing != null) {
+                LOGGER.info("anomaly event already exists, skip: eventId={}", eventId);
+                return existing;
+            }
+            eventMapper.insert(event);
+            return event;
+        });
         return eventId;
     }
 

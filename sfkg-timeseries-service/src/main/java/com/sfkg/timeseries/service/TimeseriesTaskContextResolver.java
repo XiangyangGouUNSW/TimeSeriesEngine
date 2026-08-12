@@ -1,5 +1,13 @@
 package com.sfkg.timeseries.service;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+import org.springframework.stereotype.Component;
+
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.entity.TimeseriesAnomalyTask;
 import com.sfkg.timeseries.entity.TimeseriesConstraint;
@@ -9,12 +17,6 @@ import com.sfkg.timeseries.entity.TimeseriesRelation;
 import com.sfkg.timeseries.grpc.SemanticContext;
 import com.sfkg.timeseries.grpc.SequenceMetadata;
 import com.sfkg.timeseries.grpc.SequenceRelation;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import org.springframework.stereotype.Component;
 
 @Component
 public class TimeseriesTaskContextResolver {
@@ -115,9 +117,16 @@ public class TimeseriesTaskContextResolver {
     }
 
     private SequenceMetadata toSequenceMetadata(TimeseriesInstanceConfig inst, String role) {
+        String unit = "";
+        if (inst.getCategoryId() != null) {
+            unit = memoryCache.getCategory(inst.getCategoryId())
+                    .map(c -> c.getDefaultUnit() != null ? c.getDefaultUnit() : "")
+                    .orElse("");
+        }
         return SequenceMetadata.newBuilder()
                 .setSequenceId(inst.getSequenceId() != null ? inst.getSequenceId() : "")
                 .setSequenceName(inst.getInstanceName() != null ? inst.getInstanceName() : "")
+                .setUnit(unit)
                 .setDataType(inst.getDataType() != null ? inst.getDataType() : "")
                 .setRole(role)
                 .build();

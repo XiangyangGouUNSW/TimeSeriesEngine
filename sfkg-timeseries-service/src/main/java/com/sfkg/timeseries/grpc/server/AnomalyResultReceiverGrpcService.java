@@ -1,5 +1,17 @@
 package com.sfkg.timeseries.grpc.server;
 
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+import com.google.protobuf.Empty;
 import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
@@ -10,22 +22,13 @@ import com.sfkg.timeseries.grpc.AnalysisResultReceiverServiceGrpc;
 import com.sfkg.timeseries.grpc.AnalysisStatus;
 import com.sfkg.timeseries.grpc.AnomalyResultMessage;
 import com.sfkg.timeseries.grpc.ForecastResultMessage;
-import com.google.protobuf.Empty;
 import com.sfkg.timeseries.mapper.TimeseriesAnomalyResultMapper;
 import com.sfkg.timeseries.mapper.TimeseriesEventMapper;
 import com.sfkg.timeseries.mapper.TimeseriesForecastResultMapper;
 import com.sfkg.timeseries.service.TimeseriesAnomalyResultService;
 import com.sfkg.timeseries.vo.AnomalyResultVO;
+
 import io.grpc.stub.StreamObserver;
-import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.UUID;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 
 @Component
 public class AnomalyResultReceiverGrpcService
@@ -105,26 +108,32 @@ public class AnomalyResultReceiverGrpcService
             forecastResultMapper.insert(entity);
             memoryCache.putForecastResult(entity);
 
-            // create a forecast warning event
-            TimeseriesEvent event = new TimeseriesEvent();
-            String ts = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyMMddHHmmss"));
+            // create a forecast warning event (idempotent via computeEvent)
+            String ts = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyMMddHHmmssSSS"));
             String taskId = entity.getTaskId() != null ? entity.getTaskId() : "UNKNOWN";
             String eventId = "EVT_FORECAST_" + taskId + "_" + ts;
-            event.setEventId(eventId);
-            event.setEventName("forecast event on " + taskId);
-            event.setEventType("WARNING");
-            event.setEventSource("FORECAST");
-            event.setTaskId(taskId);
-            event.setEventLevel("MEDIUM");
-            event.setEventTime(LocalDateTime.now());
-            event.setRelatedSequences(entity.getSequenceIds());
-            event.setConfirmStatus("PENDING");
-            event.setHandleStatus("UNHANDLED");
-            LocalDateTime now = LocalDateTime.now();
-            event.setCreateTime(now);
-            event.setUpdateTime(now);
-            eventMapper.insert(event);
-            memoryCache.putEvent(event);
+            memoryCache.computeEvent(eventId, existing -> {
+                if (existing != null) {
+                    LOG.info("forecast event already exists, skip: eventId={}", eventId);
+                    return existing;
+                }
+                TimeseriesEvent event = new TimeseriesEvent();
+                event.setEventId(eventId);
+                event.setEventName("forecast event on " + taskId);
+                event.setEventType("WARNING");
+                event.setEventSource("FORECAST");
+                event.setTaskId(taskId);
+                event.setEventLevel("MEDIUM");
+                event.setEventTime(LocalDateTime.now());
+                event.setRelatedSequences(entity.getSequenceIds());
+                event.setConfirmStatus("PENDING");
+                event.setHandleStatus("UNHANDLED");
+                LocalDateTime now = LocalDateTime.now();
+                event.setCreateTime(now);
+                event.setUpdateTime(now);
+                eventMapper.insert(event);
+                return event;
+            });
 
             responseObserver.onNext(Empty.getDefaultInstance());
             responseObserver.onCompleted();

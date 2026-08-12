@@ -1,5 +1,16 @@
 package com.sfkg.timeseries.grpc.server;
 
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
+import java.util.UUID;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.entity.TimeseriesConstraintResult;
 import com.sfkg.timeseries.entity.TimeseriesEvent;
@@ -8,16 +19,8 @@ import com.sfkg.timeseries.grpc.SyncResponse;
 import com.sfkg.timeseries.grpc.TimeseriesConstraintResultReceiverServiceGrpc;
 import com.sfkg.timeseries.mapper.TimeseriesConstraintResultMapper;
 import com.sfkg.timeseries.mapper.TimeseriesEventMapper;
+
 import io.grpc.stub.StreamObserver;
-import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
-import java.util.List;
-import java.util.UUID;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 
 @Component
 public class ConstraintResultReceiverGrpcService
@@ -50,28 +53,35 @@ public class ConstraintResultReceiverGrpcService
             resultMapper.insert(entity);
 
             if (request.getViolatedConstraintIdsCount() > 0) {
-                TimeseriesEvent event = new TimeseriesEvent();
-                String ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyMMddHHmmss"));
+                String ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyMMddHHmmssSSS"));
                 String cids = String.join("_", request.getViolatedConstraintIdsList());
-                event.setEventId("EVT_CONSTRAINT_" + cids + "_" + ts);
-                event.setEventName("constraint violated: " + cids);
-                event.setEventType("ANOMALY");
-                event.setEventSource("CONSTRAINT_CHECK");
-                event.setEventLevel("MEDIUM");
-                event.setEventTime(entity.getCheckTime());
-                event.setRelatedSequences(entity.getSequenceIds());
-                event.setRelatedRules(entity.getViolatedConstraintIds());
-                event.setEventDescription(
-                        "violated constraints " + entity.getViolatedConstraintIds()
-                        + " on sequences " + entity.getSequenceIds());
-                event.setConfirmStatus("PENDING");
-                event.setHandleStatus("UNHANDLED");
-                LocalDateTime now = LocalDateTime.now();
-                event.setCreateTime(now);
-                event.setUpdateTime(now);
-                eventMapper.insert(event);
-                memoryCache.putEvent(event);
-                LOG.info("constraint violation event created: eventId={}", event.getEventId());
+                String eventId = "EVT_CONSTRAINT_" + cids + "_" + ts;
+                memoryCache.computeEvent(eventId, existing -> {
+                    if (existing != null) {
+                        LOG.info("constraint event already exists, skip: eventId={}", eventId);
+                        return existing;
+                    }
+                    TimeseriesEvent event = new TimeseriesEvent();
+                    event.setEventId(eventId);
+                    event.setEventName("constraint violated: " + cids);
+                    event.setEventType("ANOMALY");
+                    event.setEventSource("CONSTRAINT_CHECK");
+                    event.setEventLevel("MEDIUM");
+                    event.setEventTime(entity.getCheckTime());
+                    event.setRelatedSequences(entity.getSequenceIds());
+                    event.setRelatedRules(entity.getViolatedConstraintIds());
+                    event.setEventDescription(
+                            "violated constraints " + entity.getViolatedConstraintIds()
+                            + " on sequences " + entity.getSequenceIds());
+                    event.setConfirmStatus("PENDING");
+                    event.setHandleStatus("UNHANDLED");
+                    LocalDateTime now = LocalDateTime.now();
+                    event.setCreateTime(now);
+                    event.setUpdateTime(now);
+                    eventMapper.insert(event);
+                    return event;
+                });
+                LOG.info("constraint violation event created: eventId={}", eventId);
             }
 
             responseObserver.onNext(SyncResponse.newBuilder().setSuccess(true).build());
