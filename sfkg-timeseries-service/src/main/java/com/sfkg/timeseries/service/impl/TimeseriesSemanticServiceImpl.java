@@ -85,7 +85,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
 
     @Override
     public String saveCategory(CategorySaveRequest request) {
-        return doSaveCategory(request, true);
+        return doSaveCategory(request);
     }
 
     public String createCategory(CategorySaveRequest request) {
@@ -96,10 +96,10 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 throw new BusinessException("category already exists: " + categoryId);
             }
         }
-        return doSaveCategory(request, false);
+        return doSaveCategory(request);
     }
 
-    private String doSaveCategory(CategorySaveRequest request, boolean isUpdate) {
+    private String doSaveCategory(CategorySaveRequest request) {
         cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
         String categoryId = request == null || request.getCategoryId() == null
                 ? generateId()
@@ -127,7 +127,6 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         });
 
         categoryMapper.insert(entity);
-        syncSemanticToCore(categoryId);
         return categoryId;
     }
 
@@ -168,7 +167,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
 
     @Override
     public String saveConstraint(ConstraintSaveRequest request) {
-        return doSaveConstraint(request, true);
+        return doSaveConstraint(request);
     }
 
     public String createConstraint(ConstraintSaveRequest request) {
@@ -179,10 +178,10 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 throw new BusinessException("constraint already exists: " + constraintId);
             }
         }
-        return doSaveConstraint(request, false);
+        return doSaveConstraint(request);
     }
 
-    private String doSaveConstraint(ConstraintSaveRequest request, boolean isUpdate) {
+    private String doSaveConstraint(ConstraintSaveRequest request) {
         if (request != null) {
             validateConstraintExpression(request.getConstraintExpression());
             validateVariableMapping(request.getVariableMapping());
@@ -282,7 +281,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
 
     @Override
     public String saveRelation(RelationSaveRequest request) {
-        return doSaveRelation(request, true);
+        return doSaveRelation(request);
     }
 
     public String createRelation(RelationSaveRequest request) {
@@ -293,10 +292,10 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 throw new BusinessException("relation already exists: " + relationId);
             }
         }
-        return doSaveRelation(request, false);
+        return doSaveRelation(request);
     }
 
-    private String doSaveRelation(RelationSaveRequest request, boolean isUpdate) {
+    private String doSaveRelation(RelationSaveRequest request) {
         validateRelationConfig(request);
         cacheManager.ensureTableLoaded(CachedTable.RELATION);
         String relationId = request == null || request.getRelationId() == null

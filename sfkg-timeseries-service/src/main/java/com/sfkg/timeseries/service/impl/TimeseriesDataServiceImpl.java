@@ -93,21 +93,6 @@ public class TimeseriesDataServiceImpl implements TimeseriesDataService {
         }
     }
 
-    @Override
-    public HistoryDataVO queryHistoryFromTdengine(HistoryDataQueryRequest request) {
-        return new HistoryDataVO();
-    }
-
-    @Override
-    public HistoryDataVO queryHistoryFromCoreGrpc(HistoryDataQueryRequest request) {
-        return new HistoryDataVO();
-    }
-
-    @Override
-    public HistoryDataVO convertHistoryData(Object rawData) {
-        return new HistoryDataVO();
-    }
-
     private List<TimeseriesDataPoint> convertToDataPoints(TimeseriesDataSaveRequest request) {
         List<TimeseriesDataPoint> points = new ArrayList<>();
         for (TimeseriesDataSaveRequest.IngestPointDTO p : request.getPoints()) {

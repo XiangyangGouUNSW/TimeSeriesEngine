@@ -45,7 +45,7 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
 
     @Override
     public String saveInstanceConfig(InstanceConfigSaveRequest request) {
-        return doSaveInstanceConfig(request, true);
+        return doSaveInstanceConfig(request);
     }
 
     public String createInstanceConfig(InstanceConfigSaveRequest request) {
@@ -59,10 +59,10 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
             }
         }
         // sequenceId optional — auto-generate if not provided
-        return doSaveInstanceConfig(request, false);
+        return doSaveInstanceConfig(request);
     }
 
-    private String doSaveInstanceConfig(InstanceConfigSaveRequest request, boolean isUpdate) {
+    private String doSaveInstanceConfig(InstanceConfigSaveRequest request) {
         if (request != null) {
             if (request.getSequenceId() != null && request.getSequenceId().isBlank()) {
                 throw new BusinessException("sequenceId must not be blank");

@@ -66,10 +66,13 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
     }
 
     private String doSaveForecastTask(ForecastTaskSaveRequest request) {
+        if (request == null) {
+            throw new BusinessException("forecast task request must not be null");
+        }
         validateForecastObjects(request);
         validateForecastHorizon(request.getForecastHorizon());
         cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
-        String taskId = request == null || request.getTaskId() == null
+        String taskId = request.getTaskId() == null
                 ? generateTaskId()
                 : request.getTaskId();
 
