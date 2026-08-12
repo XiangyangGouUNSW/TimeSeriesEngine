@@ -19,6 +19,7 @@ import com.sfkg.timeseries.common.BusinessException;
 import com.sfkg.timeseries.dto.HistoryDataQueryRequest;
 import com.sfkg.timeseries.dto.TimeseriesDataSaveRequest;
 import com.sfkg.timeseries.entity.TimeseriesDataPoint;
+import com.sfkg.timeseries.monitor.IngestThroughputMonitor;
 import com.sfkg.timeseries.service.TimeseriesDataService;
 import com.sfkg.timeseries.vo.HistoryDataVO;
 
@@ -30,14 +31,17 @@ public class TimeseriesDataServiceImpl implements TimeseriesDataService {
     private final TimeseriesMemoryCache memoryCache;
     private final TimeseriesCoreGrpcClient coreGrpcClient;
     private final IngestBufferPool ingestBufferPool;
+    private final IngestThroughputMonitor throughputMonitor;
 
     public TimeseriesDataServiceImpl(
             TimeseriesMemoryCache memoryCache,
             TimeseriesCoreGrpcClient coreGrpcClient,
-            IngestBufferPool ingestBufferPool) {
+            IngestBufferPool ingestBufferPool,
+            IngestThroughputMonitor throughputMonitor) {
         this.memoryCache = memoryCache;
         this.coreGrpcClient = coreGrpcClient;
         this.ingestBufferPool = ingestBufferPool;
+        this.throughputMonitor = throughputMonitor;
     }
 
     @Override
@@ -53,12 +57,14 @@ public class TimeseriesDataServiceImpl implements TimeseriesDataService {
         // memoryCache.putTimeseriesDataPoints(localPoints);
 
         // Route each point through the hash-partitioned buffer pool
+        int pointCount = request.getPoints().size();
         for (TimeseriesDataSaveRequest.IngestPointDTO point : request.getPoints()) {
             int partition = ingestBufferPool.partition(point.getSequenceId());
             ingestBufferPool.offer(point, partition);
         }
+        throughputMonitor.recordReceived(pointCount);
 
-        return String.valueOf(request.getPoints().size());
+        return String.valueOf(pointCount);
     }
 
     @Override

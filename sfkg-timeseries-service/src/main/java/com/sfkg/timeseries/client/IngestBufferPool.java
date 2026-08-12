@@ -14,6 +14,7 @@ import com.sfkg.timeseries.common.BusinessException;
 import com.sfkg.timeseries.config.IngestBufferProperties;
 import com.sfkg.timeseries.dto.SyncResult;
 import com.sfkg.timeseries.dto.TimeseriesDataSaveRequest;
+import com.sfkg.timeseries.monitor.IngestThroughputMonitor;
 
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -43,15 +44,18 @@ public class IngestBufferPool {
 
     private final IngestBufferProperties props;
     private final TimeseriesCoreGrpcClient coreGrpcClient;
+    private final IngestThroughputMonitor throughputMonitor;
 
     private BlockingQueue<TimeseriesDataSaveRequest.IngestPointDTO>[] queues;
     private Thread[] senders;
     private volatile boolean running = true;
 
     @SuppressWarnings("unchecked")
-    public IngestBufferPool(IngestBufferProperties props, TimeseriesCoreGrpcClient coreGrpcClient) {
+    public IngestBufferPool(IngestBufferProperties props, TimeseriesCoreGrpcClient coreGrpcClient,
+                            IngestThroughputMonitor throughputMonitor) {
         this.props = props;
         this.coreGrpcClient = coreGrpcClient;
+        this.throughputMonitor = throughputMonitor;
     }
 
     @PostConstruct
@@ -175,13 +179,16 @@ public class IngestBufferPool {
             TimeseriesDataSaveRequest request = new TimeseriesDataSaveRequest();
             request.setPoints(batch);
 
-            LOG.debug("Ingest sender-{} sending batch size={}", index, batch.size());
+            int batchSize = batch.size();
+            LOG.debug("Ingest sender-{} sending batch size={}", index, batchSize);
             SyncResult result = coreGrpcClient.ingestData(request);
             if (!result.isSuccess()) {
                 LOG.warn("Ingest sender-{} batch failed ({} points): {}",
-                        index, batch.size(), result.getMessage());
+                        index, batchSize, result.getMessage());
+                throughputMonitor.recordError(batchSize);
             } else {
-                LOG.debug("Ingest sender-{} batch ok ({} points)", index, batch.size());
+                LOG.debug("Ingest sender-{} batch ok ({} points)", index, batchSize);
+                throughputMonitor.recordSent(batchSize);
             }
         }
 

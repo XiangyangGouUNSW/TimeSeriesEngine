@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!-- 默认 Spring Boot 日志格式沿用 -->
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <!-- 吞吐量日志文件 -->
+    <property name="THROUGHPUT_LOG_FILE" value="${LOG_PATH:-logs}/throughput.log"/>
+    <property name="THROUGHPUT_LOG_PATTERN" value="%d{yyyy-MM-dd HH:mm:ss.SSS} [throughput] %msg%n"/>
+
+    <appender name="THROUGHPUT_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${THROUGHPUT_LOG_FILE}</file>
+        <encoder>
+            <pattern>${THROUGHPUT_LOG_PATTERN}</pattern>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${THROUGHPUT_LOG_FILE}.%d{yyyy-MM-dd}.%i.gz</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <maxHistory>7</maxHistory>
+            <totalSizeCap>500MB</totalSizeCap>
+        </rollingPolicy>
+    </appender>
+
+    <!-- 单独 logger，只写文件不刷控制台 -->
+    <logger name="throughput" level="INFO" additivity="false">
+        <appender-ref ref="THROUGHPUT_FILE"/>
+    </logger>
+
+    <!-- 根 logger 用 Spring Boot 默认行为（控制台） -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+
+</configuration>

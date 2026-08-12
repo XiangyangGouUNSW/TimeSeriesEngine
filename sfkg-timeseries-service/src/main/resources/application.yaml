@@ -34,3 +34,7 @@ timeseries:
     batch-size: ${INGEST_BATCH_SIZE:1000}                     # 攒够多少点发送
     batch-timeout-ms: ${INGEST_BATCH_TIMEOUT_MS:500}         # 超时强制发送 (ms)
     queue-capacity: ${INGEST_QUEUE_CAPACITY:100000}           # 每线程队列上限
+
+  # ── Throughput monitor (per-second log to logs/throughput.log) ──
+  monitor:
+    interval-ms: ${THROUGHPUT_MONITOR_INTERVAL_MS:1000}      # 采样间隔 (ms)，默认每秒
