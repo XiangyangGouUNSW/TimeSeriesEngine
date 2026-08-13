@@ -113,6 +113,7 @@ if(SFKG_BUILD_GRPC)
 
     add_library(sfkg_timeseries_grpc
         src/grpc/constraint_result_receiver_client.cpp
+        src/grpc/constraint_result_notification_executor.cpp
         src/grpc/ingest_task_executor.cpp
         src/grpc/proto_conversion.cpp
         src/grpc/timeseries_core_grpc_service.cpp)
@@ -157,8 +158,21 @@ if(SFKG_BUILD_GRPC)
             tools/grpc_stage_benchmark.cpp)
         target_link_libraries(grpc_stage_benchmark
             PRIVATE sfkg_timeseries_proto Threads::Threads)
+
+        add_executable(etth1_grpc_ingest_benchmark
+            tools/etth1_grpc_ingest_benchmark.cpp)
+        target_link_libraries(etth1_grpc_ingest_benchmark
+            PRIVATE sfkg_timeseries_proto Threads::Threads)
+
     endif()
 
+endif()
+
+if(SFKG_BUILD_BENCHMARKS)
+    add_executable(window_service_benchmark
+        tools/window_service_benchmark.cpp)
+    target_link_libraries(window_service_benchmark
+        PRIVATE sfkg_timeseries_domain)
 endif()
 
 if(SFKG_BUILD_TESTS)
@@ -190,6 +204,20 @@ if(SFKG_BUILD_TESTS)
         PRIVATE sfkg_timeseries_domain)
     add_test(NAME statistics_service_test
         COMMAND statistics_service_test)
+
+    add_executable(window_service_test
+        tests/window_service_test.cpp)
+    target_link_libraries(window_service_test
+        PRIVATE sfkg_timeseries_domain)
+    add_test(NAME window_service_test
+        COMMAND window_service_test)
+
+    add_executable(window_service_differential_test
+        tests/window_service_differential_test.cpp)
+    target_link_libraries(window_service_differential_test
+        PRIVATE sfkg_timeseries_domain)
+    add_test(NAME window_service_differential_test
+        COMMAND window_service_differential_test)
 
     add_executable(derived_series_service_test
         tests/derived_series_service_test.cpp)

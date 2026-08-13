@@ -1,5 +1,6 @@
 #include "sfkg/timeseries/core/constraint_check_engine.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 #include <unordered_set>
@@ -230,13 +231,19 @@ ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
 
         std::vector<ResolvedTermValue> resolved_terms;
         resolved_terms.reserve(rule.terms.size());
-        for (std::size_t anchor = 0;
+        std::size_t first_anchor = 0;
+        if (range) {
+            first_anchor = static_cast<std::size_t>(std::lower_bound(
+                points.begin(), points.end(), range->start_time,
+                [](const RawTimeseriesPoint& point, Timestamp time) {
+                    return point.time < time;
+                }) - points.begin());
+        }
+        for (std::size_t anchor = first_anchor;
              anchor + max_offset < points.size();
              ++anchor) {
-            if (range &&
-                (points[anchor].time < range->start_time ||
-                 points[anchor].time > range->end_time)) {
-                continue;
+            if (range && points[anchor].time > range->end_time) {
+                break;
             }
             const bool evaluated = evaluateRuleAt(
                 rule,
@@ -322,13 +329,19 @@ ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
         std::vector<ResolvedTermValue> resolved_terms;
         resolved_terms.reserve(rule.terms.size());
         error.clear();
-        for (std::size_t anchor = 0;
+        std::size_t first_anchor = 0;
+        if (range) {
+            first_anchor = static_cast<std::size_t>(std::lower_bound(
+                data.samples.begin(), data.samples.end(), range->start_time,
+                [](const AlignedSample& sample, Timestamp time) {
+                    return sample.time < time;
+                }) - data.samples.begin());
+        }
+        for (std::size_t anchor = first_anchor;
              anchor + max_offset < data.samples.size();
              ++anchor) {
-            if (range &&
-                (data.samples[anchor].time < range->start_time ||
-                 data.samples[anchor].time > range->end_time)) {
-                continue;
+            if (range && data.samples[anchor].time > range->end_time) {
+                break;
             }
             const bool evaluated = evaluateRuleAt(
                 rule,

@@ -59,7 +59,12 @@ int main() {
     linear.enabled = true;
     linear.formula = DerivedLinearCombination{
         {{"a", 2.0}, {"b", 3.0}}, 1.0};
-    assert(registry.upsertDerivedSeriesConfigs({{linear}}).code ==
+    RuntimeDerivedSeriesConfig second_linear;
+    second_linear.derived_sequence_id = "linear-output-2";
+    second_linear.enabled = true;
+    second_linear.formula = DerivedLinearCombination{
+        {{"a", 1.0}, {"b", -1.0}}, 0.0};
+    assert(registry.upsertDerivedSeriesConfigs({{linear, second_linear}}).code ==
            OperationCode::Ok);
 
     DerivedSeriesService derived(registry, window);
@@ -72,6 +77,10 @@ int main() {
     // At t=5, a is linearly interpolated to 5: 2*5 + 3*4 + 1 = 23.
     assert(std::abs(valueAt(queried.data, "linear-output", 5) - 23.0) < 1e-9);
     assert(std::abs(valueAt(queried.data, "linear-output", 10) - 27.0) < 1e-9);
+    queried = window.queryWindowData({{"linear-output-2"}, std::nullopt,
+                                      std::nullopt});
+    assert(std::abs(valueAt(queried.data, "linear-output-2", 5) - 1.0) <
+           1e-9);
 
     const auto append_update = window.buildTimeWindowIncremental({{
         {20, "a", 20.0},
@@ -84,6 +93,10 @@ int main() {
     queried = window.queryWindowData({{"linear-output"}, std::nullopt,
                                       std::nullopt});
     assert(std::abs(valueAt(queried.data, "linear-output", 20) - 53.0) <
+           1e-9);
+    queried = window.queryWindowData({{"linear-output-2"}, std::nullopt,
+                                      std::nullopt});
+    assert(std::abs(valueAt(queried.data, "linear-output-2", 20) - 16.0) <
            1e-9);
 
     const auto out_of_order_update = window.buildTimeWindowIncremental({{

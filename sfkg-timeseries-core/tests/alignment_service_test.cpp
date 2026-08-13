@@ -1,6 +1,7 @@
 #include <cassert>
 #include <cstdint>
 #include <iostream>
+#include <string>
 #include <variant>
 #include <utility>
 
@@ -84,6 +85,91 @@ int main() {
     // Linear interpolation is used only between known points; boundaries use
     // NEAR, so the last bucket is filled from the previous known value.
     assert(asDouble(result.aligned_data.samples[3].values.at("temperature-1")) == 20.0);
+
+    const auto affected = service.alignWindowData(
+        basic_window,
+        AlignmentRange{5, 10, 1});
+    assert(affected.operation.code == OperationCode::Ok);
+    assert(affected.aligned_data.samples.size() == 2);
+    assert(affected.aligned_data.samples[0].time == 0);
+    assert(affected.aligned_data.samples[1].time == 10);
+
+    // A larger range must use the same bucket values as full alignment while
+    // only returning the affected buckets and their requested prefix.
+    WindowData dense_window;
+    dense_window.window_start_time = 0;
+    dense_window.window_end_time = 100;
+    for (Timestamp time = 0; time < 100; time += 10) {
+        dense_window.sequence_values["temperature-1"].push_back({
+            time, "temperature-1", static_cast<double>(time)});
+    }
+    const auto dense_full = service.alignWindowData(dense_window);
+    const auto dense_incremental = service.alignWindowData(
+        dense_window, AlignmentRange{35, 65, 1});
+    assert(dense_incremental.operation.code == OperationCode::Ok);
+    assert(dense_incremental.aligned_data.samples.size() == 5);
+    for (std::size_t index = 0; index <
+         dense_incremental.aligned_data.samples.size(); ++index) {
+        const auto& actual = dense_incremental.aligned_data.samples[index];
+        const auto& expected = dense_full.aligned_data.samples[index + 2];
+        assert(actual.time == expected.time);
+        assert(asDouble(actual.values.at("temperature-1")) ==
+               asDouble(expected.values.at("temperature-1")));
+    }
+
+    // The streaming accumulator must preserve the aggregate semantics without
+    // materializing a temporary vector of points for every bucket.
+    AlignmentConfig maximum_config;
+    maximum_config.bucket_interval = 10;
+    maximum_config.sequences.push_back(sequence(
+        "temperature-1", BucketAggregation::Maximum, GapFillMethod::Near));
+    WindowData aggregate_window;
+    aggregate_window.window_start_time = 0;
+    aggregate_window.window_end_time = 10;
+    aggregate_window.sequence_values["temperature-1"] = {
+        {0, "temperature-1", 3.0},
+        {1, "temperature-1", 1.0},
+        {2, "temperature-1", 2.0}};
+    result = service.alignWindowData(aggregate_window, maximum_config);
+    assert(result.operation.code == OperationCode::Ok);
+    assert(asDouble(result.aligned_data.samples[0].values.at(
+               "temperature-1")) == 3.0);
+
+    // Exercise the bounded per-sequence parallel path and verify that the
+    // merge still returns every configured sequence deterministically.
+    AlignmentConfig parallel_config;
+    parallel_config.bucket_interval = 10;
+    WindowData parallel_window;
+    parallel_window.window_start_time = 0;
+    parallel_window.window_end_time = 20;
+    for (std::size_t index = 0; index < 16; ++index) {
+        const auto id = "parallel-sequence-" + std::to_string(index);
+        parallel_config.sequences.push_back(
+            sequence(id, BucketAggregation::Average, GapFillMethod::Near));
+        parallel_window.sequence_values[id] = {
+            {0, id, static_cast<double>(index)},
+            {10, id, static_cast<double>(index + 1)}};
+    }
+    result = service.alignWindowData(parallel_window, parallel_config);
+    assert(result.operation.code == OperationCode::Ok);
+    assert(result.aligned_data.samples.size() == 2);
+    for (const auto& config : parallel_config.sequences) {
+        assert(result.aligned_data.samples[0].values.find(
+                   config.sequence_id) !=
+               result.aligned_data.samples[0].values.end());
+        assert(result.aligned_data.samples[1].values.find(
+                   config.sequence_id) !=
+               result.aligned_data.samples[1].values.end());
+    }
+
+    // The incremental overload must not weaken the full overload's validation
+    // when a manually assembled WindowData has a mismatched point identity.
+    auto malformed_window = dense_window;
+    malformed_window.sequence_values["temperature-1"][0].sequence_id =
+        "other-sequence";
+    result = service.alignWindowData(
+        malformed_window, AlignmentRange{35, 65, 1});
+    assert(result.operation.code == OperationCode::InvalidArgument);
 
     // With no AlignmentConfig, the continuous sequence uses the registry
     // default Average + Linear and the smallest positive gap as interval.

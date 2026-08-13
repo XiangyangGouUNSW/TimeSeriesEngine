@@ -6,6 +6,7 @@
 #include "sfkg/timeseries/core/alignment_service.hpp"
 #include "sfkg/timeseries/core/constraint_check_engine.hpp"
 #include "sfkg/timeseries/core/grpc/constraint_result_receiver_client.hpp"
+#include "sfkg/timeseries/core/grpc/constraint_result_notification_executor.hpp"
 #include "sfkg/timeseries/core/grpc/ingest_task_executor.hpp"
 #include "sfkg/timeseries/core/derived_series_service.hpp"
 #include "sfkg/timeseries/core/history_query_service.hpp"
@@ -42,6 +43,7 @@ public:
           config_registry_(config_registry),
           derived_series_service_(config_registry, window_service),
           constraint_result_receiver_(constraint_result_receiver),
+          constraint_notification_executor_(constraint_result_receiver),
           ingest_task_executor_() {}
 
     ::grpc::Status syncInstanceConfigs(
@@ -110,7 +112,8 @@ private:
     struct IngestDiagnostics;
 
     IngestPipelineResult processHotIngest(
-        const TimeseriesBatch& data);
+        const TimeseriesBatch& data,
+        const std::shared_ptr<IngestDiagnostics>& diagnostics = {});
 
     IngestService& ingest_service_;
     StorageService& storage_service_;
@@ -122,6 +125,7 @@ private:
     RuntimeConfigRegistry& config_registry_;
     DerivedSeriesService derived_series_service_;
     ConstraintResultReceiverClient& constraint_result_receiver_;
+    ConstraintResultNotificationExecutor constraint_notification_executor_;
     IngestTaskExecutor ingest_task_executor_;
 };
 

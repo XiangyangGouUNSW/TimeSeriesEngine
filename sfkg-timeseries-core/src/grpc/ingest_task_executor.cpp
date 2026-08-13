@@ -95,6 +95,9 @@ struct IngestTaskExecutor::Task {
     std::vector<TimeseriesBatch> cold_batches;
     ColdWriteFunction cold_write;
     HotUpdateFunction hot_update;
+    std::vector<std::shared_future<void>> hot_predecessors;
+    std::promise<void> hot_order_completion;
+    std::shared_future<void> hot_order_future;
     std::promise<IngestPipelineResult> completion;
     std::mutex result_mutex;
     IngestPipelineResult result;
@@ -167,6 +170,8 @@ IngestTaskSubmission IngestTaskExecutor::trySubmit(
     task->resolved = std::move(resolved);
     task->cold_write = std::move(cold_write);
     task->hot_update = std::move(hot_update);
+    task->hot_order_future =
+        task->hot_order_completion.get_future().share();
     task->cold_batches.resize(cold_worker_count_);
 
     std::vector<SequenceId> batch_sequence_ids;
@@ -218,6 +223,14 @@ IngestTaskSubmission IngestTaskExecutor::trySubmit(
     }
 
     auto completion = task->completion.get_future();
+    task->hot_predecessors.reserve(batch_sequence_ids.size());
+    for (const auto& sequence_id : batch_sequence_ids) {
+        const auto predecessor = sequence_hot_tails_.find(sequence_id);
+        if (predecessor != sequence_hot_tails_.end()) {
+            task->hot_predecessors.push_back(predecessor->second);
+        }
+        sequence_hot_tails_[sequence_id] = task->hot_order_future;
+    }
     ++pending_tasks_;
     // Admission and all shard queue insertions are protected together. A
     // request is therefore either present in every required lane or rejected.
@@ -293,6 +306,12 @@ void IngestTaskExecutor::hotWorkerLoop() {
 
         IngestPipelineResult result;
         try {
+            // FIFO queue order alone is insufficient with multiple workers:
+            // a later task can otherwise acquire a sequence lock first. The
+            // dependency chain is established atomically at admission time.
+            for (const auto& predecessor : task->hot_predecessors) {
+                predecessor.wait();
+            }
             result = task->hot_update(task->resolved->resolved_data);
         } catch (const std::exception& exception) {
             const auto message = std::string("hot ingest worker failed: ") +
@@ -313,6 +332,7 @@ void IngestTaskExecutor::hotWorkerLoop() {
             result.constraint_notification_result = workerFailure(
                 task->resolved->resolved_data.points.size(), message);
         }
+        task->hot_order_completion.set_value();
         completeHot(task, std::move(result));
     }
 }

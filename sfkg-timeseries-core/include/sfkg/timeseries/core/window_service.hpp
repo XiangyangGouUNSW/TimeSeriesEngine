@@ -1,24 +1,44 @@
 #pragma once
 
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <unordered_map>
+#include <vector>
 
 #include "sfkg/timeseries/core/types.hpp"
 
 namespace sfkg::timeseries::core {
 
 // Describes the part of the hot window affected by one raw-data update.
-// affected_end_time is inclusive. Incremental consumers must fall back to a
-// full refresh when incremental_safe is false, for example after an
-// out-of-order write or when the sliding window advances and evicts data.
+// affected_end_time is inclusive. incremental_safe describes ordering and
+// correction safety; window eviction is reported independently because it can
+// be handled incrementally by removing the expired prefix and patching the
+// newly affected suffix. Out-of-order corrections can still make
+// incremental_safe false because they may change interpolation or ordering
+// dependencies outside the incoming suffix.
 struct WindowUpdateResult {
     OperationResult operation;
     std::vector<SequenceId> changed_sequence_ids;
     std::optional<Timestamp> affected_start_time;
     std::optional<Timestamp> affected_end_time;
+    std::optional<Timestamp> window_start_time;
+    // Monotonically increases for each accepted batch. Derived refreshes use
+    // it to prevent an older concurrent refresh from publishing over a newer
+    // one after hot-window work has been sharded by sequence.
+    std::uint64_t update_generation{0};
     bool incremental_safe{false};
+    bool window_evicted{false};
+    // These are diagnostic sums across sequence tasks. They may be larger
+    // than the wall-clock hot_window_ms when several sequences are processed
+    // concurrently. In particular, lock_wait_ms measures contention rather
+    // than time spent modifying the vector/tree itself.
+    double sequence_lock_wait_ms{0.0};
+    double sequence_update_ms{0.0};
+    double eviction_lock_wait_ms{0.0};
+    double eviction_update_ms{0.0};
 };
 
 class WindowService {
@@ -62,7 +82,34 @@ public:
         const WindowQuery& query) const;
 
 private:
-    using SequenceWindow = std::map<Timestamp, RawTimeseriesPoint>;
+    // Keep a small side buffer for rare corrections. Once it reaches this
+    // bound, merge it into the ordered vector in one batch instead of moving
+    // the whole live vector for every single out-of-order point.
+    static constexpr std::size_t kLatePointFlushThreshold = 64;
+
+    struct SequenceWindow {
+        mutable std::shared_mutex mutex;
+        std::vector<RawTimeseriesPoint> points;
+        // Rare late/corrected points are kept separately so one correction
+        // does not shift the whole append-oriented vector. Queries merge this
+        // ordered side buffer with points on demand.
+        std::map<Timestamp, RawTimeseriesPoint> late_points;
+        std::size_t active_begin{0};
+        std::optional<Timestamp> latest_time;
+
+        bool empty() const {
+            return active_begin >= points.size() && late_points.empty();
+        }
+    };
+
+    static void replaceSequence(
+        SequenceWindow& sequence,
+        const TimeseriesBatch& data);
+    static void mergeSortedPoints(
+        SequenceWindow& sequence,
+        std::vector<RawTimeseriesPoint> incoming);
+    static void flushLatePoints(SequenceWindow& sequence);
+    static void compactSequence(SequenceWindow& sequence);
 
     OperationResult updateWindow(
         const TimeseriesBatch& data,
@@ -70,14 +117,26 @@ private:
     WindowUpdateResult updateWindowIncremental(
         const TimeseriesBatch& data,
         std::optional<std::int64_t> window_size_override);
-    void pruneExpiredPoints();
+    bool pruneExpiredPoints(
+        Timestamp window_start,
+        const std::vector<std::shared_ptr<SequenceWindow>>& sequences,
+        double* lock_wait_ms = nullptr,
+        double* update_ms = nullptr);
+
+    std::shared_ptr<SequenceWindow> sequenceWindowFor(
+        const SequenceId& sequence_id);
 
     // Protects the hot-window index, watermark and window-size metadata from
     // concurrent ingest and query RPCs.
-    mutable std::mutex mutex_;
-    std::unordered_map<SequenceId, SequenceWindow> sequence_windows_;
+    // Shared queries do not block each other. Writers take this unique lock
+    // only to update the index, watermark and eviction snapshot; the actual
+    // point insertion and pruning use independent sequence locks.
+    mutable std::shared_mutex mutex_;
+    std::unordered_map<SequenceId, std::shared_ptr<SequenceWindow>>
+        sequence_windows_;
     std::optional<Timestamp> watermark_;
     std::int64_t window_size_{kDefaultWindowSizeMs};
+    std::uint64_t update_generation_{0};
 };
 
 }  // namespace sfkg::timeseries::core

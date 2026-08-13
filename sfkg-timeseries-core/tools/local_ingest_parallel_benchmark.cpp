@@ -17,6 +17,8 @@
 #include <unistd.h>
 
 #include "sfkg/timeseries/core/derived_series_service.hpp"
+#include "sfkg/timeseries/core/alignment_service.hpp"
+#include "sfkg/timeseries/core/constraint_check_engine.hpp"
 #include "sfkg/timeseries/core/grpc/ingest_task_executor.hpp"
 #include "sfkg/timeseries/core/ingest_service.hpp"
 #include "sfkg/timeseries/core/internal/taos_client.hpp"
@@ -91,6 +93,11 @@ struct TaskMetrics {
     std::size_t expected_lanes{0};
     std::size_t completed_lanes{0};
     double resolve_ms{0.0};
+    double hot_window_ms{0.0};
+    double derived_ms{0.0};
+    double constraint_query_ms{0.0};
+    double constraint_check_ms{0.0};
+    bool incremental_safe{false};
     std::mutex mutex;
 };
 
@@ -142,13 +149,22 @@ void printPercentiles(
 
 int main(int argc, char** argv) {
     // Arguments: batch_count points_per_batch sequence_count producer_count
-    // writer_count.
+    // writer_count window_size_ms profile hot_worker_count.
     // Defaults process 100,000 points: 100 batches * 1,000 points.
     const auto batch_count = argumentOr(argc, argv, 1, 100);
     const auto points_per_batch = argumentOr(argc, argv, 2, 1000);
     const auto sequence_count = argumentOr(argc, argv, 3, 20);
     const auto producer_count = argumentOr(argc, argv, 4, 4);
-    const auto writer_count = argumentOr(argc, argv, 5, 4);
+    const auto writer_count = argumentOr(argc, argv, 5, 8);
+    const auto window_size_ms = argumentOr(argc, argv, 6, 3'600'000);
+    const std::string profile = argc > 7 ? argv[7] : "none";
+    const auto hot_worker_count = argumentOr(argc, argv, 8, 1);
+
+    if (profile != "none" && profile != "single" &&
+        profile != "standard" && profile != "mixed") {
+        std::cerr << "profile must be none, single, standard or mixed\n";
+        return 2;
+    }
 
     if (points_per_batch < sequence_count ||
         points_per_batch % sequence_count != 0) {
@@ -169,7 +185,8 @@ int main(int argc, char** argv) {
     const auto writer_count_text = std::to_string(writer_count);
     setenv("SFKG_TAOS_WRITE_CONNECTIONS", writer_count_text.c_str(), 1);
     setenv("SFKG_INGEST_COLD_WORKERS", writer_count_text.c_str(), 1);
-    setenv("SFKG_INGEST_HOT_WORKERS", "1", 1);
+    const auto hot_worker_count_text = std::to_string(hot_worker_count);
+    setenv("SFKG_INGEST_HOT_WORKERS", hot_worker_count_text.c_str(), 1);
     setenv("SFKG_INGEST_QUEUE_CAPACITY", "100000", 1);
 
     core::internal::TaosClient taos_client;
@@ -199,7 +216,8 @@ int main(int argc, char** argv) {
             "local-benchmark",
             "external-" + std::to_string(index),
             "benchmark-category",
-            "double"});
+            "double",
+            core::SeriesKind::Continuous});
     }
     const auto configured = registry.replaceInstanceConfigs(snapshot);
     if (configured.code != core::OperationCode::Ok) {
@@ -208,9 +226,89 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    const bool with_single = profile == "single" ||
+        profile == "standard" || profile == "mixed";
+    const bool with_multi_constraints = profile == "standard" ||
+        profile == "mixed";
+    const bool with_multi_derived = profile == "mixed";
+    std::vector<core::ConstraintRule> single_rules;
+    std::vector<core::ConstraintRule> multi_rules;
+    if (with_single) {
+        core::ConstraintRule rule;
+        rule.constraint_id = "local-single-range";
+        rule.variable_mapping.emplace("ot", "ETTh1_OT");
+        rule.lower_bound = -1.0e12;
+        rule.upper_bound = 1.0e12;
+        rule.terms.push_back({"ot", 1.0, 0});
+        single_rules.push_back(rule);
+    }
+    if (with_multi_constraints) {
+        core::ConstraintRule rule;
+        rule.constraint_id = "local-multi-range";
+        rule.variable_mapping.emplace("hufl", "ETTh1_HUFL");
+        rule.variable_mapping.emplace("hull", "ETTh1_HULL");
+        rule.lower_bound = -1.0e12;
+        rule.upper_bound = 1.0e12;
+        rule.terms.push_back({"hufl", 1.0, 0});
+        rule.terms.push_back({"hull", 1.0, 0});
+        multi_rules.push_back(rule);
+    }
+    if (with_single || with_multi_constraints) {
+        core::RuntimeConfigSnapshot<core::RuntimeConstraintConfig>
+            constraint_snapshot;
+        for (const auto& rule : single_rules) {
+            constraint_snapshot.items.push_back({rule, true});
+        }
+        for (const auto& rule : multi_rules) {
+            constraint_snapshot.items.push_back({rule, true});
+        }
+        const auto constraints_configured = registry.upsertConstraints(
+            constraint_snapshot);
+        if (constraints_configured.code != core::OperationCode::Ok) {
+            std::cerr << "failed to register benchmark constraints: "
+                      << constraints_configured.message << '\n';
+            return 1;
+        }
+    }
+    if (with_single || with_multi_derived) {
+        core::RuntimeConfigSnapshot<core::RuntimeDerivedSeriesConfig>
+            derived_snapshot;
+        if (with_single) {
+            derived_snapshot.items.push_back({
+                "ETTh1_OT_DERIVED",
+                true,
+                core::DerivedLinearCombination{{
+                    {"ETTh1_OT", 1.0}}, 0.0}});
+        }
+        if (with_multi_derived) {
+            derived_snapshot.items.push_back({
+                "ETTh1_HUFL_HULL_DERIVED",
+                true,
+                core::DerivedLinearCombination{{
+                    {"ETTh1_HUFL", 1.0},
+                    {"ETTh1_HULL", 1.0}}, 0.0}});
+        }
+        const auto derived_configured = registry.upsertDerivedSeriesConfigs(
+            derived_snapshot);
+        if (derived_configured.code != core::OperationCode::Ok) {
+            std::cerr << "failed to register benchmark derived configs: "
+                      << derived_configured.message << '\n';
+            return 1;
+        }
+    }
+
     core::IngestService ingest_service(registry);
     core::WindowService window_service;
+    const auto window_configured =
+        window_service.configureWindowSize(window_size_ms);
+    if (window_configured.code != core::OperationCode::Ok) {
+        std::cerr << "failed to configure benchmark window: "
+                  << window_configured.message << '\n';
+        return 1;
+    }
     core::DerivedSeriesService derived_service(registry, window_service);
+    core::AlignmentService alignment_service(registry);
+    core::ConstraintCheckEngine constraint_engine;
     grpc_core::IngestTaskExecutor executor;
     SharedStats stats(writer_count);
     std::vector<std::pair<
@@ -224,9 +322,12 @@ int main(int argc, char** argv) {
               << " points_per_batch=" << points_per_batch
               << " sequences=" << sequence_count
               << " producers=" << producer_count << '\n'
+              << " window_size_ms=" << window_size_ms
+              << " profile=" << profile
+              << " hot_workers=" << hot_worker_count << '\n'
               << "cold_workers=" << writer_count
               << " taos_write_connections=" << writer_count
-              << " hot_workers=1\n";
+              << " hot_workers=" << hot_worker_count << '\n';
 
     const auto wall_start = Clock::now();
     std::vector<std::thread> producers;
@@ -240,7 +341,7 @@ int main(int argc, char** argv) {
                 input.reserve(points_per_batch);
                 const auto base_time = static_cast<core::Timestamp>(
                     1'900'000'000'000LL +
-                    batch_index * points_per_sequence);
+                    batch_index * points_per_sequence * 1'000);
                 for (std::size_t sequence_index = 0;
                      sequence_index < sequence_ids.size();
                      ++sequence_index) {
@@ -251,7 +352,10 @@ int main(int argc, char** argv) {
                             sequence_ids[sequence_index],
                             {},
                             {},
-                            base_time + static_cast<core::Timestamp>(point_index),
+                            // ETTh1-style sampling: one row per second and
+                            // one point per configured sequence in that row.
+                            base_time + static_cast<core::Timestamp>(point_index) *
+                                1'000,
                             static_cast<double>(
                                 sequence_index * 1000000 +
                                 batch_index * points_per_sequence +
@@ -287,7 +391,7 @@ int main(int argc, char** argv) {
                             std::lock_guard lock(stats.mutex);
                             auto& lane = stats.cold[writer_index];
                             ++lane.batches;
-                            lane.points += data.points.size();
+                            lane.points += result.success_count;
                             const auto duration = elapsedMs(start, end);
                             lane.total_ms += duration;
                             lane.max_ms = std::max(lane.max_ms, duration);
@@ -322,22 +426,230 @@ int main(int argc, char** argv) {
                     [&, task_metrics](const core::TimeseriesBatch& data) {
                         const auto start = Clock::now();
                         auto result = grpc_core::IngestPipelineResult{};
-                        result.window_result = window_service.buildTimeWindow(data);
+                        const auto window_start = Clock::now();
+                        const auto window_update =
+                            window_service.buildTimeWindowIncremental(data);
+                        result.window_result = window_update.operation;
+                        const auto window_end = Clock::now();
+                        {
+                            std::lock_guard lock(task_metrics->mutex);
+                            task_metrics->hot_window_ms = elapsedMs(
+                                window_start, window_end);
+                                task_metrics->incremental_safe =
+                                    window_update.incremental_safe;
+                        }
+                        std::future<core::OperationResult> derived_future;
+                        const auto derived_start = Clock::now();
                         if (result.window_result.code == core::OperationCode::Ok) {
-                            result.derived_result = derived_service.refresh();
+                            if (!single_rules.empty() || !multi_rules.empty()) {
+                                derived_future = std::async(
+                                    std::launch::async,
+                                    [&derived_service, window_update] {
+                                        return derived_service.refresh(
+                                            window_update);
+                                    });
+                            } else {
+                                result.derived_result = derived_service.refresh(
+                                    window_update);
+                            }
                         } else {
                             result.derived_result = result.window_result;
                         }
-                        result.constraint_notification_result = {
-                            core::OperationCode::Ok,
-                            0,
-                            0,
-                            "constraint notification omitted in local benchmark"};
+                        result.constraint_notification_result =
+                            core::OperationResult{
+                                core::OperationCode::Ok,
+                                0,
+                                0,
+                                "constraint notification omitted in local benchmark"};
+                        if (result.window_result.code == core::OperationCode::Ok &&
+                            (!single_rules.empty() || !multi_rules.empty())) {
+                            core::WindowQuery single_query;
+                            core::WindowQuery multi_query;
+                            std::size_t single_max_offset = 0;
+                            const auto addUnique = [](
+                                std::vector<core::SequenceId>* ids,
+                                const core::SequenceId& id) {
+                                if (std::find(ids->begin(), ids->end(), id) ==
+                                    ids->end()) {
+                                    ids->push_back(id);
+                                }
+                            };
+                            for (const auto& rule : single_rules) {
+                                for (const auto& [variable, sequence_id] :
+                                     rule.variable_mapping) {
+                                    (void)variable;
+                                    addUnique(&single_query.sequence_ids,
+                                              sequence_id);
+                                }
+                                for (const auto& term : rule.terms) {
+                                    single_max_offset = std::max(
+                                        single_max_offset, term.sample_offset);
+                                }
+                            }
+                            for (const auto& rule : multi_rules) {
+                                for (const auto& [variable, sequence_id] :
+                                     rule.variable_mapping) {
+                                    (void)variable;
+                                    addUnique(&multi_query.sequence_ids,
+                                              sequence_id);
+                                }
+                            }
+                            if (window_update.incremental_safe &&
+                                window_update.affected_start_time &&
+                                window_update.affected_end_time) {
+                                single_query.start_time =
+                                    *window_update.affected_start_time;
+                                single_query.end_time =
+                                    *window_update.affected_end_time ==
+                                            std::numeric_limits<core::Timestamp>::max()
+                                        ? *window_update.affected_end_time
+                                        : *window_update.affected_end_time + 1;
+                                single_query.preceding_points =
+                                    single_max_offset + 1;
+                                single_query.following_points =
+                                    single_max_offset + 1;
+                            } else {
+                                single_query = multi_query;
+                            }
+
+                            struct GroupExecution {
+                                core::ConstraintCheckResult result;
+                                double query_ms{0.0};
+                                double check_ms{0.0};
+                            };
+                            const auto runGroup = [&](
+                                const std::vector<core::ConstraintRule>& rules,
+                                const core::WindowQuery& query) {
+                                GroupExecution execution;
+                                if (rules.empty()) {
+                                    execution.result.satisfied = true;
+                                    execution.result.operation = core::OperationResult{
+                                        core::OperationCode::Ok, 0, 0,
+                                        "constraint group skipped"};
+                                    return execution;
+                                }
+                                const auto query_start = Clock::now();
+                                const auto window = window_service.queryWindowData(
+                                    query);
+                                const auto query_end = Clock::now();
+                                execution.query_ms = elapsedMs(
+                                    query_start, query_end);
+                                if (window.operation.code !=
+                                    core::OperationCode::Ok) {
+                                    execution.result.satisfied = false;
+                                    execution.result.operation = window.operation;
+                                    return execution;
+                                }
+                                const auto check_start = Clock::now();
+                                std::optional<core::ConstraintCheckRange> check_range;
+                                if (window_update.incremental_safe &&
+                                    window_update.affected_start_time &&
+                                    window_update.affected_end_time) {
+                                    check_range = core::ConstraintCheckRange{
+                                        *window_update.affected_start_time,
+                                        *window_update.affected_end_time};
+                                }
+                                if (&rules == &single_rules) {
+                                    execution.result = check_range
+                                        ? constraint_engine.checkConstraints(
+                                              rules, window.data, check_range)
+                                        : constraint_engine.checkConstraints(
+                                              rules, window.data);
+                                } else {
+                                    const auto alignment = check_range
+                                        ? alignment_service.alignWindowData(
+                                              window.data,
+                                              core::AlignmentRange{
+                                                  check_range->start_time,
+                                                  check_range->end_time,
+                                                  0})
+                                        : alignment_service.alignWindowData(
+                                              window.data);
+                                    execution.result = alignment.operation.code ==
+                                            core::OperationCode::Ok ||
+                                            alignment.operation.code ==
+                                                core::OperationCode::PartialSuccess
+                                        ? (check_range
+                                            ? constraint_engine.checkConstraints(
+                                                  rules,
+                                                  alignment.aligned_data,
+                                                  check_range)
+                                            : constraint_engine.checkConstraints(
+                                                  rules,
+                                                  alignment.aligned_data))
+                                        : core::ConstraintCheckResult{
+                                              alignment.operation, 0, false, {}};
+                                }
+                                const auto check_end = Clock::now();
+                                execution.check_ms = elapsedMs(
+                                    check_start, check_end);
+                                return execution;
+                            };
+
+                            GroupExecution single_execution;
+                            GroupExecution multi_execution;
+                            if (!single_rules.empty() && !multi_rules.empty()) {
+                                auto single_future = std::async(
+                                    std::launch::async,
+                                    runGroup,
+                                    std::cref(single_rules),
+                                    std::cref(single_query));
+                                auto multi_future = std::async(
+                                    std::launch::async,
+                                    runGroup,
+                                    std::cref(multi_rules),
+                                    std::cref(multi_query));
+                                single_execution = single_future.get();
+                                multi_execution = multi_future.get();
+                            } else if (!single_rules.empty()) {
+                                single_execution = runGroup(
+                                    single_rules, single_query);
+                            } else {
+                                multi_execution = runGroup(
+                                    multi_rules, multi_query);
+                            }
+                            {
+                                std::lock_guard lock(task_metrics->mutex);
+                                task_metrics->constraint_query_ms =
+                                    single_execution.query_ms +
+                                    multi_execution.query_ms;
+                                task_metrics->constraint_check_ms =
+                                    single_execution.check_ms +
+                                    multi_execution.check_ms;
+                            }
+                            if ((!single_rules.empty() &&
+                                 single_execution.result.operation.code !=
+                                     core::OperationCode::Ok) ||
+                                (!multi_rules.empty() &&
+                                 multi_execution.result.operation.code !=
+                                     core::OperationCode::Ok)) {
+                                result.constraint_notification_result =
+                                    core::OperationResult{
+                                        core::OperationCode::InternalError,
+                                        0,
+                                        1,
+                                        "local constraint benchmark check failed"};
+                            }
+                        }
+                        if (derived_future.valid()) {
+                            result.derived_result = derived_future.get();
+                        }
+                        const auto derived_end = Clock::now();
+                        {
+                            std::lock_guard lock(task_metrics->mutex);
+                            task_metrics->derived_ms = elapsedMs(
+                                derived_start, derived_end);
+                        }
                         const auto end = Clock::now();
                         {
                             std::lock_guard lock(stats.mutex);
                             ++stats.hot.batches;
-                            stats.hot.points += data.points.size();
+                            if (result.window_result.code ==
+                                    core::OperationCode::Ok ||
+                                result.window_result.code ==
+                                    core::OperationCode::PartialSuccess) {
+                                stats.hot.points += data.points.size();
+                            }
                             const auto duration = elapsedMs(start, end);
                             stats.hot.total_ms += duration;
                             stats.hot.max_ms = std::max(stats.hot.max_ms, duration);
@@ -392,7 +704,12 @@ int main(int argc, char** argv) {
     std::vector<double> resolve_times;
     std::vector<double> cold_times;
     std::vector<double> hot_times;
+    std::vector<double> hot_window_times;
+    std::vector<double> derived_times;
+    std::vector<double> constraint_query_times;
+    std::vector<double> constraint_check_times;
     std::vector<double> total_times;
+    std::size_t incremental_safe_count = 0;
     std::vector<std::shared_ptr<TaskMetrics>> metrics;
     metrics.reserve(submissions.size());
     for (const auto& submission : submissions) {
@@ -401,6 +718,10 @@ int main(int argc, char** argv) {
     resolve_times.reserve(metrics.size());
     cold_times.reserve(metrics.size());
     hot_times.reserve(metrics.size());
+    hot_window_times.reserve(metrics.size());
+    derived_times.reserve(metrics.size());
+    constraint_query_times.reserve(metrics.size());
+    constraint_check_times.reserve(metrics.size());
     total_times.reserve(metrics.size());
     for (const auto& task : metrics) {
         std::lock_guard lock(task->mutex);
@@ -408,13 +729,27 @@ int main(int argc, char** argv) {
         cold_times.push_back(
             elapsedMs(task->cold_first_start, task->cold_last_end));
         hot_times.push_back(elapsedMs(task->hot_start, task->hot_end));
+        hot_window_times.push_back(task->hot_window_ms);
+        derived_times.push_back(task->derived_ms);
+        constraint_query_times.push_back(task->constraint_query_ms);
+        constraint_check_times.push_back(task->constraint_check_ms);
+        if (task->incremental_safe) {
+            ++incremental_safe_count;
+        }
         total_times.push_back(elapsedMs(task->submitted, task->completed));
     }
 
     std::cout << "\ntiming summary (milliseconds):\n";
     printPercentiles("resolve", std::move(resolve_times));
     printPercentiles("cold shard span", std::move(cold_times));
-    printPercentiles("hot window+derived", std::move(hot_times));
+    printPercentiles("hot total", std::move(hot_times));
+    printPercentiles("hot window", std::move(hot_window_times));
+    printPercentiles("derived", std::move(derived_times));
+    printPercentiles("constraint query", std::move(constraint_query_times));
+    printPercentiles("constraint check", std::move(constraint_check_times));
+    std::cout << "incremental_safe_batches=" << incremental_safe_count
+              << " incremental_fallback_batches="
+              << (metrics.size() - incremental_safe_count) << '\n';
     printPercentiles("submit-to-completion", std::move(total_times));
 
     std::size_t written_points = 0;
@@ -450,12 +785,19 @@ int main(int argc, char** argv) {
     }
     const auto wall_ms = elapsedMs(wall_start, wall_end);
     const auto expected_points = batch_count * points_per_batch;
+    const auto expected_rows = expected_points / sequence_count;
     std::cout << "  routing_mismatches=" << stats.routing_mismatches << '\n'
+              << "  expected_rows(timestamps)=" << expected_rows << '\n'
               << "  expected_points=" << expected_points
               << " written_points=" << written_points
               << " hot_points=" << stats.hot.points << '\n'
               << std::fixed << std::setprecision(2)
               << "wall_ms=" << wall_ms
+              << " throughput_rows_per_sec="
+              << (wall_ms == 0.0
+                      ? 0.0
+                      : static_cast<double>(expected_rows) * 1000.0 /
+                          wall_ms)
               << " throughput_points_per_sec="
               << (wall_ms == 0.0
                       ? 0.0

@@ -31,6 +31,14 @@ public:
         const AlignmentConfig& config,
         const std::vector<RuntimeRelationConfig>& relations) const;
 
+    // Returns only the affected aligned samples plus the requested number of
+    // preceding samples needed by offset-based constraint terms.
+    // Ordered WindowData uses a local slice and boundary context; malformed or
+    // sparse input conservatively falls back to the full alignment path.
+    AlignmentResult alignWindowData(
+        const WindowData& window_data,
+        const AlignmentRange& range) const;
+
 private:
     const RuntimeConfigRegistry& configs_;
 };

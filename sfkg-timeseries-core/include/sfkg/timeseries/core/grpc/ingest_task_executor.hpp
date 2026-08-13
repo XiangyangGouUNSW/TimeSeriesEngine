@@ -75,6 +75,12 @@ private:
     std::mutex routing_mutex_;
     std::unordered_map<SequenceId, std::size_t> sequence_writers_;
     std::size_t next_writer_index_{0};
+    // The last accepted hot task for each sequence. A later task waits for
+    // these futures before entering the hot pipeline, preserving submission
+    // order for overlapping sequences while disjoint sequences still run on
+    // different hot workers.
+    std::unordered_map<SequenceId, std::shared_future<void>>
+        sequence_hot_tails_;
     std::condition_variable queue_condition_;
     const std::size_t cold_worker_count_;
     const std::size_t queue_capacity_;

@@ -51,25 +51,85 @@ cmake --build build-taos -j2
 ctest --test-dir build-taos --output-on-failure
 ```
 
-本地验证冷写分片和各阶段耗时时，可以运行独立压力工具。它不连接统一服务，默认模拟
-4 个生产者、100 个 Batch、每批 1000 条数据，共 100000 条；测试数据库使用独立进程名，
-结束后自动删除：
+本地验证冷写分片和各阶段耗时时，可以运行独立压力工具。它不连接统一服务。工具的参数为
+`批次数 每批点数 序列数 生产者数 writer数 window_size_ms profile hot_worker_count`；当模拟
+ETTh1 时，7 个序列
+共同组成一行时间戳，因此每批 1000 行应传入 7000 个点，并把窗口设置为 3600000 ms：
 
 ```bash
 env LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/home/yumiduo/sfkg/tdengine/lib \
-  ./build-taos/local-ingest-parallel-benchmark
+  ./build-taos/local-ingest-parallel-benchmark 50 7000 7 1 8 3600000 standard 1
 ```
 
-参数依次为 `批次数 每批点数 序列数 生产者数 writer数`，例如：
+上面的 `standard` 档位会注册一个简单单变量派生、一个单变量约束和一个多变量约束，
+是建议固定使用的 Core 压测口径。`mixed` 档位会在此基础上再增加一个多变量派生，用于
+额外测试派生复杂度。
+50 批等价于总计 50000 个时间戳、350000 个数据点，正好对应
+“持续 5 秒、总计 10000 个时间戳/秒、每个时间戳 7 个变量”的验收数据量。工具会尽快
+处理这批数据并报告实际吞吐量（不是人为限速 5 秒），同时输出时间戳行/秒和数据点/秒；
+因此验收换算关系是 `10000 行/秒 = 70000 点/秒`。若只想做短 smoke test，可以把 50
+改成 20；`profile` 可选 `none`、`single`、`standard`、`mixed`，分别表示不配置、只配置单变量、
+标准派生/约束配置、同时配置单变量和多变量派生/约束。最后一个参数控制热 worker 数；设为 4 可以测试不同批次并发处理，
+但同一序列仍由窗口内部的序列锁保护。工具会分别输出 `hot window`、`derived`、`constraint query` 和
+`constraint check` 的阶段耗时。若只想运行原来的通用规模，也可以省略参数，但其默认值不是
+ETTh1 验收口径。
+
+例如将总批次数扩大到 100：
 
 ```bash
 env LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/home/yumiduo/sfkg/tdengine/lib \
-  ./build-taos/local-ingest-parallel-benchmark 200 1000 20 4 8
+  ./build-taos/local-ingest-parallel-benchmark 100 7000 7 1 8 3600000 standard 1
 ```
 
 工具会输出每个 `sequence_id` 的固定 writer 分配、各 writer 的批次数和点数、路由一致性校验、
 解析、冷写、热窗口/派生刷新以及提交到完成的耗时。该工具不包含统一服务网络和约束
 异常通知 RPC 的耗时。
+
+上面的固定 baseline 使用一个有序 producer 和一个 hot worker，保证每个序列严格按时间递增，
+用于比较派生、约束和窗口本身的稳定耗时。若要额外测试跨批次热并发，可以使用：
+
+```bash
+env LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/home/yumiduo/sfkg/tdengine/lib \
+  ./build-taos/local-ingest-parallel-benchmark 50 7000 7 4 8 3600000 standard 4
+```
+
+但这个并发命令中的输入生产者若没有额外的按序调度，就不保证同一序列严格有序。该工具的输入生产者虽然可以并发，但若要验证“同一序列严格按时间递增”的增量路径，
+调用方必须保证同一个 `sequence_id` 的批次按时间顺序提交。多个线程本身不提供这个保证；
+如果发送端让后来的时间批次先到达，工具会把它记录为增量不安全并走保守路径。Core 本地
+吞吐量是从所有任务开始前的 `wall_start` 到所有任务完成后的 `wall_end` 统计的，公式为：
+
+```text
+throughput_points_per_sec = written_points / wall_seconds
+throughput_rows_per_sec = (written_points / sequence_count) / wall_seconds
+```
+
+因此它测量的是 Core 本地处理、热窗口和 TDengine 冷写的综合耗时，不包含统一服务到 Core
+之间的 gRPC 网络耗时。需要测网络链路时，应使用 `grpc_*_benchmark` 或统一服务的四线程
+调用日志，分别统计客户端请求耗时和 Core 侧 `rpc=ingestData elapsed_ms`。
+
+本仓库还提供了固定 ETTh1 口径的本机 gRPC 压测客户端。它从 `ETTh1.csv` 读取变量值，
+将时间轴重建为每秒一个点，使用 4 个 gRPC 客户端线程；每个序列固定归属于一个客户端线程，
+因此同一序列的时间戳严格递增，4 个线程之间仍然并发。总量为 50000 行、350000 点，
+冷写配置应与 Core 的 8/8 配置一致：
+
+```bash
+env LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/home/yumiduo/sfkg/tdengine/lib \
+  ./build-taos/etth1_grpc_ingest_benchmark \
+  --address 127.0.0.1:50051 \
+  --csv ../ETTh1.csv \
+  --rows 50000 \
+  --batch-rows 1000 \
+  --workers 4 \
+  --window-ms 3600000 \
+  --with-constraint \
+  --with-derived
+```
+
+该工具输出 `persisted_points`、完整 RPC 的平均/p50/p95 延迟以及
+`throughput_rows_per_sec` 和 `throughput_points_per_sec`。它的吞吐量包含客户端到 Core 的
+本机 gRPC 往返、Core 排队、冷热处理和 TDengine 写入；Core 端应同时打开采样诊断日志，
+用 `ingest_diag` 对照拆分 `hot_window_ms`、`derived_ms`、`constraint_check_ms` 和
+`handler_ms`。
 
 ## 正式运行方式
 
@@ -154,7 +214,7 @@ env \
   SFKG_TAOS_RAW_STABLE=raw_timeseries_data \
   SFKG_TAOS_WRITE_CONNECTIONS=8 \
   SFKG_INGEST_COLD_WORKERS=8 \
-  SFKG_INGEST_HOT_WORKERS=1 \
+  SFKG_INGEST_HOT_WORKERS=8 \
   SFKG_INGEST_QUEUE_CAPACITY=10 \
   SFKG_INGEST_DIAGNOSTIC_LOG=1 \
   SFKG_INGEST_DIAGNOSTIC_SAMPLE_EVERY=50 \
@@ -196,11 +256,23 @@ env \
 
 - `SFKG_TAOS_WRITE_CONNECTIONS`：TDengine 写连接数，默认 4，范围为 1～64；
 - `SFKG_INGEST_COLD_WORKERS`：冷数据写入工作线程数，默认 4；
-- `SFKG_INGEST_HOT_WORKERS`：热窗口工作线程数，默认 1；当前热窗口由全局锁保护，建议先保持 1；
+- `SFKG_INGEST_HOT_WORKERS`：不同 IngestData 批次的热处理工作线程数，默认 1；热窗口内部还会按
+  `sequence_id` 分片，同一批次中不同序列可以并行更新，同一序列仍由序列级写锁保护；
+  设置大于 1 后，不同批次也可以并行进入热处理。Core 会在任务接纳时为每个序列建立 FIFO
+  依赖，同一序列的后续批次必须等待前一批热处理完成；涉及不同序列的批次仍可并行。这样在
+  调用方保证同一序列按时间递增发送时，多 HOT worker 不会自行打乱增量更新顺序。跨序列查询
+  不承诺一个全局原子快照；
 - `SFKG_INGEST_QUEUE_CAPACITY`：最多同时接纳的 IngestData 批次数，默认 128。
 - `SFKG_INGEST_DIAGNOSTIC_LOG`：设为 `1` 开启 IngestData 阶段诊断日志，默认关闭；
 - `SFKG_INGEST_DIAGNOSTIC_SAMPLE_EVERY`：诊断采样间隔，默认 1。联调压力测试建议设为
   `100`，即每 100 个 IngestData 请求打印一条详细日志。
+- `SFKG_INGEST_DIAGNOSTIC_WRITERS`：设为 `1` 时追加每个冷写 writer 的分片和耗时明细，
+  默认关闭。默认 `ingest_diag` 会保留窗口序列锁等待、序列更新和窗口淘汰耗时，便于定位
+  热窗口瓶颈。
+- `SFKG_CONSTRAINT_NOTIFY_QUEUE_CAPACITY`：约束违反异步通知队列容量，默认 1024。约束检查
+  仍在热处理阶段完成，但向统一服务的 `ReceiveConstraintResult` RPC 由独立通知线程发送；
+  IngestData 返回的通知结果表示“已入队”，不再等待远端 RPC 完成。队列满时返回不可用状态，
+  不会静默丢弃异常事件。
 
 队列容量按批次而不是单条记录计算。一个请求只有在冷热两条通道都成功预留容量后才会
 执行；队列满时不会执行部分写入，调用方可以根据 `OPERATION_CODE_UNAVAILABLE` 重试。
@@ -209,7 +281,10 @@ env \
 首次看到一个 `sequence_id` 时按轮询方式分配 writer，之后一个 Batch 会按 `sequence_id`
 分组后投递到对应 writer。不同序列可以并行，同一序列不会在多个 writer 之间迁移。
 
-诊断日志只输出请求数量、各阶段耗时、writer 统计和结果状态，不输出具体数据值。示例：
+诊断日志只输出请求数量、各阶段耗时和结果状态，不输出具体数据值。`hot_window_ms` 是热窗口
+更新的墙钟耗时；`window_seq_wait_ms`/`window_evict_wait_ms` 是序列锁等待时间之和，可能因为
+多个序列并发而大于墙钟耗时。需要冷写分片明细时再额外设置
+`SFKG_INGEST_DIAGNOSTIC_WRITERS=1`。示例：
 
 ```bash
 SFKG_INGEST_DIAGNOSTIC_LOG=1 \

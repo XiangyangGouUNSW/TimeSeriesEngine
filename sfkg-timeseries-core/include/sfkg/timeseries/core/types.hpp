@@ -126,6 +126,15 @@ struct AlignmentConfig {
     std::optional<std::int64_t> bucket_interval;
 };
 
+// A range used by incremental alignment. prefix_samples keeps the samples
+// needed by constraint terms whose sample_offset points before the affected
+// anchor range.
+struct AlignmentRange {
+    Timestamp start_time{};
+    Timestamp end_time{};
+    std::size_t prefix_samples{0};
+};
+
 struct ConstraintTerm {
     std::string variable;
     double coefficient{};
@@ -169,6 +178,16 @@ struct WindowQuery {
     std::vector<SequenceId> sequence_ids;
     std::optional<Timestamp> start_time;
     std::optional<Timestamp> end_time;
+    // Optional interpolation/fill context. Returned context points may lie
+    // just outside [start_time, end_time); callers must filter them when
+    // they only need the requested range. The context is intentionally
+    // expressed in points, not timestamps, because constraint sample_offset
+    // is positional and input timestamps need not be uniform.
+    std::size_t preceding_points{0};
+    std::size_t following_points{0};
+    // Internal consumers such as incremental alignment can request a partial
+    // point set while retaining the actual live-window bounds as metadata.
+    bool preserve_window_bounds{false};
 };
 
 struct HistoryQuery {

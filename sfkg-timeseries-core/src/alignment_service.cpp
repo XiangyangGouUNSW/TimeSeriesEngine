@@ -3,9 +3,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <optional>
+#include <future>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -17,9 +20,112 @@
 namespace sfkg::timeseries::core {
 namespace {
 
-using BucketPoint = std::pair<Timestamp, const RawTimeseriesPoint*>;
-using BucketPoints = std::vector<std::vector<BucketPoint>>;
 using BucketValues = std::vector<std::optional<TimeseriesValue>>;
+
+bool numericValue(const TimeseriesValue& value, double* output);
+
+struct BucketAccumulator {
+    bool has_value{false};
+    Timestamp first_time{};
+    Timestamp last_time{};
+    TimeseriesValue first_value;
+    TimeseriesValue last_value;
+    double sum{0.0};
+    double minimum{0.0};
+    double maximum{0.0};
+    std::size_t count{0};
+
+    bool add(
+        const RawTimeseriesPoint& point,
+        BucketAggregation aggregation,
+        std::string* error) {
+        const bool was_empty = !has_value;
+        if (aggregation != BucketAggregation::First &&
+            aggregation != BucketAggregation::Last) {
+            double value = 0.0;
+            if (!numericValue(point.value, &value)) {
+                *error =
+                    "numeric aggregation requires finite numeric sequence values";
+                return false;
+            }
+            if (!has_value) {
+                minimum = value;
+                maximum = value;
+            } else {
+                minimum = std::min(minimum, value);
+                maximum = std::max(maximum, value);
+            }
+            sum += value;
+            ++count;
+            if (aggregation == BucketAggregation::Average &&
+                !std::isfinite(sum)) {
+                *error = "average aggregation produced a non-finite value";
+                return false;
+            }
+        }
+
+        if (was_empty) {
+            has_value = true;
+            first_time = point.time;
+            last_time = point.time;
+            first_value = point.value;
+            last_value = point.value;
+            return true;
+        }
+        // Points are normally ordered, but comparing timestamps preserves the
+        // First/Last semantics even for a manually constructed window.
+        if (point.time < first_time) {
+            first_time = point.time;
+            first_value = point.value;
+        }
+        if (point.time > last_time) {
+            last_time = point.time;
+            last_value = point.value;
+        }
+        return true;
+    }
+
+    bool finish(
+        BucketAggregation aggregation,
+        TimeseriesValue* output,
+        std::string* error) const {
+        if (!has_value) {
+            return false;
+        }
+        switch (aggregation) {
+            case BucketAggregation::First:
+                *output = first_value;
+                return true;
+            case BucketAggregation::Last:
+                *output = last_value;
+                return true;
+            case BucketAggregation::Average: {
+                const auto average = sum / static_cast<double>(count);
+                if (!std::isfinite(average)) {
+                    *error = "average aggregation produced a non-finite value";
+                    return false;
+                }
+                *output = average;
+                return true;
+            }
+            case BucketAggregation::Maximum:
+                *output = maximum;
+                return true;
+            case BucketAggregation::Minimum:
+                *output = minimum;
+                return true;
+        }
+        *error = "unknown bucket aggregation";
+        return false;
+    }
+};
+
+struct SequenceAlignmentResult {
+    BucketValues values;
+    std::size_t missing_values{0};
+    std::string error;
+    bool success{true};
+};
 
 BucketAggregation defaultAggregation(SeriesKind kind) {
     switch (kind) {
@@ -51,6 +157,23 @@ std::optional<std::int64_t> inferBucketInterval(
     const WindowData& window_data,
     const std::vector<SequenceAlignmentConfig>& sequences) {
     std::optional<std::uint64_t> smallest_gap;
+    const auto observeGap = [&smallest_gap](
+                                Timestamp previous,
+                                Timestamp current) {
+        // The caller guarantees current >= previous.  Unsigned subtraction
+        // also handles a valid range crossing Timestamp zero without signed
+        // overflow.
+        const auto gap = static_cast<std::uint64_t>(current) -
+            static_cast<std::uint64_t>(previous);
+        if (gap == 0 || gap > static_cast<std::uint64_t>(
+                std::numeric_limits<std::int64_t>::max())) {
+            return;
+        }
+        if (!smallest_gap || gap < *smallest_gap) {
+            smallest_gap = gap;
+        }
+    };
+
     for (const auto& sequence : sequences) {
         const auto found = window_data.sequence_values.find(
             sequence.sequence_id);
@@ -59,25 +182,34 @@ std::optional<std::int64_t> inferBucketInterval(
             continue;
         }
 
+        const auto& points = found->second;
+        bool sorted = true;
+        for (std::size_t index = 1; index < points.size(); ++index) {
+            if (points[index].time < points[index - 1].time) {
+                sorted = false;
+                break;
+            }
+        }
+
+        if (sorted) {
+            for (std::size_t index = 1; index < points.size(); ++index) {
+                observeGap(points[index - 1].time, points[index].time);
+            }
+            continue;
+        }
+
+        // Public callers may still construct an unsorted WindowData by hand.
+        // Preserve the old behavior for that case, but pay the copy/sort cost
+        // only when the input actually needs normalization.
         std::vector<Timestamp> times;
-        times.reserve(found->second.size());
-        for (const auto& point : found->second) {
+        times.reserve(points.size());
+        for (const auto& point : points) {
             times.push_back(point.time);
         }
         std::sort(times.begin(), times.end());
         times.erase(std::unique(times.begin(), times.end()), times.end());
         for (std::size_t index = 1; index < times.size(); ++index) {
-            // The timestamps are sorted, so unsigned subtraction gives the
-            // non-negative distance without signed overflow at the limits.
-            const auto gap = static_cast<std::uint64_t>(times[index]) -
-                static_cast<std::uint64_t>(times[index - 1]);
-            if (gap == 0 || gap > static_cast<std::uint64_t>(
-                    std::numeric_limits<std::int64_t>::max())) {
-                continue;
-            }
-            if (!smallest_gap || gap < *smallest_gap) {
-                smallest_gap = gap;
-            }
+            observeGap(times[index - 1], times[index]);
         }
     }
 
@@ -85,6 +217,45 @@ std::optional<std::int64_t> inferBucketInterval(
         return std::nullopt;
     }
     return static_cast<std::int64_t>(*smallest_gap);
+}
+
+// Returns true when all points are already ordered by timestamp and belong to
+// the sequence map entry. WindowService guarantees both invariants for query
+// results; checking them here keeps the public incremental overload equivalent
+// to the full alignment path for manually constructed WindowData as well.
+bool pointsAreSorted(
+    const SequenceId& sequence_id,
+    const std::vector<RawTimeseriesPoint>& points) {
+    for (std::size_t index = 1; index < points.size(); ++index) {
+        if (points[index].time < points[index - 1].time) {
+            return false;
+        }
+    }
+    for (const auto& point : points) {
+        if (point.sequence_id != sequence_id) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::size_t bucketIndexForTime(
+    Timestamp time,
+    Timestamp window_start,
+    Timestamp window_end,
+    std::size_t bucket_count,
+    std::uint64_t interval) {
+    if (time <= window_start) {
+        return 0;
+    }
+    if (time >= window_end) {
+        return bucket_count - 1;
+    }
+    const auto offset = static_cast<std::uint64_t>(time) -
+        static_cast<std::uint64_t>(window_start);
+    return std::min(
+        bucket_count - 1,
+        static_cast<std::size_t>(offset / interval));
 }
 
 bool numericValue(const TimeseriesValue& value, double* output) {
@@ -149,106 +320,55 @@ bool addNonNegativeTimestampOffset(
     return true;
 }
 
-bool aggregateBucket(
-    const std::vector<BucketPoint>& points,
-    BucketAggregation aggregation,
-    TimeseriesValue* output,
-    std::string* error) {
-    if (points.empty()) {
-        return false;
-    }
-
-    if (aggregation == BucketAggregation::First ||
-        aggregation == BucketAggregation::Last) {
-        const auto comparator = [](const BucketPoint& left,
-                                   const BucketPoint& right) {
-            return left.first < right.first;
-        };
-        const auto selected = aggregation == BucketAggregation::First
-            ? std::min_element(points.begin(), points.end(), comparator)
-            : std::max_element(points.begin(), points.end(), comparator);
-        *output = selected->second->value;
-        return true;
-    }
-
-    double accumulated = 0.0;
-    double selected = 0.0;
-    for (std::size_t index = 0; index < points.size(); ++index) {
-        double value = 0.0;
-        if (!numericValue(points[index].second->value, &value)) {
-            *error =
-                "numeric aggregation requires finite numeric sequence values";
-            return false;
-        }
-        if (aggregation == BucketAggregation::Average) {
-            accumulated += value;
-        } else if (index == 0 ||
-                   (aggregation == BucketAggregation::Maximum &&
-                    value > selected) ||
-                   (aggregation == BucketAggregation::Minimum &&
-                    value < selected)) {
-            selected = value;
-        }
-    }
-
-    if (aggregation == BucketAggregation::Average) {
-        accumulated /= static_cast<double>(points.size());
-        if (!std::isfinite(accumulated)) {
-            *error = "average aggregation produced a non-finite value";
-            return false;
-        }
-        *output = accumulated;
-    } else {
-        *output = selected;
-    }
-    return true;
-}
-
-std::optional<std::size_t> previousValue(
+void nearestValueIndices(
     const BucketValues& values,
-    std::size_t index) {
-    for (std::size_t current = index; current > 0; --current) {
-        if (values[current - 1]) {
-            return current - 1;
+    std::vector<std::optional<std::size_t>>* previous,
+    std::vector<std::optional<std::size_t>>* next) {
+    previous->assign(values.size(), std::nullopt);
+    next->assign(values.size(), std::nullopt);
+
+    std::optional<std::size_t> last;
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        (*previous)[index] = last;
+        if (values[index]) {
+            last = index;
         }
     }
-    return std::nullopt;
-}
-
-std::optional<std::size_t> nextValue(
-    const BucketValues& values,
-    std::size_t index) {
-    for (std::size_t current = index + 1; current < values.size(); ++current) {
+    last.reset();
+    for (std::size_t index = values.size(); index > 0; --index) {
+        const auto current = index - 1;
+        (*next)[current] = last;
         if (values[current]) {
-            return current;
+            last = current;
         }
     }
-    return std::nullopt;
 }
 
 void fillNearAt(
     const BucketValues& source,
     BucketValues* values,
-    std::size_t index) {
-    const auto previous = previousValue(source, index);
-    const auto next = nextValue(source, index);
-    if (!previous && !next) {
+    std::size_t index,
+    const std::vector<std::optional<std::size_t>>& previous,
+    const std::vector<std::optional<std::size_t>>& next) {
+    const auto& previous_index = previous[index];
+    const auto& next_index = next[index];
+    if (!previous_index && !next_index) {
         return;
     }
-    if (!previous) {
-        (*values)[index] = source[*next];
+    if (!previous_index) {
+        (*values)[index] = source[*next_index];
         return;
     }
-    if (!next) {
-        (*values)[index] = source[*previous];
+    if (!next_index) {
+        (*values)[index] = source[*previous_index];
         return;
     }
 
-    const auto previous_distance = index - *previous;
-    const auto next_distance = *next - index;
+    const auto previous_distance = index - *previous_index;
+    const auto next_distance = *next_index - index;
     (*values)[index] = previous_distance <= next_distance
-        ? source[*previous]
-        : source[*next];
+        ? source[*previous_index]
+        : source[*next_index];
 }
 
 bool fillLinear(BucketValues* values, std::string* error) {
@@ -265,15 +385,19 @@ bool fillLinear(BucketValues* values, std::string* error) {
         [](const auto& value) { return value.has_value(); }).base() - 1;
     const auto original = *values;
 
+    std::vector<std::optional<std::size_t>> previous;
+    std::vector<std::optional<std::size_t>> next;
+    nearestValueIndices(original, &previous, &next);
+
     for (std::size_t index = 0;
          index < static_cast<std::size_t>(first - values->begin());
          ++index) {
-        fillNearAt(original, values, index);
+        fillNearAt(original, values, index, previous, next);
     }
     for (std::size_t index = static_cast<std::size_t>(last - values->begin()) + 1;
          index < values->size();
          ++index) {
-        fillNearAt(original, values, index);
+        fillNearAt(original, values, index, previous, next);
     }
 
     std::size_t index = static_cast<std::size_t>(first - values->begin());
@@ -317,9 +441,12 @@ bool fillValues(
         case GapFillMethod::Near:
             {
             const auto original = *values;
+            std::vector<std::optional<std::size_t>> previous;
+            std::vector<std::optional<std::size_t>> next;
+            nearestValueIndices(original, &previous, &next);
             for (std::size_t index = 0; index < values->size(); ++index) {
                 if (!(*values)[index]) {
-                    fillNearAt(original, values, index);
+                    fillNearAt(original, values, index, previous, next);
                 }
             }
             return true;
@@ -371,6 +498,258 @@ AlignmentResult AlignmentService::alignWindowData(
     const WindowData& window_data,
     const std::vector<RuntimeRelationConfig>& relations) const {
     return alignWindowData(window_data, AlignmentConfig{}, relations);
+}
+
+AlignmentResult AlignmentService::alignWindowData(
+    const WindowData& window_data,
+    const AlignmentRange& range) const {
+    if (range.start_time > range.end_time) {
+        AlignmentResult result;
+        result.operation = internal::invalidArgument(
+            "alignment range start time must not be after end time");
+        return result;
+    }
+
+    const auto cropFullResult = [&](AlignmentResult result) {
+        if (result.operation.code != OperationCode::Ok &&
+            result.operation.code != OperationCode::PartialSuccess) {
+            return result;
+        }
+        auto& samples = result.aligned_data.samples;
+        const auto first = std::lower_bound(
+            samples.begin(), samples.end(), range.start_time,
+            [](const AlignedSample& sample, Timestamp time) {
+                return sample.time < time;
+            });
+        const auto last = std::upper_bound(
+            samples.begin(), samples.end(), range.end_time,
+            [](Timestamp time, const AlignedSample& sample) {
+                return time < sample.time;
+            });
+        const auto first_index = static_cast<std::size_t>(
+            first - samples.begin());
+        const auto prefix = std::min(range.prefix_samples, first_index);
+        const auto begin = first - static_cast<std::ptrdiff_t>(prefix);
+        samples = std::vector<AlignedSample>(
+            std::make_move_iterator(begin),
+            std::make_move_iterator(last));
+        result.operation = internal::ok(
+            samples.size(), "affected window data aligned");
+        return result;
+    };
+
+    // This overload is used by continuous constraint checks.  Do not build
+    // every bucket in the live window and crop it afterwards: retain only the
+    // affected bucket interval, the requested aligned prefix, and one bucket
+    // on either side for boundary fill/interpolation.
+    AlignmentConfig config;
+    config.sequences.reserve(window_data.sequence_values.size());
+    for (const auto& [sequence_id, points] : window_data.sequence_values) {
+        (void)points;
+        config.sequences.push_back({
+            sequence_id, VariableRole::Independent, std::nullopt, std::nullopt});
+    }
+    const auto interval = inferBucketInterval(window_data, config.sequences);
+    if (!interval || *interval <= 0) {
+        AlignmentResult result;
+        result.operation = internal::invalidArgument(
+            "cannot infer bucket_interval for incremental alignment");
+        return result;
+    }
+    config.bucket_interval = *interval;
+
+    // WindowService query results are ordered.  If a public caller supplies
+    // an unsorted window, keep the previous full-alignment behavior instead of
+    // applying lower_bound to invalid ranges.
+    for (const auto& [sequence_id, points] : window_data.sequence_values) {
+        if (!pointsAreSorted(sequence_id, points)) {
+            return cropFullResult(alignWindowData(window_data));
+        }
+    }
+
+    const auto span = static_cast<std::uint64_t>(
+        window_data.window_end_time) -
+        static_cast<std::uint64_t>(window_data.window_start_time);
+    const auto interval_u64 = static_cast<std::uint64_t>(*interval);
+    const auto bucket_count_u64 = span / interval_u64 +
+        (span % interval_u64 != 0 ? 1 : 0);
+    if (bucket_count_u64 == 0 || bucket_count_u64 >
+            std::numeric_limits<std::size_t>::max()) {
+        AlignmentResult result;
+        result.operation = internal::invalidArgument(
+            "incremental alignment window contains no valid buckets");
+        return result;
+    }
+    const auto bucket_count = static_cast<std::size_t>(bucket_count_u64);
+    const auto affected_first = bucketIndexForTime(
+        range.start_time,
+        window_data.window_start_time,
+        window_data.window_end_time,
+        bucket_count,
+        interval_u64);
+    const auto affected_last = bucketIndexForTime(
+        range.end_time,
+        window_data.window_start_time,
+        window_data.window_end_time,
+        bucket_count,
+        interval_u64);
+    const auto target_first = affected_first > range.prefix_samples
+        ? affected_first - range.prefix_samples
+        : 0;
+    const auto target_last = std::max(affected_first, affected_last);
+    const auto local_first = target_first == 0 ? 0 : target_first - 1;
+    const auto local_last = target_last + 1 < bucket_count
+        ? target_last + 1
+        : bucket_count - 1;
+
+    Timestamp local_start = window_data.window_start_time;
+    if (!addNonNegativeTimestampOffset(
+            window_data.window_start_time,
+            static_cast<std::uint64_t>(local_first) * interval_u64,
+            &local_start)) {
+        AlignmentResult result;
+        result.operation = internal::invalidArgument(
+            "incremental alignment start overflowed timestamp range");
+        return result;
+    }
+    Timestamp local_end = window_data.window_end_time;
+    if (local_last + 1 < bucket_count) {
+        if (!addNonNegativeTimestampOffset(
+                window_data.window_start_time,
+                static_cast<std::uint64_t>(local_last + 1) * interval_u64,
+                &local_end)) {
+            AlignmentResult result;
+            result.operation = internal::invalidArgument(
+                "incremental alignment end overflowed timestamp range");
+            return result;
+        }
+    }
+
+    Timestamp target_start = window_data.window_start_time;
+    Timestamp target_end = window_data.window_end_time;
+    if (!addNonNegativeTimestampOffset(
+            window_data.window_start_time,
+            static_cast<std::uint64_t>(target_first) * interval_u64,
+            &target_start)) {
+        return cropFullResult(alignWindowData(window_data));
+    }
+    if (target_last + 1 < bucket_count &&
+        !addNonNegativeTimestampOffset(
+            window_data.window_start_time,
+            static_cast<std::uint64_t>(target_last + 1) * interval_u64,
+            &target_end)) {
+        return cropFullResult(alignWindowData(window_data));
+    }
+
+    WindowData local_window;
+    local_window.window_start_time = local_start;
+    local_window.window_end_time = local_end;
+    for (const auto& [sequence_id, source_points] : window_data.sequence_values) {
+        auto& selected = local_window.sequence_values[sequence_id];
+        const auto local_begin = std::lower_bound(
+            source_points.begin(), source_points.end(), local_start,
+            [](const RawTimeseriesPoint& point, Timestamp time) {
+                return point.time < time;
+            });
+        const auto local_finish = std::lower_bound(
+            local_begin, source_points.end(), local_end,
+            [](const RawTimeseriesPoint& point, Timestamp time) {
+                return point.time < time;
+            });
+        const auto target_begin = std::lower_bound(
+            local_begin, local_finish, target_start,
+            [](const RawTimeseriesPoint& point, Timestamp time) {
+                return point.time < time;
+            });
+        const auto first_target_end = [&] {
+            if (target_first + 1 >= bucket_count) {
+                return window_data.window_end_time;
+            }
+            Timestamp value = window_data.window_end_time;
+            (void)addNonNegativeTimestampOffset(
+                window_data.window_start_time,
+                static_cast<std::uint64_t>(target_first + 1) * interval_u64,
+                &value);
+            return value;
+        }();
+        const auto last_target_start = [&] {
+            Timestamp value = window_data.window_start_time;
+            (void)addNonNegativeTimestampOffset(
+                window_data.window_start_time,
+                static_cast<std::uint64_t>(target_last) * interval_u64,
+                &value);
+            return value;
+        }();
+        const auto first_target_finish = std::lower_bound(
+            target_begin, local_finish, first_target_end,
+            [](const RawTimeseriesPoint& point, Timestamp time) {
+                return point.time < time;
+            });
+        const auto last_target_begin = std::lower_bound(
+            local_begin, local_finish, last_target_start,
+            [](const RawTimeseriesPoint& point, Timestamp time) {
+                return point.time < time;
+            });
+        const auto right_context_begin = std::lower_bound(
+            local_begin, local_finish, target_end,
+            [](const RawTimeseriesPoint& point, Timestamp time) {
+                return point.time < time;
+            });
+        const bool has_left_context = target_begin != local_begin;
+        const bool has_right_context = right_context_begin != local_finish;
+        const bool has_first_target_value =
+            target_begin != first_target_finish;
+        const bool has_last_target_value =
+            last_target_begin != local_finish &&
+            last_target_begin->time < target_end;
+
+        selected.assign(local_begin, local_finish);
+        // If a boundary bucket is empty and the local slice has no usable
+        // fill context, the value may depend on a much older/newer point.
+        // Fall back to the full algorithm in that sparse case; this keeps the
+        // incremental fast path exact for irregular data as well.
+        if ((target_first != 0 && !has_first_target_value &&
+             !has_left_context) ||
+            (target_last + 1 < bucket_count && !has_last_target_value &&
+             !has_right_context)) {
+            return cropFullResult(alignWindowData(window_data));
+        }
+    }
+
+    auto result = alignWindowData(local_window, config, {});
+    if (result.operation.code != OperationCode::Ok &&
+        result.operation.code != OperationCode::PartialSuccess) {
+        return result;
+    }
+    auto& samples = result.aligned_data.samples;
+    if (samples.empty()) {
+        return result;
+    }
+
+    const auto target_offset = target_first - local_first;
+    const auto target_size = target_last - target_first + 1;
+    if (target_offset >= samples.size()) {
+        samples.clear();
+    } else {
+        const auto finish_offset = std::min(
+            samples.size(), target_offset + target_size);
+        std::vector<AlignedSample> cropped(
+            std::make_move_iterator(samples.begin() +
+                                    static_cast<std::ptrdiff_t>(target_offset)),
+            std::make_move_iterator(samples.begin() +
+                                    static_cast<std::ptrdiff_t>(finish_offset)));
+        samples = std::move(cropped);
+    }
+    if (samples.empty()) {
+        result.aligned_data.window_start_time = range.start_time;
+        result.aligned_data.window_end_time = range.end_time;
+    } else {
+        result.aligned_data.window_start_time = samples.front().time;
+        result.aligned_data.window_end_time = samples.back().time;
+    }
+    result.operation = internal::ok(
+        samples.size(), "affected window data aligned");
+    return result;
 }
 
 AlignmentResult AlignmentService::alignWindowData(
@@ -547,29 +926,30 @@ AlignmentResult AlignmentService::alignWindowData(
     result.aligned_data.window_end_time = window_data.window_end_time;
     result.aligned_data.samples.resize(bucket_count);
 
-    std::size_t missing_values = 0;
-    for (std::size_t sequence_index = 0;
-         sequence_index < config.sequences.size();
-         ++sequence_index) {
+    const auto alignSequence = [&](std::size_t sequence_index) {
+        SequenceAlignmentResult sequence_result;
         const auto& sequence_config = config.sequences[sequence_index];
         const auto source = window_data.sequence_values.find(
             sequence_config.sequence_id);
         const auto shift_it = shifts.find(sequence_config.sequence_id);
         const auto shift = shift_it == shifts.end() ? 0 : shift_it->second;
 
-        BucketPoints buckets(bucket_count);
+        std::string error;
+        std::vector<BucketAccumulator> buckets(bucket_count);
         if (source != window_data.sequence_values.end()) {
             for (const auto& point : source->second) {
                 if (point.sequence_id != sequence_config.sequence_id) {
-                    result.operation = internal::invalidArgument(
-                        "window point sequence_id does not match its map key");
-                    return result;
+                    sequence_result.success = false;
+                    sequence_result.error =
+                        "window point sequence_id does not match its map key";
+                    return sequence_result;
                 }
                 Timestamp effective_time = 0;
                 if (!addTimestamp(point.time, shift, &effective_time)) {
-                    result.operation = internal::invalidArgument(
-                        "relation lag overflowed timestamp range");
-                    return result;
+                    sequence_result.success = false;
+                    sequence_result.error =
+                        "relation lag overflowed timestamp range";
+                    return sequence_result;
                 }
                 if (effective_time < window_data.window_start_time ||
                     effective_time >= window_data.window_end_time) {
@@ -582,41 +962,102 @@ AlignmentResult AlignmentService::alignWindowData(
                 if (bucket_index >= bucket_count) {
                     continue;
                 }
-                buckets[bucket_index].push_back({effective_time, &point});
+                if (!buckets[bucket_index].add(
+                        point, *sequence_config.aggregation, &error)) {
+                    sequence_result.success = false;
+                    sequence_result.error = error;
+                    return sequence_result;
+                }
             }
         }
 
-        BucketValues values(bucket_count);
+        sequence_result.values.resize(bucket_count);
         for (std::size_t bucket = 0; bucket < bucket_count; ++bucket) {
-            if (buckets[bucket].empty()) {
+            if (!buckets[bucket].has_value) {
                 continue;
             }
             TimeseriesValue value;
-            std::string error;
-            if (!aggregateBucket(
-                    buckets[bucket], *sequence_config.aggregation,
-                    &value, &error)) {
-                result.operation = internal::invalidArgument(error);
-                return result;
+            if (!buckets[bucket].finish(
+                    *sequence_config.aggregation, &value, &error)) {
+                sequence_result.success = false;
+                sequence_result.error = error;
+                return sequence_result;
             }
-            values[bucket] = std::move(value);
+            sequence_result.values[bucket] = std::move(value);
         }
 
         std::string fill_error;
         if (!fillValues(
-                &values, *sequence_config.fill_method, &fill_error)) {
-            result.operation = internal::invalidArgument(fill_error);
-            return result;
+                &sequence_result.values,
+                *sequence_config.fill_method,
+                &fill_error)) {
+            sequence_result.success = false;
+            sequence_result.error = fill_error;
+            return sequence_result;
         }
 
-        for (std::size_t bucket = 0; bucket < bucket_count; ++bucket) {
-            if (values[bucket]) {
-                result.aligned_data.samples[bucket].values.emplace(
-                    sequence_config.sequence_id, *values[bucket]);
-            } else {
-                ++missing_values;
+        for (const auto& value : sequence_result.values) {
+            if (!value) {
+                ++sequence_result.missing_values;
             }
         }
+        return sequence_result;
+    };
+
+    std::vector<SequenceAlignmentResult> sequence_results(
+        config.sequences.size());
+    constexpr std::size_t kParallelAlignmentThreshold = 16;
+    constexpr std::size_t kMaxParallelAlignmentWorkers = 8;
+    if (config.sequences.size() < kParallelAlignmentThreshold) {
+        for (std::size_t index = 0; index < config.sequences.size(); ++index) {
+            sequence_results[index] = alignSequence(index);
+        }
+    } else {
+        const auto hardware_threads = std::thread::hardware_concurrency();
+        const auto available_workers = hardware_threads == 0
+            ? std::size_t{2}
+            : std::min<std::size_t>(
+                  kMaxParallelAlignmentWorkers, hardware_threads);
+        const auto worker_count = std::min<std::size_t>(
+            config.sequences.size(),
+            std::max<std::size_t>(2, available_workers));
+        std::vector<std::future<void>> workers;
+        workers.reserve(worker_count);
+        for (std::size_t worker = 0; worker < worker_count; ++worker) {
+            workers.push_back(std::async(
+                std::launch::async,
+                [&, worker] {
+                    for (std::size_t index = worker;
+                         index < config.sequences.size();
+                         index += worker_count) {
+                        sequence_results[index] = alignSequence(index);
+                    }
+                }));
+        }
+        for (auto& worker : workers) {
+            worker.get();
+        }
+    }
+
+    std::size_t missing_values = 0;
+    for (std::size_t sequence_index = 0;
+         sequence_index < config.sequences.size();
+         ++sequence_index) {
+        const auto& sequence_result = sequence_results[sequence_index];
+        if (!sequence_result.success) {
+            result.operation = internal::invalidArgument(
+                sequence_result.error);
+            return result;
+        }
+        const auto& sequence_config = config.sequences[sequence_index];
+        for (std::size_t bucket = 0; bucket < bucket_count; ++bucket) {
+            if (sequence_result.values[bucket]) {
+                result.aligned_data.samples[bucket].values.emplace(
+                    sequence_config.sequence_id,
+                    *sequence_result.values[bucket]);
+            }
+        }
+        missing_values += sequence_result.missing_values;
     }
 
     for (std::size_t bucket = 0; bucket < bucket_count; ++bucket) {
