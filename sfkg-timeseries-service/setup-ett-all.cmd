@@ -34,13 +34,13 @@ for %%i in (ot hufl hull mufl mull lufl lull) do (
     echo   %%i  done
 )
 
-REM ── Step 3: 1 constraint ────────────────────────────────────
-echo.
-echo --- [3/5] Creating constraint ---
-curl -s -X POST %BASE_URL%/api/timeseries/semantic/constraints ^
-    -H "Content-Type: application/json" ^
-    --data-binary "@%JSON_DIR%\ett-constraint.json"
-echo   constraint done
+@REM REM ── Step 3: 1 constraint ────────────────────────────────────
+@REM echo.
+@REM echo --- [3/5] Creating constraint ---
+@REM curl -s -X POST %BASE_URL%/api/timeseries/semantic/constraints ^
+@REM     -H "Content-Type: application/json" ^
+@REM     --data-binary "@%JSON_DIR%\ett-constraint.json"
+@REM echo   constraint done
 
 REM ── Step 4: 1 relation ──────────────────────────────────────
 echo.

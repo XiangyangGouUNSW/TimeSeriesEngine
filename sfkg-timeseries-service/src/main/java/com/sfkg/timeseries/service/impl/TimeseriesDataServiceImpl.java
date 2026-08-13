@@ -19,6 +19,7 @@ import com.sfkg.timeseries.common.BusinessException;
 import com.sfkg.timeseries.dto.HistoryDataQueryRequest;
 import com.sfkg.timeseries.dto.TimeseriesDataSaveRequest;
 import com.sfkg.timeseries.entity.TimeseriesDataPoint;
+import com.sfkg.timeseries.mapper.TimeseriesDataFileMapper;
 import com.sfkg.timeseries.monitor.IngestThroughputMonitor;
 import com.sfkg.timeseries.service.TimeseriesDataService;
 import com.sfkg.timeseries.vo.HistoryDataVO;
@@ -32,16 +33,19 @@ public class TimeseriesDataServiceImpl implements TimeseriesDataService {
     private final TimeseriesCoreGrpcClient coreGrpcClient;
     private final IngestBufferPool ingestBufferPool;
     private final IngestThroughputMonitor throughputMonitor;
+    private final TimeseriesDataFileMapper dataFileMapper;
 
     public TimeseriesDataServiceImpl(
             TimeseriesMemoryCache memoryCache,
             TimeseriesCoreGrpcClient coreGrpcClient,
             IngestBufferPool ingestBufferPool,
-            IngestThroughputMonitor throughputMonitor) {
+            IngestThroughputMonitor throughputMonitor,
+            TimeseriesDataFileMapper dataFileMapper) {
         this.memoryCache = memoryCache;
         this.coreGrpcClient = coreGrpcClient;
         this.ingestBufferPool = ingestBufferPool;
         this.throughputMonitor = throughputMonitor;
+        this.dataFileMapper = dataFileMapper;
     }
 
     @Override
@@ -50,8 +54,7 @@ public class TimeseriesDataServiceImpl implements TimeseriesDataService {
             throw new BusinessException("ingest points are required");
         }
 
-        // ── File / cache writes removed from ingest hot path ──────────
-        // (data is forwarded to Core via the buffer-pool; no local persistence for timeseries points)
+        // ── Local persistence disabled (removed from ingest hot path) ──
         // List<TimeseriesDataPoint> localPoints = convertToDataPoints(request);
         // dataFileMapper.appendDataPoints(localPoints);
         // memoryCache.putTimeseriesDataPoints(localPoints);

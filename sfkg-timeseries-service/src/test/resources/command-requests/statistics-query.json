@@ -1,0 +1,6 @@
+{
+  "sequenceIds": ["seq-001", "seq-002", "seq-003"],
+  "dependentSequenceId": "seq-001",
+  "startTime": "2025-01-01T00:00:00",
+  "endTime": "2025-01-02T00:00:00"
+}

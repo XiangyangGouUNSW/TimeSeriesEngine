@@ -16,6 +16,12 @@ import com.sfkg.timeseries.entity.TimeseriesDataPoint;
 import com.sfkg.timeseries.entity.TimeseriesForecastTask;
 import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.entity.TimeseriesRelation;
+import com.sfkg.timeseries.grpc.AlignWindowDataRequest;
+import com.sfkg.timeseries.grpc.AlignWindowDataResponse;
+import com.sfkg.timeseries.grpc.AlignedWindowData;
+import com.sfkg.timeseries.grpc.AlignmentConfig;
+import com.sfkg.timeseries.grpc.ComputeStatisticsRequest;
+import com.sfkg.timeseries.grpc.ComputeStatisticsResponse;
 import com.sfkg.timeseries.grpc.ConstraintRule;
 import com.sfkg.timeseries.grpc.ConstraintTerm;
 import com.sfkg.timeseries.grpc.DerivedBinaryExpression;
@@ -41,6 +47,7 @@ import com.sfkg.timeseries.grpc.RuntimeInstanceConfig;
 import com.sfkg.timeseries.grpc.RuntimeRelationConfig;
 import com.sfkg.timeseries.grpc.RuntimeRelationSource;
 import com.sfkg.timeseries.grpc.RuntimeWindowConfig;
+import com.sfkg.timeseries.grpc.SequenceAlignmentConfig;
 import com.sfkg.timeseries.grpc.SeriesKind;
 import com.sfkg.timeseries.grpc.SyncConfigResponse;
 import com.sfkg.timeseries.grpc.SyncConstraintsRequest;
@@ -58,6 +65,7 @@ import com.sfkg.timeseries.vo.HistoryDataVO;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -701,6 +709,84 @@ public class TimeseriesCoreGrpcClient {
         } catch (StatusRuntimeException e) {
             LOG.warn("[{}] queryWindowData failed: code={} desc={}", SERVICE_NAME, e.getStatus().getCode(), e.getStatus().getDescription());
             return Map.of("error", e.getStatus().getDescription());
+        }
+    }
+
+    // ── alignment + statistics ────────────────────────────────────────
+
+    /**
+     * Align the Core hot window for the given sequences using a default
+     * alignment config (every sequence with unspecified role, Core picks
+     * default aggregation / gap-fill).
+     */
+    public AlignedWindowData alignWindowData(List<String> seqIds,
+                                             LocalDateTime startTime, LocalDateTime endTime) {
+        String address = grpcClientProperties.getCoreAddress();
+        if (isBlank(address)) {
+            LOG.warn("[{}] alignWindowData skipped: address not configured", SERVICE_NAME);
+            return null;
+        }
+        QueryWindowDataRequest.Builder wq = QueryWindowDataRequest.newBuilder()
+                .addAllSequenceIds(seqIds != null ? seqIds : List.of());
+        if (startTime != null) {
+            wq.setStartTime(startTime.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+        }
+        if (endTime != null) {
+            wq.setEndTime(endTime.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+        }
+        AlignmentConfig.Builder ac = AlignmentConfig.newBuilder();
+        for (String seqId : seqIds != null ? seqIds : List.<String>of()) {
+            ac.addSequences(SequenceAlignmentConfig.newBuilder().setSequenceId(seqId).build());
+        }
+        AlignWindowDataRequest req = AlignWindowDataRequest.newBuilder()
+                .setWindowQuery(wq.build())
+                .setConfig(ac.build())
+                .build();
+        ManagedChannel channel = channelRegistry.getChannel(address);
+        try {
+            AlignWindowDataResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
+                    .withDeadlineAfter(5, TimeUnit.SECONDS)
+                    .alignWindowData(req);
+            LOG.info("[{}] <- alignWindowData code={} samples={}",
+                    SERVICE_NAME, resp.getOperation().getCode(),
+                    resp.hasAlignedData() ? resp.getAlignedData().getSamplesCount() : 0);
+            return resp.hasAlignedData() ? resp.getAlignedData() : null;
+        } catch (StatusRuntimeException e) {
+            LOG.warn("[{}] <- alignWindowData FAILED: code={} desc={}",
+                    SERVICE_NAME, e.getStatus().getCode(), e.getStatus().getDescription());
+            return null;
+        }
+    }
+
+    /**
+     * Compute basic statistics (per-sequence metrics + correlation vector)
+     * over the given aligned data.
+     */
+    public ComputeStatisticsResponse computeBasicStatistics(AlignedWindowData alignedData) {
+        String address = grpcClientProperties.getCoreAddress();
+        if (isBlank(address)) {
+            LOG.warn("[{}] computeBasicStatistics skipped: address not configured", SERVICE_NAME);
+            return null;
+        }
+        if (alignedData == null) {
+            return null;
+        }
+        ComputeStatisticsRequest req = ComputeStatisticsRequest.newBuilder()
+                .setAlignedData(alignedData)
+                .build();
+        ManagedChannel channel = channelRegistry.getChannel(address);
+        try {
+            ComputeStatisticsResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
+                    .withDeadlineAfter(5, TimeUnit.SECONDS)
+                    .computeBasicStatistics(req);
+            LOG.info("[{}] <- computeBasicStatistics code={} metrics={} hasCorrelation={}",
+                    SERVICE_NAME, resp.getOperation().getCode(),
+                    resp.getSequenceMetricsCount(), resp.hasCorrelationVector());
+            return resp;
+        } catch (StatusRuntimeException e) {
+            LOG.warn("[{}] <- computeBasicStatistics FAILED: code={} desc={}",
+                    SERVICE_NAME, e.getStatus().getCode(), e.getStatus().getDescription());
+            return null;
         }
     }
 

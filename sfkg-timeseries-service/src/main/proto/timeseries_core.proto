@@ -18,6 +18,8 @@ service TimeseriesCoreService {
   rpc queryWindowData (QueryWindowDataRequest) returns (QueryWindowDataResponse);
   rpc syncWindowConfig (SyncWindowConfigRequest) returns (SyncConfigResponse);
   rpc syncDerivedSeriesConfigs (SyncDerivedSeriesConfigsRequest) returns (SyncConfigResponse);
+  rpc alignWindowData (AlignWindowDataRequest) returns (AlignWindowDataResponse);
+  rpc computeBasicStatistics (ComputeStatisticsRequest) returns (ComputeStatisticsResponse);
 }
 
 // ── Shared enums & messages ───────────────────────────────────────
@@ -344,4 +346,109 @@ message DerivedSeriesConfig {
 
 message SyncDerivedSeriesConfigsRequest {
   repeated DerivedSeriesConfig items = 1;
+}
+
+// ── Alignment ─────────────────────────────────────────────────────
+
+enum VariableRole {
+  VARIABLE_ROLE_UNSPECIFIED = 0;
+  VARIABLE_ROLE_INDEPENDENT = 1;
+  VARIABLE_ROLE_DEPENDENT = 2;
+}
+
+enum BucketAggregation {
+  BUCKET_AGGREGATION_UNSPECIFIED = 0;
+  BUCKET_AGGREGATION_FIRST = 1;
+  BUCKET_AGGREGATION_LAST = 2;
+  BUCKET_AGGREGATION_AVERAGE = 3;
+  BUCKET_AGGREGATION_MAXIMUM = 4;
+  BUCKET_AGGREGATION_MINIMUM = 5;
+}
+
+enum GapFillMethod {
+  GAP_FILL_METHOD_UNSPECIFIED = 0;
+  GAP_FILL_METHOD_NEAR = 1;
+  GAP_FILL_METHOD_PREVIOUS = 2;
+  GAP_FILL_METHOD_NEXT = 3;
+  GAP_FILL_METHOD_LINEAR = 4;
+}
+
+message SequenceAlignmentConfig {
+  string sequence_id = 1;
+  VariableRole role = 2;
+  optional BucketAggregation aggregation = 3;
+  optional GapFillMethod fill_method = 4;
+}
+
+message AlignmentConfig {
+  repeated SequenceAlignmentConfig sequences = 1;
+  optional int64 bucket_interval = 2;
+}
+
+message AlignedValue {
+  string sequence_id = 1;
+  TimeseriesValue value = 2;
+}
+
+message AlignedSample {
+  int64 time = 1;
+  repeated AlignedValue values = 2;
+}
+
+message AlignedWindowData {
+  int64 window_start_time = 1;
+  int64 window_end_time = 2;
+  repeated AlignedSample samples = 3;
+}
+
+message AlignWindowDataRequest {
+  oneof source {
+    WindowData data = 1;
+    QueryWindowDataRequest window_query = 3;
+  }
+  AlignmentConfig config = 2;
+  repeated string relation_ids = 4;
+}
+
+message AlignWindowDataResponse {
+  OperationResult operation = 1;
+  AlignedWindowData aligned_data = 2;
+}
+
+// ── Statistics ────────────────────────────────────────────────────
+
+message NamedMetric {
+  string name = 1;
+  TimeseriesValue value = 2;
+}
+
+message SequenceMetric {
+  string sequence_id = 1;
+  repeated NamedMetric metrics = 2;
+}
+
+message SequenceCorrelation {
+  string independent_sequence_id = 1;
+  double coefficient = 2;
+}
+
+message CorrelationVector {
+  string dependent_sequence_id = 1;
+  repeated SequenceCorrelation correlations = 2;
+}
+
+message ComputeStatisticsRequest {
+  oneof source {
+    WindowData window_data = 1;
+    AlignedWindowData aligned_data = 2;
+    QueryWindowDataRequest window_query = 4;
+  }
+  AlignmentConfig alignment_config = 3;
+  string relation_id = 5;
+}
+
+message ComputeStatisticsResponse {
+  OperationResult operation = 1;
+  repeated SequenceMetric sequence_metrics = 2;
+  CorrelationVector correlation_vector = 3;
 }

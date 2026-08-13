@@ -23,17 +23,17 @@ timeseries:
   grpc:
     server-port: ${TIMESERIES_GRPC_SERVER_PORT:9105}
     analysis-receiver-port: ${TIMESERIES_GRPC_ANALYSIS_RECEIVER_PORT:9106}
-    core-address: ${TIMESERIES_CORE_GRPC_ADDRESS:222.29.156.141:50051}
+    core-address: ${TIMESERIES_CORE_GRPC_ADDRESS:localhost:50051}
     anomaly-address: ${TIMESERIES_ANOMALY_GRPC_ADDRESS:localhost:50053}
     forecast-address: ${TIMESERIES_FORECAST_GRPC_ADDRESS:localhost:50053}
     decision-address: ${TIMESERIES_DECISION_GRPC_ADDRESS:localhost:50053}
 
   # ── Ingest buffer-pool (hash-partitioned async pipeline) ─────────
   ingest:
-    sender-threads: ${INGEST_SENDER_THREADS:4}               # Sender 线程数 (seq_id hash % N)
+    sender-threads: ${INGEST_SENDER_THREADS:1}               # Sender 线程数 (seq_id hash % N)
     batch-size: ${INGEST_BATCH_SIZE:1000}                     # 攒够多少点发送
     batch-timeout-ms: ${INGEST_BATCH_TIMEOUT_MS:500}         # 超时强制发送 (ms)
-    queue-capacity: ${INGEST_QUEUE_CAPACITY:100000}           # 每线程队列上限
+    queue-capacity: ${INGEST_QUEUE_CAPACITY:1000000}           # 每线程队列上限
 
   # ── Throughput monitor (per-second log to logs/throughput.log) ──
   monitor:
