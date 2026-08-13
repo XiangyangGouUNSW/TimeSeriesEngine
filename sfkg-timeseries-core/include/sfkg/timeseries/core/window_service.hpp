@@ -6,6 +6,8 @@
 #include <optional>
 #include <shared_mutex>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "sfkg/timeseries/core/types.hpp"
@@ -19,9 +21,20 @@ namespace sfkg::timeseries::core {
 // newly affected suffix. Out-of-order corrections can still make
 // incremental_safe false because they may change interpolation or ordering
 // dependencies outside the incoming suffix.
+struct SequenceWindowUpdate {
+    std::optional<Timestamp> affected_start_time;
+    std::optional<Timestamp> affected_end_time;
+    bool incremental_safe{false};
+    bool window_evicted{false};
+};
+
 struct WindowUpdateResult {
     OperationResult operation;
     std::vector<SequenceId> changed_sequence_ids;
+    // Incremental consumers must use the status for their dependency set,
+    // not the aggregate flag below. A derived formula or constraint can stay
+    // incremental when an unrelated sequence received a late correction.
+    std::unordered_map<SequenceId, SequenceWindowUpdate> sequence_updates;
     std::optional<Timestamp> affected_start_time;
     std::optional<Timestamp> affected_end_time;
     std::optional<Timestamp> window_start_time;
@@ -119,7 +132,9 @@ private:
         std::optional<std::int64_t> window_size_override);
     bool pruneExpiredPoints(
         Timestamp window_start,
-        const std::vector<std::shared_ptr<SequenceWindow>>& sequences,
+        const std::vector<std::pair<SequenceId, std::shared_ptr<SequenceWindow>>>&
+            sequences,
+        std::unordered_set<SequenceId>* evicted_sequence_ids = nullptr,
         double* lock_wait_ms = nullptr,
         double* update_ms = nullptr);
 

@@ -2,6 +2,7 @@
 /build-*/
 /.cache/
 /stdout/
+.runtime/
 
 # CMake configure/build files that may be created outside build*/.
 CMakeCache.txt

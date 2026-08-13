@@ -51,6 +51,80 @@ struct NumericCursor {
 
 using NumericCursorMap = std::unordered_map<SequenceId, NumericCursor>;
 
+struct IncrementalRefreshRange {
+    Timestamp start_time{0};
+    Timestamp end_time{0};
+    bool window_evicted{false};
+};
+
+// Resolve incremental safety for exactly the dependency set of one derived
+// formula. The aggregate WindowUpdateResult::incremental_safe is retained for
+// diagnostics/backward compatibility, but must not make an unrelated source
+// force this formula through a full refresh.
+std::optional<IncrementalRefreshRange> incrementalRangeFor(
+    const WindowUpdateResult* update,
+    const std::vector<SequenceId>& sequence_ids) {
+    if (update == nullptr || sequence_ids.empty()) {
+        return std::nullopt;
+    }
+
+    // Keep compatibility with manually constructed WindowUpdateResult values
+    // used by older callers/tests before per-sequence state was introduced.
+    if (update->sequence_updates.empty()) {
+        if (!update->incremental_safe ||
+            !update->affected_start_time ||
+            !update->affected_end_time) {
+            return std::nullopt;
+        }
+        auto range = IncrementalRefreshRange{
+            *update->affected_start_time,
+            *update->affected_end_time,
+            update->window_evicted};
+        if (range.window_evicted && update->window_start_time) {
+            range.start_time = std::min(
+                range.start_time, *update->window_start_time);
+        }
+        return range;
+    }
+
+    std::optional<IncrementalRefreshRange> range;
+    for (const auto& sequence_id : sequence_ids) {
+        if (std::find(
+                update->changed_sequence_ids.begin(),
+                update->changed_sequence_ids.end(),
+                sequence_id) == update->changed_sequence_ids.end()) {
+            // An unchanged dependency is still queried as context, but it
+            // does not make the formula's affected range unsafe.
+            continue;
+        }
+        const auto found = update->sequence_updates.find(sequence_id);
+        if (found == update->sequence_updates.end() ||
+            !found->second.incremental_safe ||
+            !found->second.affected_start_time ||
+            !found->second.affected_end_time) {
+            return std::nullopt;
+        }
+        if (!range) {
+            range = IncrementalRefreshRange{
+                *found->second.affected_start_time,
+                *found->second.affected_end_time,
+                found->second.window_evicted};
+        } else {
+            range->start_time = std::min(
+                range->start_time, *found->second.affected_start_time);
+            range->end_time = std::max(
+                range->end_time, *found->second.affected_end_time);
+            range->window_evicted = range->window_evicted ||
+                found->second.window_evicted;
+        }
+    }
+    if (range && range->window_evicted && update->window_start_time) {
+        range->start_time = std::min(
+            range->start_time, *update->window_start_time);
+    }
+    return range;
+}
+
 enum class EvaluationStatus {
     Value,
     Missing,
@@ -309,11 +383,6 @@ OperationResult DerivedSeriesService::refreshInternal(
     if (update != nullptr && !isSuccessful(update->operation.code)) {
         return update->operation;
     }
-    const bool incremental = update != nullptr &&
-        update->incremental_safe &&
-        update->affected_start_time.has_value() &&
-        update->affected_end_time.has_value();
-
     std::unique_lock<std::mutex> full_refresh_lock(
         full_refresh_mutex_, std::defer_lock);
     if (update == nullptr) {
@@ -356,6 +425,20 @@ OperationResult DerivedSeriesService::refreshInternal(
     std::vector<SequenceId> full_source_ids;
     std::unordered_set<SequenceId> incremental_seen;
     std::unordered_set<SequenceId> full_seen;
+    std::optional<IncrementalRefreshRange> incremental_query_range;
+    const auto mergeIncrementalRange = [&incremental_query_range](
+                                            const IncrementalRefreshRange& range) {
+        if (!incremental_query_range) {
+            incremental_query_range = range;
+            return;
+        }
+        incremental_query_range->start_time = std::min(
+            incremental_query_range->start_time, range.start_time);
+        incremental_query_range->end_time = std::max(
+            incremental_query_range->end_time, range.end_time);
+        incremental_query_range->window_evicted =
+            incremental_query_range->window_evicted || range.window_evicted;
+    };
     const auto addUnique = [](
                                 const SequenceId& sequence_id,
                                 std::vector<SequenceId>* output,
@@ -374,10 +457,11 @@ OperationResult DerivedSeriesService::refreshInternal(
             continue;
         }
         const auto source_ids = sourcesFor(config);
-        if (incremental && !changed(source_ids)) {
+        if (update != nullptr && !changed(source_ids)) {
             continue;
         }
-        bool use_incremental = incremental;
+        const auto source_range = incrementalRangeFor(update, source_ids);
+        bool use_incremental = source_range.has_value();
         for (const auto& source_id : source_ids) {
             const auto [source_it, inserted] = source_configs.emplace(
                 source_id, configs_.findInstance(source_id));
@@ -394,25 +478,23 @@ OperationResult DerivedSeriesService::refreshInternal(
                 use_incremental ? &incremental_source_ids : &full_source_ids,
                 use_incremental ? &incremental_seen : &full_seen);
         }
+        if (use_incremental && source_range) {
+            mergeIncrementalRange(*source_range);
+        }
     }
 
-    const auto buildQuery = [update](
+    const auto buildQuery = [](
                                   const std::vector<SequenceId>& sequence_ids,
-                                  bool use_incremental) {
+                                  const std::optional<IncrementalRefreshRange>&
+                                      range) {
         WindowQuery query;
         query.sequence_ids = sequence_ids;
-        if (use_incremental) {
-            const auto affected_start = *update->affected_start_time;
-            const auto affected_end = *update->affected_end_time;
-            query.start_time = update->window_evicted
-                ? std::min(
-                      affected_start,
-                      update->window_start_time.value_or(affected_start))
-                : affected_start;
-            query.end_time = affected_end ==
+        if (range) {
+            query.start_time = range->start_time;
+            query.end_time = range->end_time ==
                     std::numeric_limits<Timestamp>::max()
-                ? affected_end
-                : affected_end + 1;
+                ? range->end_time
+                : range->end_time + 1;
             query.preceding_points = 1;
             query.following_points = 1;
         }
@@ -425,11 +507,11 @@ OperationResult DerivedSeriesService::refreshInternal(
     const bool has_full_window = !full_source_ids.empty();
     if (has_incremental_window) {
         incremental_window = window_service_.queryWindowData(
-            buildQuery(incremental_source_ids, true));
+            buildQuery(incremental_source_ids, incremental_query_range));
     }
     if (has_full_window) {
         full_window = window_service_.queryWindowData(
-            buildQuery(full_source_ids, false));
+            buildQuery(full_source_ids, std::nullopt));
     }
 
     const auto buildNumericSnapshot = [&source_configs](
@@ -488,13 +570,12 @@ OperationResult DerivedSeriesService::refreshInternal(
         incremental_snapshot_ready,
         full_snapshot_ready,
         &changed,
-        update,
-        incremental](
+        update](
                                 const RuntimeDerivedSeriesConfig& config) {
         DerivedRefreshItem item;
         item.sequence_id = config.derived_sequence_id;
         if (!config.enabled) {
-            if (incremental) {
+            if (update != nullptr) {
                 // A disabled configuration has no dependency to update.
                 // Configuration synchronization uses refresh() and clears it
                 // through the full path when necessary.
@@ -507,7 +588,7 @@ OperationResult DerivedSeriesService::refreshInternal(
         }
 
         const auto source_ids = sourcesFor(config);
-        if (incremental && !changed(source_ids)) {
+        if (update != nullptr && !changed(source_ids)) {
             item.skip = true;
             return item;
         }
@@ -515,7 +596,8 @@ OperationResult DerivedSeriesService::refreshInternal(
         // A range refresh is safe only for registered continuous numeric
         // sources. Discrete/nearest-value sources can change every later
         // derived timestamp, so they must use the full-window path.
-        item.incremental = incremental;
+        const auto item_range = incrementalRangeFor(update, source_ids);
+        item.incremental = item_range.has_value();
         if (item.incremental) {
             for (const auto& source_id : source_ids) {
                 const auto source_config = source_configs.find(source_id);
@@ -626,13 +708,8 @@ OperationResult DerivedSeriesService::refreshInternal(
                 ? window_data.window_end_time
                 : window_data.window_end_time - 1;
         } else {
-            patch_start = *update->affected_start_time;
-            patch_end = *update->affected_end_time;
-            if (update->window_evicted) {
-                patch_start = std::min(
-                    patch_start,
-                    update->window_start_time.value_or(patch_start));
-            }
+            patch_start = item_range->start_time;
+            patch_end = item_range->end_time;
             // The query includes one predecessor per source. A new right
             // endpoint can change interpolation at that predecessor, so the
             // patch begins at the earliest returned point before the affected
@@ -646,7 +723,7 @@ OperationResult DerivedSeriesService::refreshInternal(
                 const auto& source_points = points_it->second;
                 const auto first = std::lower_bound(
                     source_points.begin(), source_points.end(),
-                    *update->affected_start_time,
+                    item_range->start_time,
                     [](const RawTimeseriesPoint& point, Timestamp time) {
                         return point.time < time;
                     });

@@ -2,9 +2,29 @@
 
 set -euo pipefail
 
-taos_root="${SFKG_TAOS_ROOT:-/home/yumiduo/sfkg/tdengine}"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd -- "${script_dir}/.." && pwd)"
+default_taos_root="${repo_root}/.runtime/tdengine/usr/local/taos"
+default_taos_config_dir="${repo_root}/.runtime/tdengine-runtime/cfg"
+
+taos_root="${SFKG_TAOS_ROOT:-${default_taos_root}}"
 taos_bin="${SFKG_TAOS_BIN:-${taos_root}/bin/taos}"
-taos_config_dir="${SFKG_TAOS_CONFIG_DIR:-${taos_root}/cfg}"
+if [[ -n "${SFKG_TAOS_CONFIG_DIR:-}" ]]; then
+    taos_config_dir="${SFKG_TAOS_CONFIG_DIR}"
+elif [[ -d "${default_taos_config_dir}" ]]; then
+    # The repository's unprivileged TDengine instance keeps its live client
+    # configuration outside the unpacked installation tree.
+    taos_config_dir="${default_taos_config_dir}"
+else
+    taos_config_dir="${taos_root}/cfg"
+fi
+if [[ -n "${SFKG_TAOS_LIB_DIR:-}" ]]; then
+    taos_lib_dir="${SFKG_TAOS_LIB_DIR}"
+elif [[ -d "${taos_root}/driver" ]]; then
+    taos_lib_dir="${taos_root}/driver"
+else
+    taos_lib_dir="${taos_root}/lib"
+fi
 database="${SFKG_TAOS_DB:-sfkg_timeseries}"
 raw_stable="${SFKG_TAOS_RAW_STABLE:-raw_timeseries_data}"
 
@@ -20,6 +40,7 @@ Environment overrides:
   SFKG_TAOS_ROOT         TDengine installation root
   SFKG_TAOS_BIN          taos CLI path
   SFKG_TAOS_CONFIG_DIR   TDengine config directory
+  SFKG_TAOS_LIB_DIR      TDengine client library directory
 USAGE
     exit 0
 fi
@@ -40,7 +61,7 @@ if [[ ! -d "${taos_config_dir}" ]]; then
     exit 1
 fi
 
-export LD_LIBRARY_PATH="${taos_root}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export LD_LIBRARY_PATH="${taos_lib_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 
 run_sql() {
     "${taos_bin}" -c "${taos_config_dir}" -s "$1"

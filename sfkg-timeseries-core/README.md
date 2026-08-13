@@ -201,7 +201,7 @@ env \
   -u HTTPS_PROXY \
   -u ALL_PROXY \
   -u all_proxy \
-  LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/home/yumiduo/sfkg/tdengine/lib \
+  LD_LIBRARY_PATH=/home/yumiduo/attempt/暑期项目/sfkg-timeseries-core/.runtime/toolchain/usr/lib/x86_64-linux-gnu:/home/yumiduo/attempt/暑期项目/sfkg-timeseries-core/.runtime/tdengine/usr/local/taos/driver:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu \
   no_grpc_proxy=222.29.156.142 \
   no_proxy=localhost,127.0.0.1,222.29.156.142 \
   NO_PROXY=localhost,127.0.0.1,222.29.156.142 \
@@ -215,12 +215,12 @@ env \
   SFKG_TAOS_WRITE_CONNECTIONS=8 \
   SFKG_INGEST_COLD_WORKERS=8 \
   SFKG_INGEST_HOT_WORKERS=8 \
-  SFKG_INGEST_QUEUE_CAPACITY=10 \
+  SFKG_INGEST_QUEUE_CAPACITY=128 \
   SFKG_INGEST_DIAGNOSTIC_LOG=1 \
   SFKG_INGEST_DIAGNOSTIC_SAMPLE_EVERY=50 \
-  SFKG_CONSTRAINT_RESULT_RECEIVER_ADDRESS=222.29.156.142:9105 \
+  SFKG_CONSTRAINT_RESULT_RECEIVER_ADDRESS=0.0.0.0:9105 \
   SFKG_TIMESERIES_CORE_ADDRESS=0.0.0.0:50051 \
-  ./build-taos/sfkg-timeseries-core-server 0.0.0.0:50051
+  ./build-taos-local/sfkg-timeseries-core-server 0.0.0.0:50051
 ```
 
 启动 Core 时需要为统一服务地址绕过本机 HTTP 代理，否则 gRPC 可能会错误连接到

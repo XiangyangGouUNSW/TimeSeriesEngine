@@ -57,6 +57,8 @@ int main() {
     }});
     assert(first.operation.code == OperationCode::Ok);
     assert(first.incremental_safe);
+    assert(first.sequence_updates.at("a").incremental_safe);
+    assert(first.sequence_updates.at("b").incremental_safe);
     auto queried = window.queryWindowData({
         {"a", "b"}, std::optional<Timestamp>{0},
         std::optional<Timestamp>{4'000}});
@@ -71,6 +73,7 @@ int main() {
     }});
     assert(late.operation.code == OperationCode::Ok);
     assert(!late.incremental_safe);
+    assert(!late.sequence_updates.at("a").incremental_safe);
     queried = window.queryWindowData({
         {"a"}, std::optional<Timestamp>{0},
         std::optional<Timestamp>{4'000}});
@@ -124,6 +127,8 @@ int main() {
     assert(evicting.operation.code == OperationCode::Ok);
     assert(evicting.incremental_safe);
     assert(evicting.window_evicted);
+    assert(evicting.sequence_updates.at("advancing").incremental_safe);
+    assert(evicting.sequence_updates.at("advancing").window_evicted);
     queried = advancing_window.queryWindowData({
         {"advancing"}, std::optional<Timestamp>{0},
         std::optional<Timestamp>{300}});
@@ -263,6 +268,23 @@ int main() {
         writer.join();
     }
     assert(!concurrent_failure.load());
+
+    // The aggregate flag is false when one sequence is corrected, but an
+    // unrelated append-only sequence remains independently safe.
+    WindowService mixed_window;
+    assert(mixed_window.configureWindowSize(10'000).code == OperationCode::Ok);
+    assert(mixed_window.buildTimeWindowIncremental({{
+        {0, "late", 0.0},
+        {0, "append", 0.0},
+    }}).incremental_safe);
+    const auto mixed = mixed_window.buildTimeWindowIncremental({{
+        {-1, "late", -1.0},
+        {1, "append", 1.0},
+    }});
+    assert(!mixed.incremental_safe);
+    assert(!mixed.sequence_updates.at("late").incremental_safe);
+    assert(mixed.sequence_updates.at("append").incremental_safe);
+
     for (int worker = 0; worker < 4; ++worker) {
         const auto sequence_id = "concurrent-" + std::to_string(worker);
         queried = concurrent_window.queryWindowData({

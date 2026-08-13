@@ -56,6 +56,8 @@ struct TimeseriesCoreGrpcService::IngestDiagnostics {
     double constraint_notify_ms{0.0};
     bool window_incremental_safe{false};
     bool window_evicted{false};
+    std::size_t window_sequence_count{0};
+    std::size_t window_incremental_safe_sequence_count{0};
     std::unordered_map<std::size_t, WriterTiming> writers;
 };
 
@@ -273,6 +275,73 @@ std::vector<SequenceId> mappedSequenceIds(const ConstraintRule& rule) {
     return sequence_ids;
 }
 
+struct ConstraintIncrementalRange {
+    Timestamp start_time{0};
+    Timestamp end_time{0};
+    bool window_evicted{false};
+};
+
+std::optional<ConstraintIncrementalRange> incrementalRangeFor(
+    const WindowUpdateResult* update,
+    const std::vector<SequenceId>& sequence_ids) {
+    if (update == nullptr || sequence_ids.empty()) {
+        return std::nullopt;
+    }
+    if (update->sequence_updates.empty()) {
+        if (!update->incremental_safe ||
+            !update->affected_start_time ||
+            !update->affected_end_time) {
+            return std::nullopt;
+        }
+        ConstraintIncrementalRange range{
+            *update->affected_start_time,
+            *update->affected_end_time,
+            update->window_evicted};
+        if (range.window_evicted && update->window_start_time) {
+            range.start_time = std::min(
+                range.start_time, *update->window_start_time);
+        }
+        return range;
+    }
+
+    std::optional<ConstraintIncrementalRange> range;
+    for (const auto& sequence_id : sequence_ids) {
+        if (std::find(
+                update->changed_sequence_ids.begin(),
+                update->changed_sequence_ids.end(),
+                sequence_id) == update->changed_sequence_ids.end()) {
+            // Unchanged rule inputs remain query context; only changed
+            // dependencies determine whether this rule can be incremental.
+            continue;
+        }
+        const auto found = update->sequence_updates.find(sequence_id);
+        if (found == update->sequence_updates.end() ||
+            !found->second.incremental_safe ||
+            !found->second.affected_start_time ||
+            !found->second.affected_end_time) {
+            return std::nullopt;
+        }
+        if (!range) {
+            range = ConstraintIncrementalRange{
+                *found->second.affected_start_time,
+                *found->second.affected_end_time,
+                found->second.window_evicted};
+        } else {
+            range->start_time = std::min(
+                range->start_time, *found->second.affected_start_time);
+            range->end_time = std::max(
+                range->end_time, *found->second.affected_end_time);
+            range->window_evicted = range->window_evicted ||
+                found->second.window_evicted;
+        }
+    }
+    if (range && range->window_evicted && update->window_start_time) {
+        range->start_time = std::min(
+            range->start_time, *update->window_start_time);
+    }
+    return range;
+}
+
 bool containsAllSequences(
     const WindowData& data,
     const std::vector<SequenceId>& sequence_ids) {
@@ -312,7 +381,7 @@ ConstraintCheckResult runContinuousConstraintCheck(
     const std::vector<ConstraintRule>& enabled_rules,
     const AlignmentService& alignment_service,
     const ConstraintCheckEngine& constraint_engine,
-    const WindowUpdateResult* update) {
+    const std::optional<ConstraintIncrementalRange>& incremental_range) {
     ConstraintCheckResult result;
     result.satisfied = true;
     result.operation = internal::ok(
@@ -341,11 +410,10 @@ ConstraintCheckResult runContinuousConstraintCheck(
 
     if (!single_sequence_rules.empty()) {
         std::optional<ConstraintCheckRange> range;
-        if (update != nullptr && update->incremental_safe &&
-            update->affected_start_time && update->affected_end_time) {
+        if (incremental_range) {
             range = ConstraintCheckRange{
-                *update->affected_start_time,
-                *update->affected_end_time};
+                incremental_range->start_time,
+                incremental_range->end_time};
             for (const auto& rule : single_sequence_rules) {
                 const auto sequence_ids = mappedSequenceIds(rule);
                 if (sequence_ids.size() != 1) {
@@ -415,15 +483,10 @@ ConstraintCheckResult runContinuousConstraintCheck(
             }
         }
         std::optional<ConstraintCheckRange> range;
-        if (update != nullptr && update->incremental_safe &&
-            update->affected_start_time && update->affected_end_time) {
+        if (incremental_range) {
             range = ConstraintCheckRange{
-                *update->affected_start_time,
-                *update->affected_end_time};
-            if (update->window_evicted) {
-                range->start_time = std::min(
-                    range->start_time, window_data.window_start_time);
-            }
+                incremental_range->start_time,
+                incremental_range->end_time};
         }
         const auto alignment = range
             ? alignment_service.alignWindowData(
@@ -645,6 +708,16 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
         diagnostics->window_incremental_safe =
             window_update.incremental_safe;
         diagnostics->window_evicted = window_update.window_evicted;
+        diagnostics->window_sequence_count =
+            window_update.changed_sequence_ids.size();
+        diagnostics->window_incremental_safe_sequence_count = 0;
+        for (const auto& sequence_id : window_update.changed_sequence_ids) {
+            const auto found = window_update.sequence_updates.find(sequence_id);
+            if (found != window_update.sequence_updates.end() &&
+                found->second.incremental_safe) {
+                ++diagnostics->window_incremental_safe_sequence_count;
+            }
+        }
         diagnostics->window_sequence_lock_wait_ms =
             window_update.sequence_lock_wait_ms;
         diagnostics->window_sequence_update_ms =
@@ -656,44 +729,55 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     }
     result.window_result = window_update.operation;
     const auto enabled_rules = config_registry_.allEnabledConstraints();
+    const auto derived_configs = config_registry_.allDerivedSeries();
     std::unordered_set<SequenceId> enabled_derived_ids;
-    for (const auto& derived : config_registry_.allDerivedSeries()) {
+    for (const auto& derived : derived_configs) {
         if (derived.enabled) {
             enabled_derived_ids.insert(derived.derived_sequence_id);
         }
     }
+    const bool has_enabled_derived = !enabled_derived_ids.empty();
     bool constraints_depend_on_derived = false;
-    for (const auto& rule : enabled_rules) {
-        for (const auto& sequence_id : mappedSequenceIds(rule)) {
-            if (enabled_derived_ids.find(sequence_id) !=
-                enabled_derived_ids.end()) {
-                constraints_depend_on_derived = true;
+    if (!enabled_rules.empty() && has_enabled_derived) {
+        for (const auto& rule : enabled_rules) {
+            for (const auto& sequence_id : mappedSequenceIds(rule)) {
+                if (enabled_derived_ids.find(sequence_id) !=
+                    enabled_derived_ids.end()) {
+                    constraints_depend_on_derived = true;
+                    break;
+                }
+            }
+            if (constraints_depend_on_derived) {
                 break;
             }
-        }
-        if (constraints_depend_on_derived) {
-            break;
         }
     }
 
     std::future<OperationResult> derived_future;
     const auto derived_started = std::chrono::steady_clock::now();
-    if (isSuccessful(result.window_result.code) &&
-        !constraints_depend_on_derived) {
+    bool derived_executed = false;
+    if (!isSuccessful(result.window_result.code)) {
+        result.derived_result = failedPrecondition(
+            "derived refresh skipped because hot window update failed");
+    } else if (!has_enabled_derived) {
+        // There is no derived output to refresh.  Avoid creating an async
+        // task just to scan an empty/disabled derived configuration set.
+        result.derived_result = internal::ok(
+            0, "no enabled derived series; refresh skipped");
+    } else if (!constraints_depend_on_derived) {
         // Constraint rules over raw sequences do not depend on the derived
         // output.  Run both read/compute paths concurrently; the derived
         // sequence is still published through WindowService's per-sequence
         // lock before this request completes.
+        derived_executed = true;
         derived_future = std::async(
             std::launch::async,
             [this, window_update] {
                 return derived_series_service_.refresh(window_update);
             });
-    } else if (isSuccessful(result.window_result.code)) {
-        result.derived_result = derived_series_service_.refresh(window_update);
     } else {
-        result.derived_result = failedPrecondition(
-            "derived refresh skipped because hot window update failed");
+        derived_executed = true;
+        result.derived_result = derived_series_service_.refresh(window_update);
     }
 
     const auto finishDerived = [&] {
@@ -709,7 +793,7 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                     derived_finished - derived_started).count();
         }
     };
-    if (!derived_future.valid() && diagnostics &&
+    if (derived_executed && !derived_future.valid() && diagnostics &&
         isSuccessful(result.window_result.code)) {
         const auto derived_finished = std::chrono::steady_clock::now();
         std::lock_guard lock(diagnostics->mutex);
@@ -734,74 +818,38 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
 
     std::vector<ConstraintRule> single_sequence_rules;
     std::vector<ConstraintRule> multi_sequence_rules;
-    std::vector<SequenceId> requested_sequence_ids;
-    std::unordered_set<SequenceId> requested_sequence_set;
+    const auto sequenceWasAffected = [&window_update](
+                                         const std::vector<SequenceId>& ids) {
+        return std::any_of(
+            ids.begin(), ids.end(),
+            [&window_update](const SequenceId& sequence_id) {
+                return std::find(
+                    window_update.changed_sequence_ids.begin(),
+                    window_update.changed_sequence_ids.end(),
+                    sequence_id) != window_update.changed_sequence_ids.end();
+            });
+    };
     for (const auto& rule : enabled_rules) {
         const auto sequence_ids = mappedSequenceIds(rule);
+        if (sequence_ids.empty() || !sequenceWasAffected(sequence_ids)) {
+            // A rule unrelated to this window update cannot produce a new
+            // violation. Its sequences are not queried or checked here.
+            continue;
+        }
         if (sequence_ids.size() == 1) {
             single_sequence_rules.push_back(rule);
         } else if (sequence_ids.size() > 1) {
             multi_sequence_rules.push_back(rule);
         }
-        for (const auto& sequence_id : sequence_ids) {
-            if (requested_sequence_set.insert(sequence_id).second) {
-                requested_sequence_ids.push_back(sequence_id);
-            }
-        }
     }
 
-    if (requested_sequence_ids.empty()) {
+    if (single_sequence_rules.empty() && multi_sequence_rules.empty()) {
         finishDerived();
-        result.constraint_notification_result = internal::invalidArgument(
-            "enabled constraints contain no mapped sequences");
+        result.constraint_notification_result = internal::ok(
+            0,
+            "no enabled constraints are affected by this window update; "
+            "notification skipped");
         return result;
-    }
-
-    // Single-sequence rules only need the affected suffix plus enough context
-    // for positional sample_offset terms.  Multi-sequence rules retain the
-    // full snapshot for now because their bucket alignment still depends on
-    // the live window origin; their alignment is optimized separately below.
-    WindowQuery single_query;
-    single_query.sequence_ids.reserve(requested_sequence_ids.size());
-    std::unordered_set<SequenceId> single_sequence_set;
-    std::size_t single_max_offset = 0;
-    for (const auto& rule : single_sequence_rules) {
-        for (const auto& sequence_id : mappedSequenceIds(rule)) {
-            if (single_sequence_set.insert(sequence_id).second) {
-                single_query.sequence_ids.push_back(sequence_id);
-            }
-        }
-        for (const auto& term : rule.terms) {
-            single_max_offset = std::max(single_max_offset, term.sample_offset);
-        }
-    }
-    if (window_update.incremental_safe &&
-        window_update.affected_start_time &&
-        window_update.affected_end_time) {
-        single_query.start_time = *window_update.affected_start_time;
-        single_query.end_time = *window_update.affected_end_time ==
-                std::numeric_limits<Timestamp>::max()
-            ? *window_update.affected_end_time
-            : *window_update.affected_end_time + 1;
-        // One extra preceding point allows a rule whose first affected anchor
-        // is immediately before the new point to be evaluated.  Following
-        // context supplies the positive offset terms at the right boundary.
-        single_query.preceding_points = single_max_offset + 1;
-        single_query.following_points = single_max_offset + 1;
-    } else {
-        single_query.sequence_ids = requested_sequence_ids;
-    }
-
-    WindowQuery multi_query;
-    for (const auto& rule : multi_sequence_rules) {
-        for (const auto& sequence_id : mappedSequenceIds(rule)) {
-            if (std::find(
-                    multi_query.sequence_ids.begin(),
-                    multi_query.sequence_ids.end(),
-                    sequence_id) == multi_query.sequence_ids.end()) {
-                multi_query.sequence_ids.push_back(sequence_id);
-            }
-        }
     }
 
     struct ConstraintGroupExecution {
@@ -809,18 +857,103 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
         double query_ms{0.0};
         double check_ms{0.0};
     };
-    const auto run_group = [this, &window_update](
-                               std::vector<ConstraintRule> rules,
-                               WindowQuery query) {
-        ConstraintGroupExecution execution;
+
+    struct ConstraintGroupSpec {
+        std::vector<ConstraintRule> rules;
+        std::optional<ConstraintIncrementalRange> range;
+        WindowQuery query;
+    };
+
+    const auto makeGroup = [](std::vector<ConstraintRule> rules,
+                              std::optional<ConstraintIncrementalRange> range) {
+        ConstraintGroupSpec group;
+        group.rules = std::move(rules);
+        group.range = range;
+        std::unordered_set<SequenceId> seen;
+        std::size_t maximum_offset = 0;
+        for (const auto& rule : group.rules) {
+            for (const auto& sequence_id : mappedSequenceIds(rule)) {
+                if (seen.insert(sequence_id).second) {
+                    group.query.sequence_ids.push_back(sequence_id);
+                }
+            }
+            for (const auto& term : rule.terms) {
+                maximum_offset = std::max(maximum_offset, term.sample_offset);
+            }
+        }
+        if (group.range) {
+            group.query.start_time = group.range->start_time;
+            group.query.end_time = group.range->end_time ==
+                    std::numeric_limits<Timestamp>::max()
+                ? group.range->end_time
+                : group.range->end_time + 1;
+            // The extra context covers positional offsets and the boundary
+            // interpolation needed by the aligned multi-sequence path.
+            group.query.preceding_points = maximum_offset + 1;
+            group.query.following_points = maximum_offset + 1;
+        }
+        return group;
+    };
+
+    const auto splitRulesBySafety = [&window_update](
+                                          const std::vector<ConstraintRule>& rules) {
+        std::vector<ConstraintRule> incremental_rules;
+        std::vector<ConstraintRule> full_rules;
+        for (const auto& rule : rules) {
+            if (incrementalRangeFor(
+                    &window_update, mappedSequenceIds(rule))) {
+                incremental_rules.push_back(rule);
+            } else {
+                full_rules.push_back(rule);
+            }
+        }
+        return std::pair{
+            std::move(incremental_rules), std::move(full_rules)};
+    };
+
+    std::vector<ConstraintGroupSpec> groups;
+    const auto addRuleGroups = [&groups, &window_update, &makeGroup,
+                                &splitRulesBySafety](
+                                   const std::vector<ConstraintRule>& rules) {
         if (rules.empty()) {
+            return;
+        }
+        auto split = splitRulesBySafety(rules);
+        if (!split.first.empty()) {
+            std::optional<ConstraintIncrementalRange> range;
+            for (const auto& rule : split.first) {
+                const auto rule_range = incrementalRangeFor(
+                    &window_update, mappedSequenceIds(rule));
+                if (!range) {
+                    range = rule_range;
+                } else {
+                    range->start_time = std::min(
+                        range->start_time, rule_range->start_time);
+                    range->end_time = std::max(
+                        range->end_time, rule_range->end_time);
+                    range->window_evicted = range->window_evicted ||
+                        rule_range->window_evicted;
+                }
+            }
+            groups.push_back(makeGroup(std::move(split.first), range));
+        }
+        if (!split.second.empty()) {
+            groups.push_back(makeGroup(std::move(split.second), std::nullopt));
+        }
+    };
+    addRuleGroups(single_sequence_rules);
+    addRuleGroups(multi_sequence_rules);
+
+    const auto run_group = [this](ConstraintGroupSpec group) {
+        ConstraintGroupExecution execution;
+        if (group.rules.empty()) {
             execution.result.satisfied = true;
             execution.result.operation = internal::ok(
                 0, "constraint check skipped: no rules in group");
             return execution;
         }
         const auto query_started = std::chrono::steady_clock::now();
-        const auto window = window_service_.queryWindowData(query);
+        const auto window = window_service_.queryWindowData(group.query);
         const auto query_finished = std::chrono::steady_clock::now();
         execution.query_ms = std::chrono::duration<double, std::milli>(
             query_finished - query_started).count();
@@ -838,10 +971,10 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
         const auto check_started = std::chrono::steady_clock::now();
         execution.result = runContinuousConstraintCheck(
             window.data,
-            rules,
+            group.rules,
             alignment_service_,
             constraint_engine_,
-            &window_update);
+            group.range);
         const auto check_finished = std::chrono::steady_clock::now();
         execution.check_ms = std::chrono::duration<double, std::milli>(
             check_finished - check_started).count();
@@ -849,52 +982,42 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     };
 
     ConstraintCheckResult check;
+    check.satisfied = true;
+    check.operation = internal::ok(
+        0, "constraint check skipped: no applicable enabled rules");
     double constraint_query_ms = 0.0;
     double constraint_check_ms = 0.0;
-    if (!single_sequence_rules.empty() && !multi_sequence_rules.empty()) {
-        auto single_future = std::async(
-            std::launch::async,
-            run_group,
-            single_sequence_rules,
-            single_query);
-        auto multi_future = std::async(
-            std::launch::async,
-            run_group,
-            multi_sequence_rules,
-            multi_query);
-        const auto single = single_future.get();
-        const auto multi = multi_future.get();
-        constraint_query_ms = single.query_ms + multi.query_ms;
-        constraint_check_ms = single.check_ms + multi.check_ms;
-        check = single.result;
-        if (!isSuccessful(check.operation.code)) {
-            // Keep the first concrete failure, but still join the other group
-            // above so its worker cannot outlive the request.
-        } else if (!isSuccessful(multi.result.operation.code)) {
-            check = multi.result;
-        } else {
-            check.evaluated_count += multi.result.evaluated_count;
-            check.violations.insert(
-                check.violations.end(),
-                multi.result.violations.begin(),
-                multi.result.violations.end());
-            check.satisfied = check.violations.empty();
-            check.operation = internal::ok(
-                check.evaluated_count,
-                check.satisfied
-                    ? "continuous constraint checks completed; all satisfied"
-                    : "continuous constraint checks completed; violations found");
+    std::vector<std::future<ConstraintGroupExecution>> group_futures;
+    group_futures.reserve(groups.size());
+    for (auto& group : groups) {
+        group_futures.push_back(std::async(
+            std::launch::async, run_group, std::move(group)));
+    }
+    bool group_failed = false;
+    for (auto& future : group_futures) {
+        const auto execution = future.get();
+        constraint_query_ms += execution.query_ms;
+        constraint_check_ms += execution.check_ms;
+        if (!isSuccessful(execution.result.operation.code)) {
+            if (!group_failed) {
+                check = execution.result;
+            }
+            group_failed = true;
+            continue;
         }
-    } else if (!single_sequence_rules.empty()) {
-        const auto execution = run_group(single_sequence_rules, single_query);
-        constraint_query_ms = execution.query_ms;
-        constraint_check_ms = execution.check_ms;
-        check = execution.result;
-    } else {
-        const auto execution = run_group(multi_sequence_rules, multi_query);
-        constraint_query_ms = execution.query_ms;
-        constraint_check_ms = execution.check_ms;
-        check = execution.result;
+        check.evaluated_count += execution.result.evaluated_count;
+        check.violations.insert(
+            check.violations.end(),
+            execution.result.violations.begin(),
+            execution.result.violations.end());
+    }
+    if (!group_failed) {
+        check.satisfied = check.violations.empty();
+        check.operation = internal::ok(
+            check.evaluated_count,
+            check.satisfied
+                ? "continuous constraint checks completed; all satisfied"
+                : "continuous constraint checks completed; violations found");
     }
     if (diagnostics) {
         std::lock_guard lock(diagnostics->mutex);
@@ -1167,6 +1290,9 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                  << diagnostics->constraint_notify_ms
                  << " window_incremental_safe="
                  << (diagnostics->window_incremental_safe ? "true" : "false")
+                 << " window_safe_sequences="
+                 << diagnostics->window_incremental_safe_sequence_count << "/"
+                 << diagnostics->window_sequence_count
                  << " window_evicted="
                  << (diagnostics->window_evicted ? "true" : "false")
                  << " pipeline_ms=" << duration(

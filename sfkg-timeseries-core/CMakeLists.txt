@@ -98,6 +98,7 @@ if(SFKG_BUILD_GRPC)
         COMMAND protobuf::protoc
         ARGS
             --proto_path=${CMAKE_CURRENT_SOURCE_DIR}/proto
+            --experimental_allow_proto3_optional
             --cpp_out=${SFKG_GENERATED_DIR}
             --grpc_out=${SFKG_GENERATED_DIR}
             --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>

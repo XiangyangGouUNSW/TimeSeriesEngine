@@ -155,7 +155,8 @@ OperationResult WindowService::configureWindowSize(std::int64_t window_size) {
             "window_size must be positive");
     }
 
-    std::vector<std::shared_ptr<SequenceWindow>> sequences;
+    std::vector<std::pair<SequenceId, std::shared_ptr<SequenceWindow>>>
+        sequences;
     Timestamp window_start = 0;
     bool has_watermark = false;
     {
@@ -170,8 +171,7 @@ OperationResult WindowService::configureWindowSize(std::int64_t window_size) {
         }
         sequences.reserve(sequence_windows_.size());
         for (const auto& [sequence_id, sequence] : sequence_windows_) {
-            (void)sequence_id;
-            sequences.push_back(sequence);
+            sequences.emplace_back(sequence_id, sequence);
         }
     }
     if (!sequences.empty() && has_watermark) {
@@ -215,7 +215,8 @@ OperationResult WindowService::replaceDerivedSequence(
         std::unique_lock lock(output->mutex);
         replaceSequence(*output, data);
     }
-    std::vector<std::shared_ptr<SequenceWindow>> sequences;
+    std::vector<std::pair<SequenceId, std::shared_ptr<SequenceWindow>>>
+        sequences;
     Timestamp window_start = 0;
     bool has_watermark = false;
     {
@@ -228,8 +229,7 @@ OperationResult WindowService::replaceDerivedSequence(
                 : *watermark_ - window_size_;
         }
         for (const auto& [id, sequence] : sequence_windows_) {
-            (void)id;
-            sequences.push_back(sequence);
+            sequences.emplace_back(id, sequence);
         }
     }
     if (has_watermark) {
@@ -346,6 +346,15 @@ WindowUpdateResult WindowService::updateWindowIncremental(
         if (seen_sequence_ids.insert(point.sequence_id).second) {
             result.changed_sequence_ids.push_back(point.sequence_id);
         }
+        auto& sequence_update = result.sequence_updates[point.sequence_id];
+        if (!sequence_update.affected_start_time ||
+            point.time < *sequence_update.affected_start_time) {
+            sequence_update.affected_start_time = point.time;
+        }
+        if (!sequence_update.affected_end_time ||
+            point.time > *sequence_update.affected_end_time) {
+            sequence_update.affected_end_time = point.time;
+        }
         if (!result.affected_start_time ||
             point.time < *result.affected_start_time) {
             result.affected_start_time = point.time;
@@ -357,7 +366,8 @@ WindowUpdateResult WindowService::updateWindowIncremental(
         incoming_by_sequence[point.sequence_id].push_back(point);
     }
 
-    std::vector<std::shared_ptr<SequenceWindow>> all_sequences;
+    std::vector<std::pair<SequenceId, std::shared_ptr<SequenceWindow>>>
+        all_sequences;
     std::unordered_map<SequenceId, std::shared_ptr<SequenceWindow>>
         sequence_refs;
     Timestamp window_start = 0;
@@ -393,18 +403,19 @@ WindowUpdateResult WindowService::updateWindowIncremental(
         }
         all_sequences.reserve(sequence_windows_.size());
         for (const auto& [sequence_id, sequence] : sequence_windows_) {
-            (void)sequence_id;
-            all_sequences.push_back(sequence);
+            all_sequences.emplace_back(sequence_id, sequence);
         }
     }
 
     result.incremental_safe = true;
     struct PreparedSequenceUpdate {
+        SequenceId sequence_id;
         std::shared_ptr<SequenceWindow> sequence;
         std::vector<RawTimeseriesPoint> incoming;
         bool strictly_increasing{false};
     };
     struct SequenceUpdateTiming {
+        SequenceId sequence_id;
         bool incremental_safe{false};
         double lock_wait_ms{0.0};
         double update_ms{0.0};
@@ -445,6 +456,7 @@ WindowUpdateResult WindowService::updateWindowIncremental(
             incoming = std::move(unique_incoming);
         }
         prepared_updates.push_back({
+            sequence_id,
             sequence_refs.at(sequence_id),
             std::move(incoming),
             strictly_increasing});
@@ -455,10 +467,12 @@ WindowUpdateResult WindowService::updateWindowIncremental(
     for (auto& prepared : prepared_updates) {
         updates.push_back(std::async(
             std::launch::async,
-            [sequence = prepared.sequence,
+            [sequence_id = prepared.sequence_id,
+             sequence = prepared.sequence,
              incoming = std::move(prepared.incoming),
              strictly_increasing = prepared.strictly_increasing]() mutable {
                 SequenceUpdateTiming timing;
+                timing.sequence_id = sequence_id;
                 const auto wait_started = std::chrono::steady_clock::now();
                 std::unique_lock lock(sequence->mutex);
                 const auto lock_acquired = std::chrono::steady_clock::now();
@@ -519,17 +533,45 @@ WindowUpdateResult WindowService::updateWindowIncremental(
         const auto timing = update.get();
         result.incremental_safe =
             timing.incremental_safe && result.incremental_safe;
+        result.sequence_updates[timing.sequence_id].incremental_safe =
+            timing.incremental_safe;
         result.sequence_lock_wait_ms += timing.lock_wait_ms;
         result.sequence_update_ms += timing.update_ms;
     }
 
     // Eviction is not an ordering failure. It is removed independently while
     // the per-sequence update work above can run concurrently.
+    std::unordered_set<SequenceId> evicted_sequence_ids;
     result.window_evicted = pruneExpiredPoints(
         window_start,
         all_sequences,
+        &evicted_sequence_ids,
         &result.eviction_lock_wait_ms,
         &result.eviction_update_ms);
+    for (const auto& sequence_id : result.changed_sequence_ids) {
+        result.sequence_updates[sequence_id].window_evicted =
+            evicted_sequence_ids.find(sequence_id) !=
+            evicted_sequence_ids.end();
+    }
+    for (const auto& sequence_id : evicted_sequence_ids) {
+        auto& sequence_update = result.sequence_updates[sequence_id];
+        sequence_update.window_evicted = true;
+        if (!sequence_update.affected_start_time) {
+            sequence_update.affected_start_time = window_start;
+        }
+        if (!sequence_update.affected_end_time) {
+            sequence_update.affected_end_time =
+                result.affected_end_time.value_or(window_start);
+        }
+        if (std::find(
+                result.changed_sequence_ids.begin(),
+                result.changed_sequence_ids.end(),
+                sequence_id) == result.changed_sequence_ids.end()) {
+            // Eviction changes the live window even when this request did not
+            // carry a new point for the sequence.
+            result.changed_sequence_ids.push_back(sequence_id);
+        }
+    }
     result.operation = internal::ok(
         data.points.size(), "hot window updated");
     return result;
@@ -537,7 +579,9 @@ WindowUpdateResult WindowService::updateWindowIncremental(
 
 bool WindowService::pruneExpiredPoints(
     Timestamp start,
-    const std::vector<std::shared_ptr<SequenceWindow>>& sequences,
+    const std::vector<std::pair<SequenceId, std::shared_ptr<SequenceWindow>>>&
+        sequences,
+    std::unordered_set<SequenceId>* evicted_sequence_ids,
     double* lock_wait_ms,
     double* update_ms) {
     if (sequences.empty()) {
@@ -552,10 +596,13 @@ bool WindowService::pruneExpiredPoints(
         double lock_wait_ms{0.0};
         double update_ms{0.0};
     };
-    auto pruneOne = [start](const std::shared_ptr<SequenceWindow>& sequence) {
+    auto pruneOne = [start](
+                        const std::pair<SequenceId,
+                                        std::shared_ptr<SequenceWindow>>& entry) {
         PruneTiming timing;
         const auto wait_started = std::chrono::steady_clock::now();
         bool evicted = false;
+        const auto& sequence = entry.second;
         std::unique_lock lock(sequence->mutex);
         const auto lock_acquired = std::chrono::steady_clock::now();
         timing.lock_wait_ms =
@@ -601,9 +648,12 @@ bool WindowService::pruneExpiredPoints(
     constexpr std::size_t kParallelPruneThreshold = 16;
     if (sequences.size() < kParallelPruneThreshold) {
         bool evicted = false;
-        for (const auto& sequence : sequences) {
-            const auto timing = pruneOne(sequence);
+        for (const auto& entry : sequences) {
+            const auto timing = pruneOne(entry);
             evicted = timing.evicted || evicted;
+            if (timing.evicted && evicted_sequence_ids != nullptr) {
+                evicted_sequence_ids->insert(entry.first);
+            }
             if (lock_wait_ms != nullptr) {
                 *lock_wait_ms += timing.lock_wait_ms;
             }
@@ -616,14 +666,18 @@ bool WindowService::pruneExpiredPoints(
 
     std::vector<std::future<PruneTiming>> futures;
     futures.reserve(sequences.size());
-    for (const auto& sequence : sequences) {
+    for (const auto& entry : sequences) {
         futures.push_back(std::async(
-            std::launch::async, pruneOne, sequence));
+            std::launch::async, pruneOne, entry));
     }
     bool evicted = false;
-    for (auto& future : futures) {
+    for (std::size_t index = 0; index < futures.size(); ++index) {
+        auto& future = futures[index];
         const auto timing = future.get();
         evicted = timing.evicted || evicted;
+        if (timing.evicted && evicted_sequence_ids != nullptr) {
+            evicted_sequence_ids->insert(sequences[index].first);
+        }
         if (lock_wait_ms != nullptr) {
             *lock_wait_ms += timing.lock_wait_ms;
         }
