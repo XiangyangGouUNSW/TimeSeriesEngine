@@ -122,7 +122,11 @@ binary(MULTIPLY,
 
 ```proto
 OperationResult derived_result = 7;
+bool storage_queued = 8;
 ```
+
+`storage_queued=true` 表示冷数据已经进入 Core 的有界后台写入队列；它不表示 TDengine
+已经完成持久化。TDengine 冷写失败会由 Core 后台 writer 记录到终端日志。
 
 它表示本次写入之后派生热窗口的刷新结果；`operation` 会综合写入、热窗口、派生
 刷新和约束通知等阶段的结果。

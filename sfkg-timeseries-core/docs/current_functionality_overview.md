@@ -107,17 +107,19 @@ gRPC 请求
 该接口支持一次请求携带一批点，并分别返回：
 
 - `resolve_result`：数据识别和标准化结果；
-- `storage_result`：TDengine 写入结果；
+- `storage_result`：冷写入队列接纳结果；`storage_queued=true` 时表示已进入 Core 的后台 TDengine
+  写入队列，不代表 TDengine 已完成持久化；
 - `window_result`：热窗口更新结果；
 - `constraint_notification_result`：约束检查及异常通知结果；没有违反时不发送通知；
 - `derived_result`：派生序列热窗口刷新结果；派生结果不落盘；
 - `operation`：综合结果。
 
 冷热写入不是数据库事务；任务进入有界队列前会同时为冷热两条通道预留容量，任一通道
-没有容量时整个请求返回 `OPERATION_CODE_UNAVAILABLE`，不会发生只写冷库或只写热窗口。
-任务被接纳后，冷写和热写并行执行，Core 仍等待两条通道完成后返回原有的分阶段结果。
-一处成功、另一处失败时会通过分阶段结果报告。约束异常通知失败不会回滚已经完成的
-冷、热写入，但会使综合结果变为部分成功。`return_resolved_data` 可用于控制是否返回
+没有容量时整个请求返回 `OPERATION_CODE_UNAVAILABLE`，不会发生只写热窗口而不保留冷写任务。
+任务被接纳后，冷写和热写并行执行，Core 在热处理完成后即可返回；后台冷写失败通过 Core
+终端日志报告，不能再通过当前 RPC 返回。`storage_queued=true` 表示冷写任务已接纳，
+不表示 TDengine 已经持久化。约束异常通知失败不会回滚已经完成的热处理，但会使综合结果变为部分成功。
+`return_resolved_data` 可用于控制是否返回
 标准化后的数据副本。
 
 ### 4.2 细粒度接入接口

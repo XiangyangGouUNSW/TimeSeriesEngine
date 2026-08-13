@@ -40,12 +40,12 @@ int main() {
             }
             ++cold_callback_count;
             cold_point_count += data.points.size();
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
             return core::OperationResult{
                 core::OperationCode::Ok, data.points.size(), 0, "cold"};
         },
         [](const core::TimeseriesBatch&) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
             grpc_core::IngestPipelineResult result;
             result.window_result = {
                 core::OperationCode::Ok, 2, 0, "hot"};
@@ -76,6 +76,13 @@ int main() {
     assert(!rejected.accepted);
     assert(rejected.admission.code == core::OperationCode::Unavailable);
 
+    const auto hot_started = std::chrono::steady_clock::now();
+    const auto hot_completed = first.hot_completion.get();
+    const auto hot_elapsed_ms = std::chrono::duration_cast<
+        std::chrono::milliseconds>(std::chrono::steady_clock::now() - hot_started);
+    assert(hot_completed.window_result.code == core::OperationCode::Ok);
+    assert(hot_elapsed_ms.count() < 150);
+
     const auto completed = first.completion.get();
     const auto elapsed_ms = std::chrono::duration_cast<
         std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
@@ -84,7 +91,8 @@ int main() {
     assert(cold_callback_count == 2);
     assert(cold_point_count == 2);
     assert(completed.window_result.code == core::OperationCode::Ok);
-    assert(elapsed_ms.count() < 180);
+    assert(elapsed_ms.count() >= 180);
+    assert(elapsed_ms.count() < 280);
     }
 
     // Multiple hot workers must not reverse two accepted batches that touch

@@ -8,7 +8,7 @@
 ## 当前实现范围
 
 - 运行时实例配置、约束和关联关系支持增量同步与更新；
-- `IngestData` 已完成识别、标准化、冷热并行写入和热窗口更新的控制流程；
+- `IngestData` 已完成识别、标准化、热窗口更新和异步 TDengine 冷写入队列的控制流程；
 - 接入任务使用有界冷热队列，队列满时返回 `OPERATION_CODE_UNAVAILABLE`；
 - TDengine 原始数据写入、历史数据查询和历史概览查询可运行；
 - `ConstraintCheckEngine` 支持单序列 `WindowData`、多序列 `AlignedWindowData`、固定采样偏移和约束违反明细；
@@ -262,7 +262,8 @@ env \
   依赖，同一序列的后续批次必须等待前一批热处理完成；涉及不同序列的批次仍可并行。这样在
   调用方保证同一序列按时间递增发送时，多 HOT worker 不会自行打乱增量更新顺序。跨序列查询
   不承诺一个全局原子快照；
-- `SFKG_INGEST_QUEUE_CAPACITY`：最多同时接纳的 IngestData 批次数，默认 128。
+- `SFKG_INGEST_QUEUE_CAPACITY`：最多同时接纳的 IngestData 批次数，默认 128；队列同时限制尚未完成
+  冷写的批次数。
 - `SFKG_INGEST_DIAGNOSTIC_LOG`：设为 `1` 开启 IngestData 阶段诊断日志，默认关闭；
 - `SFKG_INGEST_DIAGNOSTIC_SAMPLE_EVERY`：诊断采样间隔，默认 1。联调压力测试建议设为
   `100`，即每 100 个 IngestData 请求打印一条详细日志。
@@ -275,13 +276,17 @@ env \
   不会静默丢弃异常事件。
 
 队列容量按批次而不是单条记录计算。一个请求只有在冷热两条通道都成功预留容量后才会
-执行；队列满时不会执行部分写入，调用方可以根据 `OPERATION_CODE_UNAVAILABLE` 重试。
+执行；热处理完成后 Core 即可返回，冷写继续由后台 TDengine writer 执行。`IngestDataResponse.storage_queued`
+为 `true` 时只表示冷数据已进入 Core 的有界冷写队列，不代表 TDengine 已经完成持久化。冷写队列满时
+不会继续接纳请求，调用方可以根据 `OPERATION_CODE_UNAVAILABLE` 重试。
 当前实现要求 `SFKG_TAOS_WRITE_CONNECTIONS` 不小于 `SFKG_INGEST_COLD_WORKERS`，推荐两者设置为
 相同值。每个冷写线程拥有固定队列和固定连接；Core
 首次看到一个 `sequence_id` 时按轮询方式分配 writer，之后一个 Batch 会按 `sequence_id`
 分组后投递到对应 writer。不同序列可以并行，同一序列不会在多个 writer 之间迁移。
 
-诊断日志只输出请求数量、各阶段耗时和结果状态，不输出具体数据值。`hot_window_ms` 是热窗口
+诊断日志只输出请求数量、各阶段耗时和结果状态，不输出具体数据值。异步模式下 `ingest_diag` 的
+`storage_queued=true` 表示普通 RPC 不等待 TDengine；实际冷写完成时还会输出 `cold_write_async`。
+`hot_window_ms` 是热窗口
 更新的墙钟耗时；`window_seq_wait_ms`/`window_evict_wait_ms` 是序列锁等待时间之和，可能因为
 多个序列并发而大于墙钟耗时。需要冷写分片明细时再额外设置
 `SFKG_INGEST_DIAGNOSTIC_WRITERS=1`。示例：

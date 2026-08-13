@@ -98,6 +98,7 @@ struct IngestTaskExecutor::Task {
     std::vector<std::shared_future<void>> hot_predecessors;
     std::promise<void> hot_order_completion;
     std::shared_future<void> hot_order_future;
+    std::promise<IngestPipelineResult> hot_completion;
     std::promise<IngestPipelineResult> completion;
     std::mutex result_mutex;
     IngestPipelineResult result;
@@ -222,6 +223,7 @@ IngestTaskSubmission IngestTaskExecutor::trySubmit(
             {}};
     }
 
+    auto hot_completion = task->hot_completion.get_future();
     auto completion = task->completion.get_future();
     task->hot_predecessors.reserve(batch_sequence_ids.size());
     for (const auto& sequence_id : batch_sequence_ids) {
@@ -245,6 +247,7 @@ IngestTaskSubmission IngestTaskExecutor::trySubmit(
     return {
         true,
         internal::ok(0, "ingest task admitted"),
+        std::move(hot_completion),
         std::move(completion)};
 }
 
@@ -353,13 +356,19 @@ void IngestTaskExecutor::completeCold(
 void IngestTaskExecutor::completeHot(
     const std::shared_ptr<Task>& task,
     IngestPipelineResult result) {
+    IngestPipelineResult hot_result;
     {
         std::lock_guard lock(task->result_mutex);
         task->result.window_result = std::move(result.window_result);
         task->result.derived_result = std::move(result.derived_result);
         task->result.constraint_notification_result =
             std::move(result.constraint_notification_result);
+        hot_result.window_result = task->result.window_result;
+        hot_result.derived_result = task->result.derived_result;
+        hot_result.constraint_notification_result =
+            task->result.constraint_notification_result;
     }
+    task->hot_completion.set_value(std::move(hot_result));
     completeTask(task);
 }
 

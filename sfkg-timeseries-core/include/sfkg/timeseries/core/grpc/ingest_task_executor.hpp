@@ -29,12 +29,17 @@ struct IngestPipelineResult {
 struct IngestTaskSubmission {
     bool accepted{false};
     OperationResult admission;
+    // The hot pipeline completes independently so the gRPC layer can return
+    // without waiting for the cold TDengine lanes. completion remains useful
+    // for tests and orderly shutdown diagnostics and includes both lanes.
+    std::future<IngestPipelineResult> hot_completion;
     std::future<IngestPipelineResult> completion;
 };
 
 // A bounded pair of worker queues. One task is admitted to both lanes before
 // either lane starts, so a full lane rejects the whole ingest request instead
-// of creating an accidental cold-only or hot-only write.
+// of creating an accidental cold-only or hot-only write. The hot completion
+// can be observed independently; the cold lane continues in the background.
 class IngestTaskExecutor final {
 public:
     using ColdWriteFunction = std::function<OperationResult(

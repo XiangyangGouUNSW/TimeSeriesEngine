@@ -16,8 +16,8 @@ service TimeseriesCoreService {
   rpc syncDerivedSeriesConfigs(SyncDerivedSeriesConfigsRequest)
       returns (SyncConfigResponse);
 
-  // Production ingest entry: resolve once, persist to cold storage, then
-  // update the hot window inside Core.
+  // Production ingest entry: resolve once, update the hot window inside Core,
+  // and enqueue cold persistence for the background TDengine writers.
   rpc ingestData(IngestDataRequest)
       returns (IngestDataResponse);
   // Fine-grained ingest RPCs are retained for testing, replay and compensation.
@@ -344,6 +344,9 @@ message IngestDataResponse {
   // Derived sequences are updated in the hot window only and are not persisted
   // to TDengine.
   OperationResult derived_result = 7;
+  // True when the request was accepted by Core and its cold data was queued;
+  // it does not mean that TDengine has finished persisting the batch.
+  bool storage_queued = 8;
 }
 
 message ConstraintResultMessage {

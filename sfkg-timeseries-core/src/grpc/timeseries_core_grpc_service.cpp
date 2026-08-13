@@ -1171,6 +1171,27 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                         writer.write_sum_ms += elapsed;
                         writer.write_max_ms = std::max(
                             writer.write_max_ms, elapsed);
+                        std::clog << "cold_write_async"
+                                  << " writer=" << writer_index
+                                  << " points=" << data.points.size()
+                                  << " elapsed_ms=" << elapsed
+                                  << " storage_code="
+                                  << operationCodeName(result.code);
+                        if (!result.message.empty()) {
+                            std::clog << " message=\"" << result.message
+                                      << "\"";
+                        }
+                        std::clog << '\n';
+                    }
+                    if (result.code != OperationCode::Ok &&
+                        result.code != OperationCode::PartialSuccess) {
+                        std::cerr << "cold_write_async_failed"
+                                  << " writer=" << writer_index
+                                  << " points=" << data.points.size()
+                                  << " storage_code="
+                                  << operationCodeName(result.code)
+                                  << " message=\"" << result.message
+                                  << "\"\n";
                     }
                     return result;
                 },
@@ -1205,17 +1226,28 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                         resolved->operation.failed_count,
                     submission.admission.message);
             } else {
-                const auto pipeline = submission.completion.get();
-                storage_result = pipeline.storage_result;
+                const auto pipeline = submission.hot_completion.get();
+                storage_result = internal::ok(
+                    0,
+                    "cold storage queued for asynchronous TDengine persistence");
                 window_result = pipeline.window_result;
                 derived_result = pipeline.derived_result;
                 constraint_notification_result =
                     pipeline.constraint_notification_result;
+                response->set_storage_queued(true);
                 ingest_result = combineIngestResults(
                     resolved->operation,
                     storage_result,
                     window_result,
                     derived_result);
+                if (ingest_result.code == OperationCode::Ok) {
+                    ingest_result.message =
+                        "ingest data accepted; cold storage queued, hot "
+                        "window updated and derived windows refreshed";
+                } else if (!ingest_result.message.empty()) {
+                    ingest_result.message +=
+                        "; cold storage queued asynchronously";
+                }
             }
         } else {
             storage_result = failedPrecondition(
@@ -1302,6 +1334,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                  << operationCodeName(storage_result.code)
                  << " storage_success=" << storage_result.success_count
                  << " storage_failed=" << storage_result.failed_count
+                 << " storage_queued="
+                 << (response->storage_queued() ? "true" : "false")
                  << " window_code="
                  << operationCodeName(window_result.code)
                  << " derived_code="
