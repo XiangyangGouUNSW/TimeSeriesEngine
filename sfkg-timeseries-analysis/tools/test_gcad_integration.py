@@ -1,6 +1,6 @@
 """GCAD 多变量集成验证：engine._run_anomaly_models 完整链路。
 
-前置：fake_core_server 已在 localhost:50051 起好（python tools/fake_core_server.py）。
+前置：fake_core_server 已在 localhost:50551 起好（python tools/fake_core_server.py；伪 C 端专用端口，不占真 C 端 50051）。
 
 验证：
   1. GrpcCoreDataClient.get_correlation_vector → C computeBasicStatistics（相关性先验）；
@@ -36,7 +36,7 @@ def _cfg():
 
 
 def main() -> None:
-    core = GrpcCoreDataClient("localhost", 50051)
+    core = GrpcCoreDataClient("localhost", 50551)
 
     # 1. 相关性先验
     corr = core.get_correlation_vector(TARGET, FEATURES)
@@ -87,10 +87,11 @@ def main() -> None:
     print(f"[3b] _extract_coupled_pairs → 互耦对列索引 {pairs}")
 
     # 5. 跑模型检测（CAUSAL_PATTERN + TREND_SHIFT + MUTUAL_COUPLING）
-    #    检测类型显式化后，_run_anomaly_models 接收 model_methods 参数
-    findings = engine._run_anomaly_models(
+    #    检测类型显式化后，_run_anomaly_models 接收 model_methods 参数；
+    #    2026-08-13 起返回 (findings, step_ms)，step_ms 供动态间隔排 next_due
+    findings, step_ms = engine._run_anomaly_models(
         task, ["CAUSAL_PATTERN", "TREND_SHIFT", "MUTUAL_COUPLING"])
-    print(f"[4] _run_anomaly_models 检出 {len(findings)} 条模式偏离")
+    print(f"[4] _run_anomaly_models 检出 {len(findings)} 条模式偏离（step_ms={step_ms}）")
     for f in findings[:8]:
         print(f"    {f['anomaly_type']} @点{f['index']} 分数 {f['score']:.3f}")
     kinds = sorted({f["anomaly_type"] for f in findings})

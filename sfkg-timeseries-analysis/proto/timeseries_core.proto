@@ -11,9 +11,13 @@ service TimeseriesCoreService {
       returns (SyncConfigResponse);
   rpc syncRelations(SyncRelationsRequest)
       returns (SyncConfigResponse);
+  rpc syncWindowConfig(SyncWindowConfigRequest)
+      returns (SyncConfigResponse);
+  rpc syncDerivedSeriesConfigs(SyncDerivedSeriesConfigsRequest)
+      returns (SyncConfigResponse);
 
-  // Production ingest entry: resolve once, then persist and update the hot
-  // window in parallel inside Core.
+  // Production ingest entry: resolve once, persist to cold storage, then
+  // update the hot window inside Core.
   rpc ingestData(IngestDataRequest)
       returns (IngestDataResponse);
   // Fine-grained ingest RPCs are retained for testing, replay and compensation.
@@ -37,6 +41,14 @@ service TimeseriesCoreService {
       returns (QueryHistoryOverviewResponse);
 }
 
+// Core sends constraint violations to the unified service after a successful
+// hot-window update. The two services intentionally share this package so
+// the generated client uses the same gRPC method path and wire schema.
+service TimeseriesConstraintResultReceiverService {
+  rpc ReceiveConstraintResult(ConstraintResultMessage)
+      returns (SyncResponse);
+}
+
 enum OperationCode {
   OPERATION_CODE_OK = 0;
   OPERATION_CODE_PARTIAL_SUCCESS = 1;
@@ -53,6 +65,11 @@ message OperationResult {
   uint64 success_count = 2;
   uint64 failed_count = 3;
   string message = 4;
+}
+
+message SyncResponse {
+  bool success = 1;
+  string message = 2;
 }
 
 message TimeseriesValue {
@@ -120,6 +137,15 @@ enum VariableRole {
   VARIABLE_ROLE_DEPENDENT = 2;
 }
 
+// Business meaning of a sequence. This is metadata for a whole sequence, not
+// a per-point value type. The unified service owns this classification.
+enum SeriesKind {
+  SERIES_KIND_UNSPECIFIED = 0;
+  SERIES_KIND_CONTINUOUS = 1;
+  SERIES_KIND_DISCRETE = 2;
+  SERIES_KIND_CATEGORICAL = 3;
+}
+
 enum BucketAggregation {
   BUCKET_AGGREGATION_UNSPECIFIED = 0;
   BUCKET_AGGREGATION_FIRST = 1;
@@ -140,13 +166,13 @@ enum GapFillMethod {
 message SequenceAlignmentConfig {
   string sequence_id = 1;
   VariableRole role = 2;
-  BucketAggregation aggregation = 3;
-  GapFillMethod fill_method = 4;
+  optional BucketAggregation aggregation = 3;
+  optional GapFillMethod fill_method = 4;
 }
 
 message AlignmentConfig {
   repeated SequenceAlignmentConfig sequences = 1;
-  int64 bucket_interval = 2;
+  optional int64 bucket_interval = 2;
 }
 
 message ConstraintTerm {
@@ -186,7 +212,11 @@ message RuntimeInstanceConfig {
   string data_source_id = 2;
   string external_sequence_id = 3;
   string category_id = 4;
+  // Kept for compatibility with the first interface. It currently accepts
+  // physical type names and legacy continuous/discrete aliases.
   string data_type = 5;
+  // Business classification of the sequence; omitted means unspecified.
+  SeriesKind series_kind = 6;
 }
 
 // Runtime copy of a confirmed constraint. enabled only controls whether the
@@ -202,7 +232,7 @@ message RelationLagRange {
 }
 
 message RuntimeRelationSource {
-  string source_category_id = 1;
+  string source_sequence_id = 1;
   double weight = 2;
   oneof lag_spec {
     int64 fixed_lag = 3;
@@ -213,7 +243,7 @@ message RuntimeRelationSource {
 message RuntimeRelationConfig {
   string relation_id = 1;
   reserved 2;
-  string target_category_id = 3;
+  string target_sequence_id = 3;
   string relation_type = 4;
   reserved 5, 6;
   double confidence = 7;
@@ -233,13 +263,69 @@ message SyncRelationsRequest {
   repeated RuntimeRelationConfig items = 1;
 }
 
+message RuntimeWindowConfig {
+  // Milliseconds retained by the Core hot window. The current Core instance
+  // applies one global window configuration; task-specific routing can be
+  // added when task_id is introduced to the data path.
+  int64 window_size = 1;
+}
+
+message SyncWindowConfigRequest {
+  RuntimeWindowConfig config = 1;
+}
+
+message LinearTerm {
+  string sequence_id = 1;
+  double coefficient = 2;
+}
+
+message LinearCombinationConfig {
+  repeated LinearTerm terms = 1;
+  double bias = 2;
+}
+
+enum DerivedOperator {
+  DERIVED_OPERATOR_UNSPECIFIED = 0;
+  DERIVED_OPERATOR_ADD = 1;
+  DERIVED_OPERATOR_SUBTRACT = 2;
+  DERIVED_OPERATOR_MULTIPLY = 3;
+  DERIVED_OPERATOR_DIVIDE = 4;
+}
+
+message DerivedExpression {
+  oneof node {
+    string sequence_id = 1;
+    double constant = 2;
+    DerivedBinaryExpression binary = 3;
+  }
+}
+
+message DerivedBinaryExpression {
+  DerivedOperator operator = 1;
+  DerivedExpression left = 2;
+  DerivedExpression right = 3;
+}
+
+message DerivedSeriesConfig {
+  string derived_sequence_id = 1;
+  bool enabled = 2;
+  oneof formula {
+    LinearCombinationConfig linear_combination = 3;
+    DerivedExpression expression = 4;
+  }
+}
+
+message SyncDerivedSeriesConfigsRequest {
+  repeated DerivedSeriesConfig items = 1;
+}
+
 message SyncConfigResponse {
   OperationResult operation = 1;
 }
 
 message IngestDataRequest {
   repeated TimeseriesIngestData points = 1;
-  int64 window_size = 2;
+  reserved 2;
   // The normalized batch is omitted by default to avoid an unnecessary copy.
   bool return_resolved_data = 3;
 }
@@ -250,8 +336,20 @@ message IngestDataResponse {
   OperationResult resolve_result = 2;
   OperationResult storage_result = 3;
   OperationResult window_result = 4;
+  // Result of notifying the unified service. An OK result also records that
+  // notification was not needed when no violation was found.
+  OperationResult constraint_notification_result = 6;
   // Set only when return_resolved_data is true.
   TimeseriesBatch resolved_data = 5;
+  // Derived sequences are updated in the hot window only and are not persisted
+  // to TDengine.
+  OperationResult derived_result = 7;
+}
+
+message ConstraintResultMessage {
+  int64 check_time_ms = 1;
+  repeated string violated_constraint_ids = 2;
+  repeated string sequence_ids = 3;
 }
 
 message IngestRequest {
@@ -298,6 +396,7 @@ message AlignWindowDataRequest {
     QueryWindowDataRequest window_query = 3;
   }
   AlignmentConfig config = 2;
+  repeated string relation_ids = 4;
 }
 
 message AlignWindowDataResponse {
@@ -332,7 +431,10 @@ message ComputeStatisticsRequest {
     AlignedWindowData aligned_data = 2;
     QueryWindowDataRequest window_query = 4;
   }
+  // The registered relation identifies one target sequence and its source
+  // sequences when a correlation vector is computed from aligned data.
   AlignmentConfig alignment_config = 3;
+  string relation_id = 5;
 }
 
 message ComputeStatisticsResponse {
@@ -365,6 +467,8 @@ message QueryHistoryDataRequest {
   repeated string sequence_ids = 1;
   int64 start_time = 2;
   int64 end_time = 3;
+  // Optional millisecond bucket size. When set, Core returns the last value
+  // observed for each sequence in each bucket.
   optional int64 granularity = 4;
 }
 

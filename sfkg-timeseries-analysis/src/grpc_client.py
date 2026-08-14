@@ -224,7 +224,8 @@ class GrpcCoreDataClient(CoreDataClient):
         """调 C 的 computeBasicStatistics 拿相关性向量（GCAD 的相关性先验）。
 
         因变量/自变量通过 alignment_config 的角色（DEPENDENT/INDEPENDENT）告诉 C，
-        C 按角色匹配已注册关系（按 category_id），用窗口数据算因变量与每个
+        C 按角色匹配已注册关系（relation 字段已规范为 source_sequence_id /
+        target_sequence_id），用窗口数据算因变量与每个
         自变量的 Pearson 相关系数。返回 {independent_sequence_id: coefficient}。
         """
         alignment_config = pb.AlignmentConfig(

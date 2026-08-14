@@ -4,9 +4,11 @@
 等 C 端真服务跑起来之前，用它和 P 端的 GrpcCoreDataClient 联调。
 
 运行（终端 1）：
-    python fake_core_server.py            # 监听 0.0.0.0:50051
+    python fake_core_server.py            # 监听 0.0.0.0:50551（伪 C 端独立端口）
 运行（终端 2）：
-    python main.py --provider grpc
+    python main.py --provider grpc --core-port 50551
+
+端口约定：50551 是**伪 C 端专用**，不占真 C 端 50051（C/S 端自身联调要用 50051）。
 """
 
 from __future__ import annotations
@@ -314,7 +316,7 @@ class FakeCoreService(pb_grpc.TimeseriesCoreServiceServicer):
         )
 
 
-def serve(csv_path: str, port: int = 50051) -> None:
+def serve(csv_path: str, port: int = 50551) -> None:
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
     pb_grpc.add_TimeseriesCoreServiceServicer_to_server(FakeCoreService(csv_path), server)
     server.add_insecure_port(f"0.0.0.0:{port}")

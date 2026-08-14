@@ -129,11 +129,49 @@ class AnalysisServicer(pb_grpc.TimeseriesAnalysisServiceServicer):
         return pb.QueryForecastResultsResponse(task_id=q.task_id, results=results)
 
     def _query_results(self, q: pb.ResultQuery) -> list:
-        """按 ResultQuery 取结果：latest_only 取最近一条，否则取历史（limit 限条数）。"""
+        """按 ResultQuery 取结果：latest_only 取最近一条，否则取历史（limit 限条数）。
+
+        仓库为空但任务已注册且模型未就绪 → 合成一条 MODEL_NOT_READY 结果（正常结果，
+        表示「任务在跑、首训还没完成」，S 可继续轮询，不必报错）。未知任务 /
+        模型已就绪 → 返回空。
+        """
         if q.latest_only:
             latest = self._repository.latest(q.task_id)
-            return [latest] if latest is not None else []
-        return self._repository.history(q.task_id, limit=q.limit or None)
+            if latest is not None:
+                return [latest]
+            not_ready = self._model_not_ready_result(q.task_id)
+            return [not_ready] if not_ready is not None else []
+        results = self._repository.history(q.task_id, limit=q.limit or None)
+        if results:
+            return results
+        not_ready = self._model_not_ready_result(q.task_id)
+        return [not_ready] if not_ready is not None else []
+
+    def _model_not_ready_result(self,
+                                task_id: str) -> pb.AnomalyResult | pb.ForecastResult | None:
+        """任务已注册且模型未就绪 → 合成一条 MODEL_NOT_READY 结果；否则 None。
+
+        判断模型未就绪 = 引擎已注入 且 needs_training 为 True（模型按当前配置版本
+        还没训好）。覆盖「注册后、首训完成前」的查询窗口；数据不足时引擎会写
+        DATA_NOT_READY 进仓库，S 先拿到那条真实结果，不走到这里。按任务类型返回
+        对应格式（AnomalyResult / ForecastResult），status 都是 MODEL_NOT_READY。
+        """
+        rec = self._registry.get(task_id)
+        if rec is None or self._engine is None:
+            return None
+        if not self._engine.needs_training(rec.task, rec.kind, rec.config_version):
+            return None
+        message = "模型未就绪（等待训练完成），请稍后再查"
+        if rec.kind == TaskKind.FORECAST:
+            return pb.ForecastResult(
+                task_id=task_id, run_id="", generated_at_ms=_now_ms(),
+                status=pb.ANALYSIS_STATUS_MODEL_NOT_READY, message=message,
+                timestamps_ms=[], sequence_ids=[], values=[],
+                risk_findings=[], model_version="")
+        return pb.AnomalyResult(
+            task_id=task_id, run_id="", generated_at_ms=_now_ms(),
+            status=pb.ANALYSIS_STATUS_MODEL_NOT_READY, message=message,
+            findings=[], model_version="")
 
     # ---- 归因建议（空壳，返回 NOT_IMPLEMENTED）----
 

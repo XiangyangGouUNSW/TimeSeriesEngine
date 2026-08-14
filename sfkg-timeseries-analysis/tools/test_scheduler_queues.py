@@ -74,6 +74,19 @@ class FakeEngine:
         return any(not self.store.is_ready(
             f"{task.task_id}:{m}@v{config_version}") for m in methods)
 
+    # 预测/异常任务动态间隔门控：假引擎不设 next_due，总是立即到期 → 现有用例行为不变
+    def forecast_due_epoch(self, task_id: str) -> int:
+        return 0
+
+    def reset_forecast_due(self, task_id: str) -> None:
+        pass
+
+    def anomaly_due_epoch(self, task_id: str) -> int:
+        return 0
+
+    def reset_anomaly_due(self, task_id: str) -> None:
+        pass
+
     def run_forecast(self, task, config_version: int = 0):
         key = f"{task.task_id}@v{config_version}"
         if not self.store.is_ready(key):

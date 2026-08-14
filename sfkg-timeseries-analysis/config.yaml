@@ -7,9 +7,11 @@ server:
 
 core:
   provider: "mock"          # mock = 本地 ETT 假装 C 端；grpc = 连真的 C 端
-                            # 联调预演：python main.py --provider grpc
-  address: "222.29.156.141"      # C 端 gRPC 地址
-  port: 50051               # C 端 gRPC 端口（C 端默认监听 50051）
+                            # 联调预演：python tools/fake_core_server.py（伪 C 端监听
+                            # 50551，不占真 C 端 50051）+
+                            #   python main.py --provider grpc --core-port 50551
+  address: "localhost"      # C 端 gRPC 地址
+  port: 50051               # C 端 gRPC 端口（真 C 端默认监听 50051；伪 C 端专用 50551）
   timeout_seconds: 30.0     # 调 C 端超时
 
 s:
@@ -37,6 +39,12 @@ forecast_model:
   type: "patchtst"             # 预测模型：PatchTST（SOTA Transformer 类）
   context_length: 168          # 输入窗口长度（评估 96/168/336 中 168 最稳）
   prediction_length: 24        # 预测步数（= inference.horizon_steps）
+  interval_percent: 0.7        # 预测任务动态运行间隔：每次成功预测后
+                               #   next_due = 上次 + horizon × interval_percent ÷ 数据频率
+                               #   （频率从实时窗口相邻时间戳算，即每步时长）
+                               #   = 预测周期走完百分之多少再重跑一次（0.7 = 70%）。
+                               #   异常任务看 anomaly.recheck_fraction_*（同构，按检测窗口）。
+                               #   数据不足/失败轮不设 → 保持默认周期重试。
   patch_size: 16               # PatchTST 分块大小
   patch_stride: 8              # 分块滑动步长
   d_model: 64                  # 编码器隐层维度
@@ -55,13 +63,81 @@ inference:
   window_size: 100             # 异常检测：取实时窗口最近多少行当输入
   horizon_steps: 24            # 预测未来多少步
 
+anomaly:
+  # 异常模型训练数据门槛（历史点数）。任务给了 minimum_points 优先于一切；
+  # 任务没给时：minimum_points 是全局默认，minimum_points_by_method 按方法覆盖默认值。
+  # 数据不足的方法本轮推迟（不训练不检测），等数据增长后自动开始；已就绪的方法不受影响。
+  # 各方法需求不同（依据模型超参，见 anomaly_models.py）：
+  #   - HISTORICAL_MATCH 索引式匹配，不依赖历史训练数据（只需实时窗口）→ 0；
+  #   - DISCRETE_OUTLIER DBSCAN 只要足够簇密度（min_samples=5）→ 50；
+  #   - TREND_SHIFT 滑动窗口 10，需要足够的窗口斜率样本来估计分布 → 100；
+  #   - CAUSAL_PATTERN 深度 GCAD（TSMixer + 梯度因果图）：需足够滑窗训 TSMixer +
+  #     估计正常图 Ā_norm + 80/20 验证切分定阈值 → 400（内部还有 nwin<max(8,4τ) 兜底）；
+  #   - MUTUAL_COUPLING 每对 2 通道深度 GCAD：同上 → 400。
+  minimum_points: 100
+  minimum_points_by_method:
+    HISTORICAL_MATCH: 0
+    DISCRETE_OUTLIER: 50
+    TREND_SHIFT: 100
+    CAUSAL_PATTERN: 400
+    MUTUAL_COUPLING: 400
+  # HISTORICAL_MATCH（语义事件异常）启用门槛：已确认历史事件条数 ≥ 该值才启用检测
+  # （技术方案：确认事件库达到一定规模后才能启用语义事件异常）。默认 1 = 至少
+  # 有 1 条确认事件（事件 ID 由 S 经 semantic_context.confirmed_historical_event_ids
+  # 下发）；不足 → 该方法推迟（DATA_NOT_READY），等事件积累后自动开始。
+  minimum_confirmed_events: 1
+  # 写事件峰值保护：每任务每轮最多写多少条事件（异常逐点写、预测预警共用）。
+  # 逐点写不聚合（一个异常点一个事件）→ 超上限只能截断（合并会丢逐点语义），
+  # 截断/失败计数进结果 message 可观测；数值按联调真实负载再调（现在占位 50）。
+  max_events_per_run: 50
+  # 深度 GCAD（2025，arXiv 2501.13493）超参：TSMixer 预测器 + 梯度格兰杰因果图 +
+  # 对称稀疏化 + 因果偏差打分（CAUSAL_PATTERN 与 MUTUAL_COUPLING 共用）。
+  # 论文默认：80/20 train/validation 切分（val_frac），阈值来自验证段（模型未见）分数分位。
+  # h=0.0 时用 h_quantile 从正常窗口原始 A 非对角取分位自适应（SWaT 验证 AUROC≈0.85）。
+  gcad:
+    tau: 4                # 最大因果滞后（滑窗长度）；SWaT×10 扫描 τ∈{4,8,12,16} → τ=4 最优
+                          #   （AUROC 0.854 / AUPRC 0.754 vs τ=8 的 0.844 / 0.711；PSM 同向）
+    hidden_dim: 64
+    num_layers: 2
+    epochs: 20
+    batch_size: 64
+    learning_rate: 0.001
+    p: 0.5                # 正常图采样 Bernoulli 概率（论文式 7）
+    n_norm_samples: 300   # 正常图采样窗口数上限
+    h: 0.0                # 显式稀疏阈值；0 → 自适应（见 h_quantile）
+    h_quantile: 0.3       # 自适应 h = 正常窗口 |A| 非对角分位
+    beta: 1.0             # 时间模式偏离权重（S = Sc + β·St，论文式 12）
+    score_quantile: 0.95  # 检测阈值 = 验证段正常偏离分数分位
+    eps: 0.000001         # 偏离分母防零（写十进制，PyYAML 会把 1e-6 当字符串）
+    max_train_windows: 5000
+    train_budget_s: 240   # fit 墙钟预算（< scheduler.train_timeout_s=300，超时弃权不自挂）
+    val_frac: 0.2         # 80/20 切分：训练段训 TSMixer+正常图，验证段定阈值
+    seed: 0
+    corr_threshold: 0.1   # 相关性先验：|corr|<该值 → 对应边清零
+  # 异常任务动态检测间隔（负责人 08-13 定，与预测同构）：
+  #   interval = window_size × recheck_fraction ÷ 频率（频率从实时窗口相邻时间戳算）。
+  # 一次检测 = 一个窗口（吃最近 window_size 行），所以间隔按"检测窗口的百分比"：
+  #   - 无异常：recheck_fraction_normal（默认 1.0）= 等一整个新窗口再查；
+  #   - 有异常：recheck_fraction_hot（默认 0.05）= 等 5% 窗口（window=100 → 5 点）
+  #     盯住事件；连续 hot_confirm_clean_runs 轮无异常 → 回正常节奏（确认恢复防抖动）。
+  # 数据不足/窗口未推进/失败轮不设 → 保持默认周期重试。S 端 slide_step_ms 仍有效：
+  # 热/正常间隔再短也要窗口推进够 slide 才真正重检测。
+  recheck_fraction_normal: 1.0
+  recheck_fraction_hot: 0.05
+  hot_confirm_clean_runs: 2
+
 historical_match:
   min_deviation_z: 2.0         # 历史语义匹配命中阈值：窗口内最大 z-score ≥ 该值才报（低误报）
   top_k: 3                     # 每窗口最多报多少条历史相似命中（真实匹配核心等 S 事件明细协议）
 
 scheduler:
-  interval_seconds: 10         # 固定周期触发间隔：每 N 秒扫描一次所有 ENABLED 任务
-                               # （演示/联调可调短，如 3）
+  interval_seconds: 1          # producer 扫描周期（s）：每 N 秒 tick 一次 = 任何任务实际
+                               # 最多每 N 秒跑一轮，N 是"调度下限"。动态 next_due（预测/
+                               # 异常）小于 N 秒的部分被吞掉——想要数据率对齐的检测/预测
+                               # 节奏（快数据快速查），N 必须小于目标间隔。
+                               # 08-14 吞吐核算后 10→1：100k 条/s 写入下 2 worker 可扛
+                               # 每秒 N_tasks 轮（百任务级别余量足），1s 扫掠成本可忽略。
+                               # 演示/联调可调短，如 0.2。
   train_queue_size: 8          # 训练队列有界深度，满则跳过下轮（不阻塞不丢配置）
   infer_queue_size: 32         # 推理队列有界深度
   train_workers: 1             # 训练 worker 数：重型训练串行，避免抢 torch 全局线程池

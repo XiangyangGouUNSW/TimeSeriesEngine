@@ -80,7 +80,10 @@ def test_slide_throttle() -> None:
     core = StubCore()
     engine = AnalysisEngine(
         core_client=core, result_client=None,
-        config={"inference": {"window_size": 10}},
+        # 门槛低于 StubCore 的 10 点、事件门槛关闭：测的是 slide 语义，不掺门槛
+        config={"inference": {"window_size": 10},
+                "anomaly": {"minimum_points": 5,
+                            "minimum_confirmed_events": 0}},
         model_store=ModelStore(model_dir=tempfile.mkdtemp(prefix="slide-test-")))
     t = _task(slide_ms=2000)
 
@@ -110,7 +113,9 @@ def test_slide_throttle() -> None:
     core0 = StubCore()
     engine0 = AnalysisEngine(
         core_client=core0, result_client=None,
-        config={"inference": {"window_size": 10}},
+        config={"inference": {"window_size": 10},
+                "anomaly": {"minimum_points": 5,
+                            "minimum_confirmed_events": 0}},
         model_store=ModelStore(model_dir=tempfile.mkdtemp(prefix="slide0-test-")))
     t0 = _task(slide_ms=0)
     a = engine0.run_anomaly(t0)

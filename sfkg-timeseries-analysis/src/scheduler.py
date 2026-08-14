@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 from collections import namedtuple
 
 from analysis_engine import AnalysisEngine
@@ -102,36 +103,72 @@ class Scheduler(threading.Thread):
             start = self._tick_start % n
             self._tick_start += 1
             tasks = tasks[start:] + tasks[:start]   # 轮转起点：防固定顺序饿死
+        now_ms = int(time.time() * 1000)
+        enq_train = enq_infer = skip_due = 0
         for rec in tasks:
             try:
                 if self.engine.needs_training(rec.task, rec.kind,
                                               rec.config_version):
-                    self._enqueue(self._train_queue, self._train_inflight,
-                                  rec, "train")
+                    if rec.kind == TaskKind.FORECAST:
+                        # 模型失效/版本变化需重训 → 解除预测 next_due 门控，
+                        # 训完立刻出新一轮预测，不等旧的动态间隔
+                        self.engine.reset_forecast_due(rec.task_id)
+                    elif rec.kind == TaskKind.ANOMALY:
+                        # 异常同理：解除 next_due，重训完成立刻出新一轮检测
+                        self.engine.reset_anomaly_due(rec.task_id)
+                    if self._enqueue(self._train_queue, self._train_inflight,
+                                     rec, "train"):
+                        enq_train += 1
+                elif rec.kind == TaskKind.FORECAST and \
+                        now_ms < self.engine.forecast_due_epoch(rec.task_id):
+                    # 预测任务动态间隔：成功预测轮按「horizon × percent ÷ 频率」排了
+                    # next_due，未到期 → 本轮跳过推理（省推理成本）
+                    logger.debug("[scheduler] 任务 %s 未到预测到期时间，本轮跳过",
+                                 rec.task_id)
+                    skip_due += 1
+                elif rec.kind == TaskKind.ANOMALY and \
+                        now_ms < self.engine.anomaly_due_epoch(rec.task_id):
+                    # 异常任务动态间隔：每次真检测按「窗口 × recheck_fraction ÷ 频率」
+                    # 排 next_due（有异常→热节奏盯住，无→等整个新窗口）。未到期跳过；
+                    # 数据不足/失败轮不设 due → 维持固定周期重试。
+                    logger.debug("[scheduler] 任务 %s 未到异常检测到期时间，本轮跳过",
+                                 rec.task_id)
+                    skip_due += 1
                 else:
-                    self._enqueue(self._infer_queue, self._infer_inflight,
-                                  rec, "infer")
+                    if self._enqueue(self._infer_queue, self._infer_inflight,
+                                     rec, "infer"):
+                        enq_infer += 1
             except Exception:
                 logger.exception("[scheduler] tick 中任务 %s 分派失败", rec.task_id)
+        # 心跳：每秒一行（interval_seconds 粒度），联调看全局吞吐——
+        # 本轮入队率 + 队列积压（满 = 吞吐跟不上）+ 动态间隔跳过数。
+        if n:
+            logger.info("[scheduler] tick：任务 %d 个，本轮入队 train=%d / infer=%d，"
+                        "动态间隔跳过 %d，train_q=%d/%d infer_q=%d/%d",
+                        n, enq_train, enq_infer, skip_due,
+                        self._train_queue.qsize(), self._train_queue.maxsize,
+                        self._infer_queue.qsize(), self._infer_queue.maxsize)
 
     def _enqueue(self, q: queue.Queue, inflight: set[str], rec: TaskRecord,
-                 pool: str) -> None:
+                 pool: str) -> bool:
         """入队：先加 inflight 再 put_nowait；队列满回滚 inflight 并跳过。
 
         先加 inflight 防「worker 已消费完、producer 后加」造成永久残留；
-        队列满回滚并跳过，下个 tick 重试。
+        队列满回滚并跳过，下个 tick 重试。返回是否真正入队（inflight 去重 / 满 = False）。
         """
         with self._inflight_lock:
             if rec.task_id in inflight:
-                return
+                return False
             inflight.add(rec.task_id)
         try:
             q.put_nowait(Job(rec.task_id, rec.kind, rec.config_version))
+            return True
         except queue.Full:
             with self._inflight_lock:
                 inflight.discard(rec.task_id)
             logger.warning("[scheduler] %s 队列满（maxsize=%d），跳过 %s，下个 tick 重试",
                            pool, q.maxsize, rec.task_id)
+            return False
 
     # ---- worker：消费执行 ----
 

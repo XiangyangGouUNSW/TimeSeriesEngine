@@ -1,6 +1,6 @@
 """PatchTST 预测集成验证：engine.run_forecast 完整链路 + 模型复用。
 
-前置：fake_core_server 已在 localhost:50051 起好（python tools/fake_core_server.py）。
+前置：fake_core_server 已在 localhost:50551 起好（python tools/fake_core_server.py；伪 C 端专用端口，不占真 C 端 50051）。
 
 验证：
   1. run_forecast 用 PatchTST 预测目标序列（多元输入）；
@@ -73,7 +73,7 @@ def main() -> None:
     import logging
     logging.basicConfig(level=logging.INFO)
 
-    core = GrpcCoreDataClient("localhost", 50051)
+    core = GrpcCoreDataClient("localhost", 50551)
     # 用临时目录存模型，不污染模块目录
     with tempfile.TemporaryDirectory() as tmp:
         store = ModelStore(model_dir=tmp)

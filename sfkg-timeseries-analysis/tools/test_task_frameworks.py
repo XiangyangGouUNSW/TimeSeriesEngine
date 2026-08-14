@@ -25,6 +25,7 @@ for _p in (str(ROOT / "src"), str(ROOT / "generated")):
 
 import timeseries_analysis_pb2 as pb
 from analysis_engine import AnalysisEngine
+from data_types import SequenceDataScale
 from task_registry import TaskKind, TaskRegistry, TaskStatus
 from result_repository import ResultRepository
 
@@ -90,6 +91,7 @@ class FakeCore:
 
     result_client 用 None（无异常时不会写 S 事件）。
     窗口获取在 _run_anomaly_models 内（本测试 stub 掉，真路径由 gcad 集成测试覆盖）。
+    数据规模给足（≥ 默认门槛 100），不触发数据门槛（门槛专项见 test_anomaly_data_gate）。
     """
 
     def __init__(self):
@@ -99,12 +101,17 @@ class FakeCore:
         self.constraint_calls += 1
         return True, []
 
+    def get_sequence_data_scale(self, sequence_ids):
+        return [SequenceDataScale(sequence_id=sid, point_count=1000)
+                for sid in sequence_ids]
+
 
 def _parse_engine():
     engine = AnalysisEngine(core_client=FakeCore(), result_client=None,
                             config={"inference": {"window_size": 100}})
     seen = []
-    engine._run_anomaly_models = lambda t, mm, cv=0: seen.append(list(mm)) or []
+    # 2026-08-13 起 _run_anomaly_models 返回 (findings, step_ms)，stub 同步
+    engine._run_anomaly_models = lambda t, mm, cv=0: seen.append(list(mm)) or ([], 0)
     return engine, seen
 
 
@@ -158,7 +165,7 @@ def test_unknown_method() -> None:
     handler.emit = lambda r: records.append(r.getMessage())
     logging.getLogger("analysis_engine").addHandler(handler)
     try:
-        findings = engine._run_anomaly_models(task, ["FOO"])
+        findings, step_ms = engine._run_anomaly_models(task, ["FOO"])
     finally:
         logging.getLogger("analysis_engine").removeHandler(handler)
     assert findings == [], "未知方法应跳过且不报错"

@@ -45,13 +45,14 @@ def load_config() -> dict:
 
 
 def serve() -> None:
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s %(levelname)s %(message)s")
-
     parser = argparse.ArgumentParser(description="P 端对外服务")
     parser.add_argument("--core-address", default=None, help="覆盖 C 端地址")
     parser.add_argument("--core-port", type=int, default=None, help="覆盖 C 端端口")
+    parser.add_argument("--debug", action="store_true",
+                        help="DEBUG 日志（每个任务每次跳过/入队明细，联调用）")
     args = parser.parse_args()
+    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO,
+                        format="%(asctime)s %(levelname)s %(message)s")
 
     cfg = load_config()
     server_cfg = cfg.get("server", {"address": "0.0.0.0", "port": 50053})

@@ -1,7 +1,7 @@
 """因变量类离散序列的条件期望预测（CatBoost）+ 自变量类离散的保持当前值预测。
 
 技术方案 [54][56]：三种数据类型三种预测法——连续→PatchTST（已有）；
-自变量类离散→计划值否则保持当前值；因变量类离散→CatBoost（输入=连续序列预测值 +
+自变量类离散→保持当前值；因变量类离散→CatBoost（输入=连续序列预测值 +
 自变量离散预测值，输出条件期望值）。
 
 接口与 PatchTSTForecaster 对齐：fit(history_matrix) / forecast(window_matrix, steps) /
@@ -268,7 +268,8 @@ class CatBoostForecaster:
 class ConstantForecaster:
     """自变量类离散序列预测器（[54]）：无特征 → 预测 = 保持当前值。
 
-    知识库计划值接口未来接入；现在预测 = 窗口末值（窗口没值兜底 fit 时的末值）。
+    用户确认（08-13）：不做计划值查询接口，自变量类离散直接用**过去值**——预测 =
+    窗口末值（窗口没值兜底 fit 时的末值）。
     """
 
     sequence_ids: list[str]
@@ -289,6 +290,7 @@ class ConstantForecaster:
 
     def forecast(self, window_matrix: np.ndarray,
                  steps: int | None = None) -> dict[str, list[float]]:
+        n = steps if steps is not None else 24
         m = np.asarray(window_matrix, dtype=np.float32)
         last = self._last_value if self._last_value is not None else 0.0
         if (self.target_sequence_id is not None
@@ -297,7 +299,6 @@ class ConstantForecaster:
             valid = col[~np.isnan(col)]
             if len(valid):
                 last = float(valid[-1])
-        n = steps if steps is not None else 24
         return {self.target_sequence_id: [last] * n}
 
     def save(self, path: str | Path) -> None:

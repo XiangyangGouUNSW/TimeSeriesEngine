@@ -168,7 +168,11 @@ def main() -> None:
             "预测模型应已存 store（key 带版本 @v0）"
         print(f"[4] 预测任务首训出结果 ✓ 模型已就绪")
 
-        # 4b. 再跑几个周期：应命中缓存不重训（捕获"跳过训练"日志）
+        # 4b. 再跑几个周期：应命中缓存不重训（捕获"跳过训练"日志）。
+        #     预测任务动态间隔（horizon×0.7×step_ms，ETT 小时级 → ~16.8h）已把下次
+        #     到期排很远，本轮只验"缓存复用"：显式解除 next_due 门控 → 下一 tick 立即
+        #     走推理、命中缓存打"跳过训练"（等价于版本变化/重训解除门控的行为）。
+        engine.reset_forecast_due("task-sched-forecast-001")
         skip_logs = []
         handler = logging.Handler()
         handler.emit = lambda r: skip_logs.append(r.getMessage()) \

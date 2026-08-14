@@ -23,9 +23,10 @@ Python 时序分析模块：模型异常检测、时序预测与预警、归因�
   预警共用 S 的 ReceiveAnomalyResult 同一 RPC；
 - **离散序列预测**（按技术方案 [54][56] 三种数据类型三种预测法）：训练时按目标列历史
   原始取值类型**数据推断路由**——int64/bool → 离散、double → 连续、string（标签类）→
-  `NOT_IMPLEMENTED` 干净结果；**自变量类离散**（无特征）→ 保持当前值（计划值接口未来
-  接入）；**因变量类离散**（有特征）→ CatBoost 条件期望（内部 PatchTST 预测连续特征 +
-  CatBoost 当前工况→因变量值）；模型存盘带 `model_type`，loader 按标记分发；
+  `NOT_IMPLEMENTED` 干净结果；**自变量类离散**（无特征）→ 保持当前值
+  （`ConstantForecaster`：预测 = 窗口末值，用户 08-13 确认不做计划值查询接口，直接用
+  过去值）；**因变量类离散**（有特征）→ CatBoost 条件期望（内部 PatchTST 预测连续特征
+  + CatBoost 当前工况→因变量值）；模型存盘带 `model_type`，loader 按标记分发；
 - **模型入口 NaN 清洗**：C 对齐补的 NaN 在喂模型前统一前值填充 + 补 0（预测与异常
   检测同规则）；
 - **失败语义**：`data not ready` / `model not ready` 一律算成功（正常结果，不
@@ -37,6 +38,19 @@ Python 时序分析模块：模型异常检测、时序预测与预警、归因�
   **双队列双 worker 池**——训练队列（默认 1 worker 串行）与推理队列（默认 2 worker 并行）
   分离，重型训练不阻塞其他任务的在线检测/预测；队列有界满则跳过下轮、inflight 去重、
   worker 消费前重校验（启停/删除/类型重建/版本变更中途的过时任务丢弃）、优雅退出；
+- **预测任务动态运行间隔**：预测不再固定 10s 跑，每次**成功预测**后按
+  `next_due = 上次 + horizon × interval_percent ÷ 数据频率` 排下一次（数据频率 = 实时
+  窗口相邻时间戳差的倒数，即每步时长），即"预测周期走完百分之多少再重跑一次"
+  （`forecast_model.interval_percent`，默认 0.7）。数据不足/失败轮不设 → 保持默认周期
+  重试；模型需重训/版本变化 → 解除门控，训完立刻出新一轮预测；
+- **异常任务动态检测间隔**：与预测同构——**一次检测 = 一个窗口**（吃最近
+  `window_size` 行），每次真检测后按 `next_due = 上次 + window_size × recheck_fraction
+  ÷ 数据频率` 排下一次。**状态相关节奏**（config `anomaly.recheck_fraction_normal/hot`、
+  `hot_confirm_clean_runs`）：无异常 → 正常节奏（默认 1.0）= 等一整个新窗口再查；有异常
+  → 热节奏（默认 0.05）= 等 5% 窗口（window=100 → 5 点）盯住事件；热状态连续
+  `hot_confirm_clean_runs` 轮无异常 → 回正常节奏（确认恢复防抖动）。窗口未推进到
+  `slide_step_ms` 的跳过轮 → 排到 slide 步长之后（避免每 tick 空 fetch）；数据不足/失败
+  轮不设 → 保持默认周期重试；
 - **数据规则**：训练用历史数据；检测/预测输入一律用 C 端对齐后的实时窗口
   （P 只 reshape，不自己做对齐）；
 - **归因建议**：接口返回 `NOT_IMPLEMENTED`（空壳）。

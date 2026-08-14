@@ -137,9 +137,16 @@ class FakeCore:
             sequence_ids=list(seq_ids),
             values=[[float(v)] for v in np.arange(200, dtype=float).reshape(-1, 1)[:, 0]])
 
+    def get_sequence_data_scale(self, seq_ids):
+        # 数据规模 200 点 ≥ 默认门槛 100，不触发数据门槛（门槛专项见 test_anomaly_data_gate）
+        return [SimpleNamespace(sequence_id=sid, point_count=200) for sid in seq_ids]
+
 
 def _cfg():
-    return {"inference": {"window_size": 100}}
+    # minimum_confirmed_events=0：本测试把 HISTORICAL_MATCH 当 no-op 模型测
+    # 框架/持久化/loader 分发，事件数门槛（默认 1）专项见 test_anomaly_data_gate。
+    return {"inference": {"window_size": 100},
+            "anomaly": {"minimum_confirmed_events": 0}}
 
 
 def test_engine_integration() -> None:

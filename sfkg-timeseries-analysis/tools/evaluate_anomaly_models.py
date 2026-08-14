@@ -5,11 +5,11 @@
 
 思路：
   - DBSCAN：OT 列注入尖峰，看离散离群检出。
-  - GCAD：合成"多自变量→单因变量"因果数据
+  - GCAD（深度版，2025 arXiv 2501.13493）：合成"多自变量→单因变量"因果数据
         y[t] = a1*x1[t-1] + a2*x2[t-1] + a3*x3[t-1] + ε
     （x1..x3 取 ETT 真实列，另加 1 个与 y 无关的干扰列）。
     注入三种模式偏移（系数变化 / 关系反转 / 变量失效），
-    对比【有 / 无相关性先验】时的检出能力（召回 / 精确 / 正常窗口误报）。
+    验证相关性先验边门（H 矩阵：低相关边清零）并扫描 score_quantile 找误报/召回平衡。
 """
 
 from __future__ import annotations
@@ -134,11 +134,20 @@ KINDS = {"coef_shift": "系数变化a1×2", "rel_break": "关系反转a1→-a1",
          "source_drop": "变量失效a1→0"}
 
 
-def eval_gcad_multivariate(data: np.ndarray):
-    """GCAD 调优：①相关性先验筛选验证 ②阈值(quantile)权衡扫描。
+# 深度 GCAD 评估配置（调优脚本用轻量配置控时长；工厂默认看 config.yaml anomaly.gcad）
+# score_quantile 不进 base：① 处用默认 0.95，② 处逐 q 扫
+GCAD_CFG = dict(tau=8, hidden_dim=64, num_layers=2, epochs=3, batch_size=64,
+                learning_rate=1e-3, p=0.5, n_norm_samples=64, h=0.0, h_quantile=0.3,
+                beta=1.0, eps=1e-6, max_train_windows=2000,
+                train_budget_s=60, val_frac=0.2, seed=0)
 
-    ① 对比有无先验时模型实际使用的自变量列（_sources），确认筛选真的剔除了干扰列；
-    ② 不同 residual_quantile 下三种注入异常的平均召回 + 正常窗口误报，找误报/召回平衡点。
+
+def eval_gcad_multivariate(data: np.ndarray):
+    """GCAD 调优：①相关性先验边门验证 ②阈值(score_quantile)权衡扫描。
+
+    ① 深度版先验以"逐边稀疏阈值矩阵 H"生效（不再删自变量列）：relations 边低阈值
+       保留、|corr|<corr_threshold 的边置 +∞ 清零——直接查 H 验证干扰列真被清掉；
+    ② 不同 score_quantile 下三种注入异常的平均召回 + 正常窗口误报，找误报/召回平衡点。
     """
     M, a = build_causal_data(data)
     train = M[:1000]                          # 正常段训练
@@ -148,24 +157,25 @@ def eval_gcad_multivariate(data: np.ndarray):
     dropped = sorted(j for j in prior if j not in kept)
     win_normal = M[1500:1550].copy()          # 正常窗口（测误报）
 
-    # ① 先验筛选验证：模型最终使用的自变量列
-    m_no_prior = GcadAnomalyModel(lag=3, residual_quantile=0.95,
-                                  target_index=target_idx)
-    m_no_prior.fit(train)
-    m_prior = GcadAnomalyModel(lag=3, residual_quantile=0.95,
-                               target_index=target_idx,
-                               correlation_prior=prior, corr_threshold=0.1)
-    m_prior.fit(train)
-    sel_info = (m_no_prior._sources, m_prior._sources)
+    # ① 先验边门验证：直接查稀疏阈值矩阵 H 的 i→目标 列
+    m = GcadAnomalyModel(**GCAD_CFG, target_index=target_idx,
+                         correlation_prior=prior, corr_threshold=0.1)
+    m.fit(train)
+    H = m._H
+    gate = {j: float(H[j, target_idx]) for j in range(4)}
+    assert all(not np.isinf(gate[j]) for j in kept), \
+        f"保留列 {kept} 的边阈值应为有限值：{gate}"
+    assert dropped and all(np.isinf(gate[j]) for j in dropped), \
+        f"干扰列 {dropped} 的边应被低相关清零：{gate}"
 
-    # ② 阈值权衡：quantile 越高越严格（误报↓但可能漏检）
+    # ② 阈值权衡：score_quantile 越高越严格（误报↓但可能漏检）
     rows = []
     for q in (0.90, 0.95, 0.98, 0.99):
         recalls, fp_list = [], []
         for kind in KINDS:
-            model = GcadAnomalyModel(lag=3, residual_quantile=q,
-                                     target_index=target_idx,
-                                     correlation_prior=prior, corr_threshold=0.1)
+            model = GcadAnomalyModel(**GCAD_CFG, target_index=target_idx,
+                                     correlation_prior=prior, corr_threshold=0.1,
+                                     score_quantile=q)
             model.fit(train)
             win = inject_causal_anomaly(M, a, kind)
             findings = model.detect(win)
@@ -174,7 +184,7 @@ def eval_gcad_multivariate(data: np.ndarray):
             recalls.append(r)
             fp_list.append(len(model.detect(win_normal)))
         rows.append((q, float(np.mean(recalls)), fp_list))
-    return rows, sel_info, kept, dropped
+    return rows, gate, kept, dropped, prior
 
 
 # ---------------- MUTUAL_COUPLING 双变量互耦 ----------------
@@ -320,13 +330,14 @@ def main() -> None:
     print(f"  检出 {n} 条 | 召回 {r:.2f} | 精确 {p:.2f} | 准确 {a:.2f}")
 
     # GCAD 多自变量→单因变量
-    rows, (src_no_prior, src_prior), kept, dropped = eval_gcad_multivariate(data)
+    rows, gate, kept, dropped, prior = eval_gcad_multivariate(data)
     print("\n[GCAD] 多自变量→单因变量（y = a1·x1[t-1] + a2·x2[t-1] + a3·x3[t-1]）")
     print("  列：0=x1  1=x2  2=x3  3=干扰列(与y无关)  4=因变量y")
-    print("  ①相关性先验筛选验证：")
-    print(f"     无先验：模型使用全部自变量列 {src_no_prior}")
-    print(f"     有先验：剔除 {dropped}（|corr|<0.1），保留 {src_prior}")
-    print(f"  ②阈值权衡（三种模式偏移平均召回，正常窗口 50 点）：")
+    print("  ①相关性先验边门（H 矩阵 i→目标 阈值；|corr|<0.1 → inf 清零）：")
+    for j in range(4):
+        flag = "清零" if j in dropped else "保留"
+        print(f"     列{j}：|corr|={abs(prior[j]):.3f} → H={gate[j]}（{flag}）")
+    print(f"  ②阈值权衡（score_quantile 越高越严格，三种模式偏移平均召回，正常窗口 50 点）：")
     print(f"     {'quantile':<10}{'平均召回':>8}  各异常误报(系数变化/关系反转/变量失效)")
     for q, avg_r, fp_list in rows:
         print(f"     {q:<10.2f}{avg_r:>8.2f}  {fp_list}")
@@ -352,7 +363,7 @@ def main() -> None:
         print(f"  {COUPLING_KINDS[kind]:<10}{str(win_det):>10}{r:>8.2f}{p:>6.2f}{acc:>6.2f}{fp:>6}  {fwd}/{bwd}")
     print("=" * 60)
     print("说明：三种模式偏移 = 破坏因变量与自变量的因果关系（模式偏移/趋势异常）。")
-    print("quantile 是训练残差的分位数阈值：越高越严格（误报低但可能漏检），")
+    print("score_quantile 是验证段正常因果偏离分数的分位数阈值：越高越严格（误报低但可能漏检），")
     print("召回=注入异常检出比例，误报=正常窗口里被误报的点数（应为 0 为佳）。")
 
 
