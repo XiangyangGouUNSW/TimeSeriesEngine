@@ -69,9 +69,6 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
             }
             if (request.getCategoryId() != null) {
                 validateCategory(request.getCategoryId());
-                if (!memoryCache.getCategory(request.getCategoryId()).isPresent()) {
-                    throw new BusinessException("category not found: " + request.getCategoryId());
-                }
             }
         }
         cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
@@ -144,7 +141,9 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
             return;
         }
         cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
-        memoryCache.getCategory(categoryId).orElse(null);
+        if (memoryCache.getCategory(categoryId).isEmpty()) {
+            throw new BusinessException("category not found: " + categoryId);
+        }
     }
 
     @Override

@@ -98,7 +98,7 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
         });
 
         forecastTaskMapper.insert(entity);
-        syncForecastTaskToCore(taskId);
+        // syncForecastTaskToCore(taskId);  // C端 SyncTaskStatus 暂不启用
         syncForecastTaskToForecastService(taskId);
         return taskId;
     }
@@ -140,7 +140,7 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
         });
 
         forecastTaskMapper.updateById(entity);
-        syncForecastTaskToCore(request.getTaskId());
+        // syncForecastTaskToCore(request.getTaskId());  // C端 SyncTaskStatus 暂不启用
         forecastGrpcClient.updateForecastTaskStatus(request.getTaskId(), request.getStatus());
     }
 

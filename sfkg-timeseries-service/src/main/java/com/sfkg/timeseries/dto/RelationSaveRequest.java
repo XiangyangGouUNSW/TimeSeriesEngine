@@ -1,6 +1,6 @@
 package com.sfkg.timeseries.dto;
 
-import java.util.Collection;
+import java.util.List;
 import lombok.Data;
 
 @Data
@@ -8,7 +8,7 @@ public class RelationSaveRequest {
 
     private String relationId;
     private String relationName;
-    private Collection<String> sourceSequences;
+    private List<String> sourceSequences;
     private String targetSequenceId;
     private String relationType;
     private String lagRange;

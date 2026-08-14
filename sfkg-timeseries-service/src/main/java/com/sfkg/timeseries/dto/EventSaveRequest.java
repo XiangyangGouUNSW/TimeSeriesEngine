@@ -1,7 +1,7 @@
 package com.sfkg.timeseries.dto;
 
 import java.time.LocalDateTime;
-import java.util.Collection;
+import java.util.List;
 import lombok.Data;
 
 @Data
@@ -12,8 +12,8 @@ public class EventSaveRequest {
     private String eventType;
     private String eventSource;
     private String taskId;
-    private Collection<String> relatedSequences;
-    private Collection<String> relatedRules;
+    private List<String> relatedSequences;
+    private List<String> relatedRules;
     private String eventDescription;
     private String eventLevel;
     private LocalDateTime eventTime;

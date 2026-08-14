@@ -42,6 +42,7 @@ import com.sfkg.timeseries.grpc.QueryHistoryOverviewResponse;
 import com.sfkg.timeseries.grpc.QueryWindowDataRequest;
 import com.sfkg.timeseries.grpc.QueryWindowDataResponse;
 import com.sfkg.timeseries.grpc.RawTimeseriesPoint;
+import com.sfkg.timeseries.grpc.RelationLagRange;
 import com.sfkg.timeseries.grpc.RuntimeConstraintConfig;
 import com.sfkg.timeseries.grpc.RuntimeInstanceConfig;
 import com.sfkg.timeseries.grpc.RuntimeRelationConfig;
@@ -60,6 +61,7 @@ import com.sfkg.timeseries.grpc.SyncWindowConfigRequest;
 import com.sfkg.timeseries.grpc.TimeseriesCoreServiceGrpc;
 import com.sfkg.timeseries.grpc.TimeseriesIngestData;
 import com.sfkg.timeseries.grpc.TimeseriesValue;
+import com.sfkg.timeseries.grpc.VariableRole;
 import com.sfkg.timeseries.grpc.WindowData;
 import com.sfkg.timeseries.vo.HistoryDataVO;
 import io.grpc.ManagedChannel;
@@ -283,13 +285,10 @@ public class TimeseriesCoreGrpcClient {
                             .setRelationType(nullToEmpty(relation.getRelationType()))
                             .setConfidence(relation.getConfidence() != null ? relation.getConfidence().doubleValue() : 0.0)
                             .setEnabled("ENABLE".equalsIgnoreCase(relation.getEffectiveStatus()));
-                    long lag = parseLag(relation.getLagRange());
-                    if (lag >= 0) {
-                        rb.addSources(RuntimeRelationSource.newBuilder()
-                                .setSourceSequenceId(nullToEmpty(src))
-                                .setWeight(1.0)
-                                .setFixedLag(lag)
-                                .build());
+                    // 每个展开后的 pair 只有一个 source，权重恒为 1.0
+                    RuntimeRelationSource source = buildRelationSource(src, relation.getLagRange());
+                    if (source != null) {
+                        rb.addSources(source);
                     }
                     reqBuilder.addItems(rb.build());
                     count++;
@@ -418,14 +417,66 @@ public class TimeseriesCoreGrpcClient {
         return map;
     }
 
-    private long parseLag(String lagRange) {
+    /**
+     * Build a {@link RuntimeRelationSource} for one source sequence.
+     * <ul>
+     *   <li>{@code "5"}          → {@code fixed_lag = 5}</li>
+     *   <li>{@code "0m-10m"}     → {@code lag_range { min=0, max=10 }}（单位后缀 m/h/d 被剥除）</li>
+     *   <li>{@code null / blank} → 无滞后约束，仅带 source + weight</li>
+     * </ul>
+     * Returns {@code null} only when the lag range is present but malformed.
+     */
+    private RuntimeRelationSource buildRelationSource(String srcSeqId, String lagRange) {
+        RuntimeRelationSource.Builder sb = RuntimeRelationSource.newBuilder()
+                .setSourceSequenceId(nullToEmpty(srcSeqId))
+                // 类别展开后每个 pair 只有一个 source，其线性组合权重恒为 1.0
+                .setWeight(1.0);
+
         if (lagRange == null || lagRange.isBlank()) {
-            return -1;
+            return sb.build();
+        }
+
+        String trimmed = lagRange.trim();
+        int dash = trimmed.indexOf('-');
+        if (dash >= 0) {
+            // 范围格式："0m-10m" / "0-10"
+            Long min = parseLagNumber(trimmed.substring(0, dash));
+            Long max = parseLagNumber(trimmed.substring(dash + 1));
+            if (min == null || max == null) {
+                LOG.warn("[{}] syncRelations malformed lagRange '{}', skip source {}",
+                        SERVICE_NAME, lagRange, srcSeqId);
+                return null;
+            }
+            sb.setLagRange(RelationLagRange.newBuilder().setMin(min).setMax(max).build());
+        } else {
+            // 固定滞后："5"
+            Long fixed = parseLagNumber(trimmed);
+            if (fixed == null) {
+                LOG.warn("[{}] syncRelations malformed lagRange '{}', skip source {}",
+                        SERVICE_NAME, lagRange, srcSeqId);
+                return null;
+            }
+            sb.setFixedLag(fixed);
+        }
+        return sb.build();
+    }
+
+    /**
+     * Strip an optional trailing unit suffix ({@code m}/{@code h}/{@code d})
+     * and parse the remainder as a {@code long}, or return {@code null}.
+     */
+    private static Long parseLagNumber(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String num = raw.trim().replaceAll("[mhd]$", "");
+        if (num.isEmpty()) {
+            return null;
         }
         try {
-            return Long.parseLong(lagRange.trim());
+            return Long.parseLong(num);
         } catch (NumberFormatException e) {
-            return 0;
+            return null;
         }
     }
 
@@ -719,36 +770,35 @@ public class TimeseriesCoreGrpcClient {
      * alignment config (every sequence with unspecified role, Core picks
      * default aggregation / gap-fill).
      */
-    public AlignedWindowData alignWindowData(List<String> seqIds,
+    public AlignedWindowData alignWindowData(List<String> seqIds, String dependentSequenceId,
                                              LocalDateTime startTime, LocalDateTime endTime) {
         String address = grpcClientProperties.getCoreAddress();
         if (isBlank(address)) {
             LOG.warn("[{}] alignWindowData skipped: address not configured", SERVICE_NAME);
             return null;
         }
+        List<String> ids = seqIds != null ? seqIds : List.of();
         QueryWindowDataRequest.Builder wq = QueryWindowDataRequest.newBuilder()
-                .addAllSequenceIds(seqIds != null ? seqIds : List.of());
+                .addAllSequenceIds(ids);
         if (startTime != null) {
             wq.setStartTime(startTime.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
         }
         if (endTime != null) {
             wq.setEndTime(endTime.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
         }
-        AlignmentConfig.Builder ac = AlignmentConfig.newBuilder();
-        for (String seqId : seqIds != null ? seqIds : List.<String>of()) {
-            ac.addSequences(SequenceAlignmentConfig.newBuilder().setSequenceId(seqId).build());
-        }
         AlignWindowDataRequest req = AlignWindowDataRequest.newBuilder()
                 .setWindowQuery(wq.build())
-                .setConfig(ac.build())
+                .setConfig(buildAlignmentConfig(ids, dependentSequenceId))
                 .build();
+        LOG.info("[{}] -> alignWindowData seqs={} dependent={} start={} end={} at {}",
+                SERVICE_NAME, ids, dependentSequenceId, startTime, endTime, address);
         ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             AlignWindowDataResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
                     .withDeadlineAfter(5, TimeUnit.SECONDS)
                     .alignWindowData(req);
-            LOG.info("[{}] <- alignWindowData code={} samples={}",
-                    SERVICE_NAME, resp.getOperation().getCode(),
+            LOG.info("[{}] <- alignWindowData code={} msg={} samples={}",
+                    SERVICE_NAME, resp.getOperation().getCode(), resp.getOperation().getMessage(),
                     resp.hasAlignedData() ? resp.getAlignedData().getSamplesCount() : 0);
             return resp.hasAlignedData() ? resp.getAlignedData() : null;
         } catch (StatusRuntimeException e) {
@@ -762,7 +812,8 @@ public class TimeseriesCoreGrpcClient {
      * Compute basic statistics (per-sequence metrics + correlation vector)
      * over the given aligned data.
      */
-    public ComputeStatisticsResponse computeBasicStatistics(AlignedWindowData alignedData) {
+    public ComputeStatisticsResponse computeBasicStatistics(AlignedWindowData alignedData,
+                                                            List<String> seqIds, String dependentSequenceId) {
         String address = grpcClientProperties.getCoreAddress();
         if (isBlank(address)) {
             LOG.warn("[{}] computeBasicStatistics skipped: address not configured", SERVICE_NAME);
@@ -773,6 +824,7 @@ public class TimeseriesCoreGrpcClient {
         }
         ComputeStatisticsRequest req = ComputeStatisticsRequest.newBuilder()
                 .setAlignedData(alignedData)
+                .setAlignmentConfig(buildAlignmentConfig(seqIds != null ? seqIds : List.of(), dependentSequenceId))
                 .build();
         ManagedChannel channel = channelRegistry.getChannel(address);
         try {
@@ -788,6 +840,27 @@ public class TimeseriesCoreGrpcClient {
                     SERVICE_NAME, e.getStatus().getCode(), e.getStatus().getDescription());
             return null;
         }
+    }
+
+    /**
+     * Build the per-sequence alignment config. The dependent sequence is marked
+     * {@code VARIABLE_ROLE_DEPENDENT} and the rest {@code VARIABLE_ROLE_INDEPENDENT};
+     * Core uses this to know which variable the correlation vector is computed against.
+     */
+    private AlignmentConfig buildAlignmentConfig(List<String> seqIds, String dependentSequenceId) {
+        String dependent = (dependentSequenceId == null || dependentSequenceId.isBlank())
+                ? (seqIds != null && !seqIds.isEmpty() ? seqIds.get(0) : null)
+                : dependentSequenceId;
+        AlignmentConfig.Builder ac = AlignmentConfig.newBuilder();
+        for (String seqId : seqIds) {
+            SequenceAlignmentConfig.Builder sc = SequenceAlignmentConfig.newBuilder()
+                    .setSequenceId(seqId);
+            sc.setRole(seqId != null && seqId.equals(dependent)
+                    ? VariableRole.VARIABLE_ROLE_DEPENDENT
+                    : VariableRole.VARIABLE_ROLE_INDEPENDENT);
+            ac.addSequences(sc.build());
+        }
+        return ac.build();
     }
 
     // ── placeholder stubs ──────────────────────────────────────────────

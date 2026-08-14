@@ -76,6 +76,7 @@ public class AnomalyResultReceiverGrpcService
             AnomalyResultVO vo = new AnomalyResultVO();
             vo.setResultId(entity.getResultId());
             vo.setTaskId(entity.getTaskId());
+            vo.setSequenceIds(entity.getSequenceIds());
             vo.setSequenceId(entity.getSequenceIds() != null && !entity.getSequenceIds().isEmpty()
                     ? String.join(",", entity.getSequenceIds()) : null);
             vo.setAnomalyLevel(entity.getSeverity());
@@ -83,6 +84,12 @@ public class AnomalyResultReceiverGrpcService
             vo.setEventTime(entity.getEventTime());
             vo.setSource(entity.getSource());
             vo.setValues(entity.getValues());
+            // resolve related rules (constraint IDs) from the anomaly task
+            if (entity.getTaskId() != null) {
+                cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
+                memoryCache.getAnomalyTask(entity.getTaskId())
+                        .ifPresent(task -> vo.setConstraintIds(task.getConstraintIds()));
+            }
             anomalyResultService.createAnomalyEvent(vo);
 
             responseObserver.onNext(Empty.getDefaultInstance());

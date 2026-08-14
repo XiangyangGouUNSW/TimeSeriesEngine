@@ -48,12 +48,14 @@ public class TimeseriesStatisticsServiceImpl implements TimeseriesStatisticsServ
         }
 
         AlignedWindowData aligned = coreGrpcClient.alignWindowData(
-                sequenceIds, request.getStartTime(), request.getEndTime());
+                sequenceIds, request.getDependentSequenceId(),
+                request.getStartTime(), request.getEndTime());
         if (aligned == null || aligned.getSamplesCount() == 0) {
             throw new BusinessException("statistics: alignWindowData returned empty data");
         }
 
-        ComputeStatisticsResponse response = coreGrpcClient.computeBasicStatistics(aligned);
+        ComputeStatisticsResponse response = coreGrpcClient.computeBasicStatistics(
+                aligned, sequenceIds, request.getDependentSequenceId());
         if (response == null) {
             throw new BusinessException("statistics: computeBasicStatistics failed");
         }

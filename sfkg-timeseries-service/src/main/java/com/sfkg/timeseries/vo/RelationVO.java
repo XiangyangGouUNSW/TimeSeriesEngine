@@ -2,7 +2,7 @@ package com.sfkg.timeseries.vo;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.Collection;
+import java.util.List;
 import lombok.Data;
 
 @Data
@@ -10,7 +10,7 @@ public class RelationVO {
 
     private String relationId;
     private String relationName;
-    private Collection<String> sourceSequences;
+    private List<String> sourceSequences;
     private String targetSequenceId;
     private String targetCategoryName;
     private String relationType;

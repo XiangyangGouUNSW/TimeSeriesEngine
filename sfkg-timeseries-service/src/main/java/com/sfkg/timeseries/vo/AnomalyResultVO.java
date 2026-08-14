@@ -10,6 +10,7 @@ public class AnomalyResultVO {
     private String resultId;
     private String taskId;
     private String sequenceId;
+    private List<String> sequenceIds;
     private String anomalyLevel;
     private String eventType;
     private LocalDateTime eventTime;

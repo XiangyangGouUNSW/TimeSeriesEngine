@@ -1,7 +1,7 @@
 package com.sfkg.timeseries.dto;
 
 import java.time.LocalDateTime;
-import java.util.Collection;
+import java.util.List;
 import lombok.Data;
 
 @Data
@@ -12,7 +12,7 @@ public class EventQueryRequest {
     private String eventLevel;
     private String confirmStatus;
     private String handleStatus;
-    private Collection<String> relatedSequences;
+    private List<String> relatedSequences;
     private LocalDateTime startTime;
     private LocalDateTime endTime;
 }

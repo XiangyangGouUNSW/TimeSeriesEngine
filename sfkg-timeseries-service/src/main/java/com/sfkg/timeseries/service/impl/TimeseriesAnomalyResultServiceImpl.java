@@ -56,8 +56,12 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
     @Override
     public String createAnomalyEvent(AnomalyResultVO result) {
         String source = result != null && result.getSource() != null ? result.getSource() : "ANOMALY";
-        String seq = result != null && result.getSequenceId() != null
-                ? result.getSequenceId().replace(",", "_") : "UNKNOWN";
+        List<String> seqIds = result != null && result.getSequenceIds() != null
+                ? result.getSequenceIds()
+                : (result != null && result.getSequenceId() != null
+                    ? List.of(result.getSequenceId())
+                    : List.of());
+        String seq = seqIds.isEmpty() ? "UNKNOWN" : String.join("_", seqIds);
         String ts = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyMMddHHmmssSSS"));
         String eventId = "EVT_" + source + "_" + seq + "_" + ts;
         TimeseriesEvent event = new TimeseriesEvent();
@@ -69,9 +73,7 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
                 ? result.getSource() : "ANOMALY_DETECTION");
         event.setTaskId(result != null ? result.getTaskId() : null);
         event.setEventLevel(stripSeverityPrefix(result == null ? null : result.getAnomalyLevel()));
-        event.setRelatedSequences(result == null || result.getSequenceId() == null
-                ? List.of()
-                : List.of(result.getSequenceId()));
+        event.setRelatedSequences(seqIds);
         event.setRelatedRules(result != null ? result.getConstraintIds() : null);
         event.setEventTime(result != null && result.getEventTime() != null
                 ? result.getEventTime() : LocalDateTime.now());
@@ -160,7 +162,9 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
     private String buildAnomalyDescription(AnomalyResultVO result) {
         StringBuilder sb = new StringBuilder();
         sb.append("Anomaly detected");
-        if (result.getSequenceId() != null) {
+        if (result.getSequenceIds() != null && !result.getSequenceIds().isEmpty()) {
+            sb.append(" on sequences ").append(String.join(", ", result.getSequenceIds()));
+        } else if (result.getSequenceId() != null) {
             sb.append(" on sequence ").append(result.getSequenceId());
         }
         if (result.getAnomalyLevel() != null) {
