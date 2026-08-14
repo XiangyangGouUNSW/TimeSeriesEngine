@@ -185,6 +185,9 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         if (request != null) {
             validateConstraintExpression(request.getConstraintExpression());
             validateVariableMapping(request.getVariableMapping());
+            if (request.getTerms() == null || request.getTerms().isEmpty()) {
+                throw new BusinessException("constraint terms must not be empty");
+            }
         }
         cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
         String constraintId = request == null || request.getConstraintId() == null

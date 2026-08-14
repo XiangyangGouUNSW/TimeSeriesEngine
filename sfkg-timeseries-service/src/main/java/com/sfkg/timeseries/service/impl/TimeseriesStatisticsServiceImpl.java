@@ -1,8 +1,12 @@
 package com.sfkg.timeseries.service.impl;
 
+import com.sfkg.timeseries.cache.CachedTable;
+import com.sfkg.timeseries.cache.TimeseriesCacheManager;
+import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
 import com.sfkg.timeseries.dto.StatisticsQueryRequest;
+import com.sfkg.timeseries.entity.TimeseriesRelation;
 import com.sfkg.timeseries.entity.TimeseriesStatisticsResult;
 import com.sfkg.timeseries.grpc.AlignedWindowData;
 import com.sfkg.timeseries.grpc.ComputeStatisticsResponse;
@@ -29,12 +33,18 @@ public class TimeseriesStatisticsServiceImpl implements TimeseriesStatisticsServ
     private static final Logger LOG = LoggerFactory.getLogger(TimeseriesStatisticsServiceImpl.class);
 
     private final TimeseriesCoreGrpcClient coreGrpcClient;
+    private final TimeseriesCacheManager cacheManager;
+    private final TimeseriesMemoryCache memoryCache;
     private final TimeseriesStatisticsResultMapper resultMapper;
 
     public TimeseriesStatisticsServiceImpl(
             TimeseriesCoreGrpcClient coreGrpcClient,
+            TimeseriesCacheManager cacheManager,
+            TimeseriesMemoryCache memoryCache,
             TimeseriesStatisticsResultMapper resultMapper) {
         this.coreGrpcClient = coreGrpcClient;
+        this.cacheManager = cacheManager;
+        this.memoryCache = memoryCache;
         this.resultMapper = resultMapper;
     }
 
@@ -47,15 +57,17 @@ public class TimeseriesStatisticsServiceImpl implements TimeseriesStatisticsServ
             throw new BusinessException("statistics: sequenceIds must not be empty");
         }
 
+        List<String> relationIds = resolveRelationIds(request, sequenceIds);
+
         AlignedWindowData aligned = coreGrpcClient.alignWindowData(
-                sequenceIds, request.getDependentSequenceId(),
+                sequenceIds, request.getDependentSequenceId(), relationIds,
                 request.getStartTime(), request.getEndTime());
         if (aligned == null || aligned.getSamplesCount() == 0) {
             throw new BusinessException("statistics: alignWindowData returned empty data");
         }
 
-        ComputeStatisticsResponse response = coreGrpcClient.computeBasicStatistics(
-                aligned, sequenceIds, request.getDependentSequenceId());
+        ComputeStatisticsResponse response = computeStatistics(
+                aligned, sequenceIds, request.getDependentSequenceId(), relationIds);
         if (response == null) {
             throw new BusinessException("statistics: computeBasicStatistics failed");
         }
@@ -73,11 +85,66 @@ public class TimeseriesStatisticsServiceImpl implements TimeseriesStatisticsServ
         return resultMapper.selectAll();
     }
 
+    private List<String> resolveRelationIds(StatisticsQueryRequest request, List<String> sequenceIds) {
+        if (request.getRelationIds() == null || request.getRelationIds().isEmpty()) {
+            return List.of();
+        }
+        cacheManager.ensureTableLoaded(CachedTable.RELATION);
+        cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
+        List<String> expanded = new ArrayList<>();
+        for (String relationId : request.getRelationIds()) {
+            if (relationId == null || relationId.isBlank()) {
+                continue;
+            }
+            TimeseriesRelation relation = memoryCache.getRelation(relationId).orElse(null);
+            if (relation == null) {
+                throw new BusinessException("statistics: relation not found: " + relationId);
+            }
+            expanded.addAll(coreGrpcClient.resolveExpandedRelationIds(
+                    relation, sequenceIds, request.getDependentSequenceId()));
+        }
+        return new ArrayList<>(new java.util.LinkedHashSet<>(expanded));
+    }
+
+    private ComputeStatisticsResponse computeStatistics(
+            AlignedWindowData aligned, List<String> sequenceIds,
+            String dependentSequenceId, List<String> relationIds) {
+        if (relationIds == null || relationIds.isEmpty()) {
+            // Metrics only; Core computes no correlation vector without a relation.
+            return coreGrpcClient.computeBasicStatistics(
+                    aligned, sequenceIds, dependentSequenceId, null);
+        }
+        ComputeStatisticsResponse merged = null;
+        for (String relationId : relationIds) {
+            ComputeStatisticsResponse response = coreGrpcClient.computeBasicStatistics(
+                    aligned, sequenceIds, dependentSequenceId, relationId);
+            if (response == null) {
+                continue;
+            }
+            if (merged == null) {
+                merged = response;
+                continue;
+            }
+            if (response.hasCorrelationVector()) {
+                CorrelationVector.Builder vector = merged.hasCorrelationVector()
+                        ? merged.getCorrelationVector().toBuilder()
+                        : CorrelationVector.newBuilder();
+                vector.addAllCorrelations(response.getCorrelationVector().getCorrelationsList());
+                merged = merged.toBuilder().setCorrelationVector(vector.build()).build();
+            }
+        }
+        return merged;
+    }
+
     private TimeseriesStatisticsResult toEntity(
             StatisticsQueryRequest request, ComputeStatisticsResponse response) {
         TimeseriesStatisticsResult result = new TimeseriesStatisticsResult();
         result.setResultId(UUID.randomUUID().toString());
         result.setSequenceIds(new ArrayList<>(request.getSequenceIds()));
+        result.setRelationIds(request.getRelationIds() != null
+                ? new ArrayList<>(request.getRelationIds()) : List.of());
+        result.setStartTime(request.getStartTime());
+        result.setEndTime(request.getEndTime());
         result.setComputedAt(LocalDateTime.now());
 
         Map<String, Map<String, Double>> sequenceMetrics = new LinkedHashMap<>();

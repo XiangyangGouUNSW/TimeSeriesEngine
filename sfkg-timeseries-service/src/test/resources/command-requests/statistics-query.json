@@ -1,6 +1,7 @@
 {
-  "sequenceIds": ["seq-001", "seq-002", "seq-003"],
-  "dependentSequenceId": "seq-001",
+  "sequenceIds": ["ETTh1_OT", "ETTh1_HUFL", "ETTh1_LUFL"],
+  "dependentSequenceId": "ETTh1_OT",
+  "relationIds": ["r-hufl-ot", "r-lufl-ot"],
   "startTime": "2025-01-01T00:00:00",
   "endTime": "2025-01-02T00:00:00"
 }

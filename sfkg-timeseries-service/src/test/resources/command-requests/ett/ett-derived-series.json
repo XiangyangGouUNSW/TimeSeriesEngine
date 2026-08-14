@@ -1,0 +1,17 @@
+{
+  "items": [
+    {
+      "derivedSequenceId": "ETTh1_total",
+      "enabled": true,
+      "linearCombination": {
+        "terms": [
+          {"sequenceId": "ETTh1_HUFL", "coefficient": 0.3},
+          {"sequenceId": "ETTh1_HULL", "coefficient": 0.3},
+          {"sequenceId": "ETTh1_MUFL", "coefficient": 0.2},
+          {"sequenceId": "ETTh1_MULL", "coefficient": 0.2}
+        ],
+        "bias": 0.0
+      }
+    }
+  ]
+}

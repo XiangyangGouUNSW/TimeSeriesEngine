@@ -4,14 +4,20 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import com.sfkg.timeseries.cache.CachedTable;
+import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
+import com.sfkg.timeseries.entity.TimeseriesConstraint;
 import com.sfkg.timeseries.entity.TimeseriesConstraintResult;
 import com.sfkg.timeseries.entity.TimeseriesEvent;
 import com.sfkg.timeseries.grpc.ConstraintResultMessage;
@@ -31,14 +37,17 @@ public class ConstraintResultReceiverGrpcService
     private final TimeseriesConstraintResultMapper resultMapper;
     private final TimeseriesEventMapper eventMapper;
     private final TimeseriesMemoryCache memoryCache;
+    private final TimeseriesCacheManager cacheManager;
 
     public ConstraintResultReceiverGrpcService(
             TimeseriesConstraintResultMapper resultMapper,
             TimeseriesEventMapper eventMapper,
-            TimeseriesMemoryCache memoryCache) {
+            TimeseriesMemoryCache memoryCache,
+            TimeseriesCacheManager cacheManager) {
         this.resultMapper = resultMapper;
         this.eventMapper = eventMapper;
         this.memoryCache = memoryCache;
+        this.cacheManager = cacheManager;
     }
 
     @Override
@@ -49,12 +58,14 @@ public class ConstraintResultReceiverGrpcService
                     request.getViolatedConstraintIdsList(), request.getSequenceIdsList(),
                     request.getCheckTimeMs());
 
-            TimeseriesConstraintResult entity = toEntity(request);
+            List<String> originalIds = mapToOriginalConstraintIds(
+                    request.getViolatedConstraintIdsList());
+            TimeseriesConstraintResult entity = toEntity(request, originalIds);
             resultMapper.insert(entity);
 
-            if (request.getViolatedConstraintIdsCount() > 0) {
+            if (!originalIds.isEmpty()) {
                 String ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyMMddHHmmssSSS"));
-                String cids = String.join("_", request.getViolatedConstraintIdsList());
+                String cids = String.join("_", originalIds);
                 String eventId = "EVT_CONSTRAINT_" + cids + "_" + ts;
                 memoryCache.computeEvent(eventId, existing -> {
                     if (existing != null) {
@@ -69,9 +80,9 @@ public class ConstraintResultReceiverGrpcService
                     event.setEventLevel("MEDIUM");
                     event.setEventTime(entity.getCheckTime());
                     event.setRelatedSequences(entity.getSequenceIds());
-                    event.setRelatedRules(entity.getViolatedConstraintIds());
+                    event.setRelatedRules(originalIds);
                     event.setEventDescription(
-                            "violated constraints " + entity.getViolatedConstraintIds()
+                            "violated constraints " + originalIds
                             + " on sequences " + entity.getSequenceIds());
                     event.setConfirmStatus("PENDING");
                     event.setHandleStatus("UNHANDLED");
@@ -92,21 +103,41 @@ public class ConstraintResultReceiverGrpcService
         }
     }
 
-    private TimeseriesConstraintResult toEntity(ConstraintResultMessage msg) {
+    private TimeseriesConstraintResult toEntity(ConstraintResultMessage msg, List<String> originalIds) {
         TimeseriesConstraintResult entity = new TimeseriesConstraintResult();
         entity.setResultId("CR_" + UUID.randomUUID().toString().substring(0, 8));
         entity.setCheckTime(msg.getCheckTimeMs() > 0
                 ? LocalDateTime.ofInstant(Instant.ofEpochMilli(msg.getCheckTimeMs()), ZoneId.systemDefault())
                 : LocalDateTime.now());
-        entity.setViolatedConstraintIds(msg.getViolatedConstraintIdsCount() > 0
-                ? List.copyOf(msg.getViolatedConstraintIdsList()) : List.of());
+        entity.setViolatedConstraintIds(originalIds);
         entity.setSequenceIds(msg.getSequenceIdsCount() > 0
                 ? List.copyOf(msg.getSequenceIdsList()) : null);
         entity.setReceivedTime(LocalDateTime.now());
         return entity;
     }
 
-    private String emptyToNull(String value) {
-        return value == null || value.isBlank() ? null : value;
+    private List<String> mapToOriginalConstraintIds(List<String> expandedIds) {
+        if (expandedIds == null || expandedIds.isEmpty()) {
+            return List.of();
+        }
+        cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
+        List<String> originals = memoryCache.listConstraints().stream()
+                .map(TimeseriesConstraint::getConstraintId)
+                .filter(id -> id != null && !id.isBlank())
+                .distinct()
+                .sorted(Comparator.comparingInt(String::length).reversed())
+                .collect(Collectors.toList());
+        List<String> result = new ArrayList<>(expandedIds.size());
+        for (String expanded : expandedIds) {
+            String mapped = expanded;
+            for (String original : originals) {
+                if (expanded.startsWith(original + "_")) {
+                    mapped = original;
+                    break;
+                }
+            }
+            result.add(mapped);
+        }
+        return result;
     }
 }

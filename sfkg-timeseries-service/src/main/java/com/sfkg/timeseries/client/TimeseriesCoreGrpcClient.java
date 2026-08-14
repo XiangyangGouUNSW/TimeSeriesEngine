@@ -109,7 +109,7 @@ public class TimeseriesCoreGrpcClient {
                 .setDataSourceId(nullToEmpty(config.getDataSourceId()))
                 .setExternalSequenceId(nullToEmpty(config.getExternalSequenceId()))
                 .setCategoryId(nullToEmpty(config.getCategoryId()))
-                .setDataType(nullToEmpty(config.getDataType()))
+                .setDataType(nullToEmpty(config.getDataType()).toLowerCase())
                 .setSeriesKind(toSeriesKind(config.getSeriesKind()))
                 .build();
         SyncInstanceConfigsRequest req = SyncInstanceConfigsRequest.newBuilder()
@@ -134,7 +134,7 @@ public class TimeseriesCoreGrpcClient {
                     .setDataSourceId(nullToEmpty(config.getDataSourceId()))
                     .setExternalSequenceId(nullToEmpty(config.getExternalSequenceId()))
                     .setCategoryId(nullToEmpty(config.getCategoryId()))
-                    .setDataType(nullToEmpty(config.getDataType()))
+                    .setDataType(nullToEmpty(config.getDataType()).toLowerCase())
                     .setSeriesKind(toSeriesKind(config.getSeriesKind()))
                     .build());
         }
@@ -227,9 +227,9 @@ public class TimeseriesCoreGrpcClient {
         List<RuntimeConstraintConfig> items = new ArrayList<>();
         for (Map<String, String> varMap : deviceRules.values()) {
             ConstraintRule.Builder rb = ConstraintRule.newBuilder()
-                    .setConstraintId(nullToEmpty(constraintId))
-                    .setLowerBound(lowerBound != null ? lowerBound : 0.0)
-                    .setUpperBound(upperBound != null ? upperBound : 0.0)
+                    .setConstraintId(buildExpandedConstraintId(constraintId, varMap))
+                    .setLowerBound(lowerBound != null ? lowerBound : -Double.MAX_VALUE)
+                    .setUpperBound(upperBound != null ? upperBound : Double.MAX_VALUE)
                     .putAllVariableMapping(varMap);
             if (terms != null) {
                 for (TimeseriesConstraint.ConstraintTermItem term : terms) {
@@ -243,6 +243,24 @@ public class TimeseriesCoreGrpcClient {
             items.add(RuntimeConstraintConfig.newBuilder().setRule(rb.build()).setEnabled(enabled).build());
         }
         return items;
+    }
+
+    /**
+     * Build a Core-unique constraint id from the service-level constraintId and
+     * the rule's mapped sequences. Category expansion produces one rule per
+     * sequence combination, so the suffix keeps each rule's id unique (Core's
+     * registry is keyed by constraint_id). The receiver strips the suffix back
+     * to the original constraintId when reporting violations.
+     */
+    private String buildExpandedConstraintId(String constraintId, Map<String, String> varMap) {
+        String suffix = varMap.values().stream()
+                .filter(v -> v != null && !v.isBlank())
+                .distinct()
+                .sorted()
+                .collect(java.util.stream.Collectors.joining("_"));
+        return suffix.isEmpty()
+                ? nullToEmpty(constraintId)
+                : nullToEmpty(constraintId) + "_" + suffix;
     }
 
     // ── relation config ────────────────────────────────────────────────
@@ -278,7 +296,7 @@ public class TimeseriesCoreGrpcClient {
                     RuntimeRelationConfig.Builder rb = RuntimeRelationConfig.newBuilder()
                             .setRelationId(nullToEmpty(relation.getRelationId()) + "_" + src + "_" + tgt)
                             .setTargetSequenceId(nullToEmpty(tgt))
-                            .setRelationType(nullToEmpty(relation.getRelationType()))
+                            .setRelationType(nullToEmpty(relation.getRelationType()).toLowerCase())
                             .setConfidence(relation.getConfidence() != null ? relation.getConfidence().doubleValue() : 0.0)
                             .setEnabled("ENABLE".equalsIgnoreCase(relation.getEffectiveStatus()));
                     // 每个展开后的 pair 只有一个 source，权重恒为 1.0
@@ -742,6 +760,7 @@ public class TimeseriesCoreGrpcClient {
      * default aggregation / gap-fill).
      */
     public AlignedWindowData alignWindowData(List<String> seqIds, String dependentSequenceId,
+                                             List<String> relationIds,
                                              LocalDateTime startTime, LocalDateTime endTime) {
         String address = grpcClientProperties.getCoreAddress();
         if (isBlank(address)) {
@@ -757,12 +776,15 @@ public class TimeseriesCoreGrpcClient {
         if (endTime != null) {
             wq.setEndTime(endTime.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
         }
-        AlignWindowDataRequest req = AlignWindowDataRequest.newBuilder()
+        AlignWindowDataRequest.Builder reqBuilder = AlignWindowDataRequest.newBuilder()
                 .setWindowQuery(wq.build())
-                .setConfig(buildAlignmentConfig(ids, dependentSequenceId))
-                .build();
-        LOG.info("[{}] -> alignWindowData seqs={} dependent={} start={} end={} at {}",
-                SERVICE_NAME, ids, dependentSequenceId, startTime, endTime, address);
+                .setConfig(buildAlignmentConfig(ids, dependentSequenceId));
+        if (relationIds != null && !relationIds.isEmpty()) {
+            reqBuilder.addAllRelationIds(relationIds);
+        }
+        AlignWindowDataRequest req = reqBuilder.build();
+        LOG.info("[{}] -> alignWindowData seqs={} dependent={} relations={} start={} end={} at {}",
+                SERVICE_NAME, ids, dependentSequenceId, relationIds, startTime, endTime, address);
         ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             AlignWindowDataResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
@@ -784,7 +806,8 @@ public class TimeseriesCoreGrpcClient {
      * over the given aligned data.
      */
     public ComputeStatisticsResponse computeBasicStatistics(AlignedWindowData alignedData,
-                                                            List<String> seqIds, String dependentSequenceId) {
+                                                            List<String> seqIds, String dependentSequenceId,
+                                                            String relationId) {
         String address = grpcClientProperties.getCoreAddress();
         if (isBlank(address)) {
             LOG.warn("[{}] computeBasicStatistics skipped: address not configured", SERVICE_NAME);
@@ -793,10 +816,13 @@ public class TimeseriesCoreGrpcClient {
         if (alignedData == null) {
             return null;
         }
-        ComputeStatisticsRequest req = ComputeStatisticsRequest.newBuilder()
+        ComputeStatisticsRequest.Builder reqBuilder = ComputeStatisticsRequest.newBuilder()
                 .setAlignedData(alignedData)
-                .setAlignmentConfig(buildAlignmentConfig(seqIds != null ? seqIds : List.of(), dependentSequenceId))
-                .build();
+                .setAlignmentConfig(buildAlignmentConfig(seqIds != null ? seqIds : List.of(), dependentSequenceId));
+        if (relationId != null && !relationId.isBlank()) {
+            reqBuilder.setRelationId(relationId);
+        }
+        ComputeStatisticsRequest req = reqBuilder.build();
         ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             ComputeStatisticsResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
@@ -832,6 +858,50 @@ public class TimeseriesCoreGrpcClient {
             ac.addSequences(sc.build());
         }
         return ac.build();
+    }
+
+    /**
+     * Resolve a service-level relation into the expanded Core relation ids
+     * ({@code relationId_src_tgt}) registered by {@link #syncRelationConfig}.
+     * Only same-device pairs whose target matches the dependent sequence and
+     * whose source is among the requested sequences are returned.
+     */
+    public List<String> resolveExpandedRelationIds(TimeseriesRelation relation,
+                                                   List<String> sequenceIds,
+                                                   String dependentSequenceId) {
+        if (relation == null || relation.getRelationId() == null
+                || !"ENABLE".equalsIgnoreCase(relation.getEffectiveStatus())) {
+            return List.of();
+        }
+        List<String> srcSeqIds = resolveToSequences(relation.getSourceSequences());
+        List<String> tgtSeqIds = resolveToSequences(
+                relation.getTargetSequenceId() != null
+                        ? List.of(relation.getTargetSequenceId()) : List.of());
+        if (dependentSequenceId != null && !dependentSequenceId.isBlank()) {
+            tgtSeqIds = tgtSeqIds.stream()
+                    .filter(dependentSequenceId::equals)
+                    .collect(java.util.stream.Collectors.toList());
+        }
+        java.util.Set<String> requested = sequenceIds != null && !sequenceIds.isEmpty()
+                ? new java.util.HashSet<>(sequenceIds)
+                : java.util.Set.of();
+
+        Map<String, List<String>> srcByDevice = groupByDeviceInstanceId(srcSeqIds);
+        Map<String, List<String>> tgtByDevice = groupByDeviceInstanceId(tgtSeqIds);
+
+        List<String> expanded = new ArrayList<>();
+        for (Map.Entry<String, List<String>> entry : srcByDevice.entrySet()) {
+            List<String> tgtInDevice = tgtByDevice.getOrDefault(entry.getKey(), List.of());
+            for (String src : entry.getValue()) {
+                for (String tgt : tgtInDevice) {
+                    if (src.equals(tgt) || !requested.contains(src)) {
+                        continue;
+                    }
+                    expanded.add(relation.getRelationId() + "_" + src + "_" + tgt);
+                }
+            }
+        }
+        return expanded;
     }
 
     // ── placeholder stubs ──────────────────────────────────────────────

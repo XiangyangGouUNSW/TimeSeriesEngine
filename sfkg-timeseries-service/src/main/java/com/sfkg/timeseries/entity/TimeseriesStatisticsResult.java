@@ -11,6 +11,9 @@ public class TimeseriesStatisticsResult {
     private String resultId;
     private List<String> sequenceIds;
     private String dependentSequenceId;
+    private List<String> relationIds;
+    private LocalDateTime startTime;
+    private LocalDateTime endTime;
     private LocalDateTime computedAt;
     // sequenceId → {metricName → value}
     private Map<String, Map<String, Double>> sequenceMetrics;

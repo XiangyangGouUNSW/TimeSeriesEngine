@@ -1,0 +1,15 @@
+{
+  "relationId": "ett-ot-correlation",
+  "relationName": "load features correlate with oil temperature",
+  "sourceSequences": [
+    "HUFL",
+    "LUFL"
+  ],
+  "targetSequenceId": "OT",
+  "relationType": "CORRELATION",
+  "confidence": 0.9,
+  "relationDescription": "load features correlate with transformer oil temperature",
+  "effectiveStatus": "ENABLE",
+  "confirmStatus": "CONFIRMED",
+  "user": null
+}

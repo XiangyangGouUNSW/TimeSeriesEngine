@@ -9,6 +9,7 @@ public class StatisticsQueryRequest {
 
     private List<String> sequenceIds;
     private String dependentSequenceId;
+    private List<String> relationIds;
     private LocalDateTime startTime;
     private LocalDateTime endTime;
 }
