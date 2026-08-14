@@ -22,7 +22,5 @@ public interface TimeseriesAnomalyTaskService {
 
     void validateDetectMethod(String detectMethod);
 
-    void syncAnomalyTaskToCore(String taskId);
-
     void syncAnomalyTaskToAnomalyService(String taskId);
 }

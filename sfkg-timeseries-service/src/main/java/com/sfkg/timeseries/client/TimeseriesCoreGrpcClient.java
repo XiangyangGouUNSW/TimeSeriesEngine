@@ -10,10 +10,8 @@ import com.sfkg.timeseries.dto.DerivedSeriesConfigSaveRequest.LinearTermDTO;
 import com.sfkg.timeseries.dto.HistoryDataQueryRequest;
 import com.sfkg.timeseries.dto.SyncResult;
 import com.sfkg.timeseries.dto.TimeseriesDataSaveRequest;
-import com.sfkg.timeseries.entity.TimeseriesAnomalyTask;
 import com.sfkg.timeseries.entity.TimeseriesConstraint;
 import com.sfkg.timeseries.entity.TimeseriesDataPoint;
-import com.sfkg.timeseries.entity.TimeseriesForecastTask;
 import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.entity.TimeseriesRelation;
 import com.sfkg.timeseries.grpc.AlignWindowDataRequest;
@@ -55,8 +53,6 @@ import com.sfkg.timeseries.grpc.SyncConstraintsRequest;
 import com.sfkg.timeseries.grpc.SyncDerivedSeriesConfigsRequest;
 import com.sfkg.timeseries.grpc.SyncInstanceConfigsRequest;
 import com.sfkg.timeseries.grpc.SyncRelationsRequest;
-import com.sfkg.timeseries.grpc.SyncResponse;
-import com.sfkg.timeseries.grpc.SyncTaskStatusRequest;
 import com.sfkg.timeseries.grpc.SyncWindowConfigRequest;
 import com.sfkg.timeseries.grpc.TimeseriesCoreServiceGrpc;
 import com.sfkg.timeseries.grpc.TimeseriesIngestData;
@@ -420,8 +416,9 @@ public class TimeseriesCoreGrpcClient {
     /**
      * Build a {@link RuntimeRelationSource} for one source sequence.
      * <ul>
-     *   <li>{@code "5"}          → {@code fixed_lag = 5}</li>
-     *   <li>{@code "0m-10m"}     → {@code lag_range { min=0, max=10 }}（单位后缀 m/h/d 被剥除）</li>
+     *   <li>{@code "5"}          → {@code fixed_lag = 5}（ms）</li>
+     *   <li>{@code "5m" / "1h"}  → {@code fixed_lag} 换算为毫秒（m/h/d → ×60000/×3600000/×86400000）</li>
+     *   <li>{@code "0m-10m"}     → {@code lag_range { min, max }}（毫秒；注意 Core 端目前仅支持 fixed_lag）</li>
      *   <li>{@code null / blank} → 无滞后约束，仅带 source + weight</li>
      * </ul>
      * Returns {@code null} only when the lag range is present but malformed.
@@ -462,19 +459,32 @@ public class TimeseriesCoreGrpcClient {
     }
 
     /**
-     * Strip an optional trailing unit suffix ({@code m}/{@code h}/{@code d})
-     * and parse the remainder as a {@code long}, or return {@code null}.
+     * Parse a lag value to milliseconds. Accepts {@code "5"} (already ms), or
+     * an optional unit suffix ({@code m}/{@code h}/{@code d} → minutes/hours/
+     * days) converted to milliseconds, because Core interprets lags as
+     * millisecond timestamp offsets. Returns {@code null} when malformed.
      */
     private static Long parseLagNumber(String raw) {
         if (raw == null) {
             return null;
         }
-        String num = raw.trim().replaceAll("[mhd]$", "");
+        String trimmed = raw.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        long multiplier = 1L;
+        String num = trimmed;
+        switch (trimmed.charAt(trimmed.length() - 1)) {
+            case 'm' -> { multiplier = 60L * 1000L; num = trimmed.substring(0, trimmed.length() - 1); }
+            case 'h' -> { multiplier = 60L * 60L * 1000L; num = trimmed.substring(0, trimmed.length() - 1); }
+            case 'd' -> { multiplier = 24L * 60L * 60L * 1000L; num = trimmed.substring(0, trimmed.length() - 1); }
+            default -> { multiplier = 1L; num = trimmed; }
+        }
         if (num.isEmpty()) {
             return null;
         }
         try {
-            return Long.parseLong(num);
+            return Long.parseLong(num) * multiplier;
         } catch (NumberFormatException e) {
             return null;
         }
@@ -492,42 +502,6 @@ public class TimeseriesCoreGrpcClient {
         };
     }
 
-    // ── anomaly / forecast task config ────────────────────────────────
-
-    public SyncResult syncAnomalyTaskConfig(TimeseriesAnomalyTask task) {
-        LOG.info("[{}] syncAnomalyTaskConfig taskId={} - using syncTaskStatus fallback", SERVICE_NAME,
-                task != null ? task.getTaskId() : null);
-        if (task == null) {
-            return SyncResult.fail("task is null");
-        }
-        return updateTaskStatus(task.getTaskId(), "ANOMALY", task.getStatus());
-    }
-
-    public SyncResult syncForecastTaskConfig(TimeseriesForecastTask task) {
-        LOG.info("[{}] syncForecastTaskConfig taskId={} - using syncTaskStatus fallback", SERVICE_NAME,
-                task != null ? task.getTaskId() : null);
-        if (task == null) {
-            return SyncResult.fail("task is null");
-        }
-        return updateTaskStatus(task.getTaskId(), "FORECAST", task.getStatus());
-    }
-
-    // ── task status ────────────────────────────────────────────────────
-
-    public SyncResult updateTaskStatus(String taskId, String taskType, String status) {
-        String address = grpcClientProperties.getCoreAddress();
-        if (isBlank(address)) {
-            return notConfigured("updateTaskStatus");
-        }
-        SyncTaskStatusRequest req = SyncTaskStatusRequest.newBuilder()
-                .setTaskId(nullToEmpty(taskId))
-                .setTaskType(nullToEmpty(taskType))
-                .setStatus(nullToEmpty(status))
-                .build();
-        LOG.info("[{}] -> updateTaskStatus taskId={} type={} status={} at {}", SERVICE_NAME, taskId, taskType, status, address);
-        return callCoreLegacy(address, stub -> stub.syncTaskStatus(req), "updateTaskStatus");
-    }
-
     // ── timeseries data ingest ─────────────────────────────────────────
 
     public SyncResult ingestData(TimeseriesDataSaveRequest request) {
@@ -540,9 +514,6 @@ public class TimeseriesCoreGrpcClient {
         }
 
         IngestDataRequest.Builder reqBuilder = IngestDataRequest.newBuilder();
-        if (request.getWindowSize() != null) {
-            reqBuilder.setWindowSize(request.getWindowSize());
-        }
         if (request.getReturnResolvedData() != null) {
             reqBuilder.setReturnResolvedData(request.getReturnResolvedData());
         }
@@ -891,28 +862,9 @@ public class TimeseriesCoreGrpcClient {
         }
     }
 
-    private SyncResult callCoreLegacy(String address, CoreLegacyCall callable, String operation) {
-        ManagedChannel channel = channelRegistry.getChannel(address);
-        try {
-            SyncResponse resp = callable.call(
-                    TimeseriesCoreServiceGrpc.newBlockingStub(channel)
-                            .withDeadlineAfter(3, TimeUnit.SECONDS));
-            LOG.info("[{}] <- {} success={} msg={}", SERVICE_NAME, operation, resp.getSuccess(), resp.getMessage());
-            return SyncResult.of(resp.getSuccess(), resp.getMessage());
-        } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] <- {} FAILED: code={} desc={}", SERVICE_NAME, operation, e.getStatus().getCode(), e.getStatus().getDescription());
-            return SyncResult.fail(e.getStatus().getDescription());
-        }
-    }
-
     @FunctionalInterface
     private interface CoreSyncCall {
         SyncConfigResponse call(TimeseriesCoreServiceGrpc.TimeseriesCoreServiceBlockingStub stub);
-    }
-
-    @FunctionalInterface
-    private interface CoreLegacyCall {
-        SyncResponse call(TimeseriesCoreServiceGrpc.TimeseriesCoreServiceBlockingStub stub);
     }
 
     private SyncResult notConfigured(String operation) {

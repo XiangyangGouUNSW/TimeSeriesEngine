@@ -15,7 +15,6 @@ import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.AnomalyGrpcClient;
-import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
 import com.sfkg.timeseries.dto.AnomalyTaskSaveRequest;
 import com.sfkg.timeseries.dto.TaskQueryRequest;
@@ -33,19 +32,16 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
     private final TimeseriesAnomalyTaskMapper anomalyTaskMapper;
     private final TimeseriesMemoryCache memoryCache;
     private final TimeseriesCacheManager cacheManager;
-    private final TimeseriesCoreGrpcClient coreGrpcClient;
     private final AnomalyGrpcClient anomalyGrpcClient;
 
     public TimeseriesAnomalyTaskServiceImpl(
             TimeseriesAnomalyTaskMapper anomalyTaskMapper,
             TimeseriesMemoryCache memoryCache,
             TimeseriesCacheManager cacheManager,
-            TimeseriesCoreGrpcClient coreGrpcClient,
             AnomalyGrpcClient anomalyGrpcClient) {
         this.anomalyTaskMapper = anomalyTaskMapper;
         this.memoryCache = memoryCache;
         this.cacheManager = cacheManager;
-        this.coreGrpcClient = coreGrpcClient;
         this.anomalyGrpcClient = anomalyGrpcClient;
     }
 
@@ -100,7 +96,6 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
         });
 
         anomalyTaskMapper.insert(entity);
-        // syncAnomalyTaskToCore(taskId);  // C端 SyncTaskStatus 暂不启用
         syncAnomalyTaskToAnomalyService(taskId);
         return taskId;
     }
@@ -142,7 +137,6 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
         });
 
         anomalyTaskMapper.updateById(entity);
-        // syncAnomalyTaskToCore(request.getTaskId());  // C端 SyncTaskStatus 暂不启用
         anomalyGrpcClient.updateAnomalyTaskStatus(request.getTaskId(), request.getStatus());
     }
 
@@ -210,13 +204,6 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
                         + ". Supported: " + VALID_DETECT_METHODS);
             }
         }
-    }
-
-    @Override
-    public void syncAnomalyTaskToCore(String taskId) {
-        if (taskId == null) return;
-        cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
-        memoryCache.getAnomalyTask(taskId).ifPresent(coreGrpcClient::syncAnomalyTaskConfig);
     }
 
     @Override

@@ -7,9 +7,6 @@ import lombok.Data;
 @Data
 public class TimeseriesDataSaveRequest {
 
-    @JsonAlias("window_size")
-    private Long windowSize;
-
     @JsonAlias("return_resolved_data")
     private Boolean returnResolvedData;
 

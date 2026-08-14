@@ -2,7 +2,6 @@ package com.sfkg.timeseries.config;
 
 import com.sfkg.timeseries.grpc.server.AnomalyResultReceiverGrpcService;
 import com.sfkg.timeseries.grpc.server.ConstraintResultReceiverGrpcService;
-import com.sfkg.timeseries.grpc.server.EventReceiverGrpcService;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import jakarta.annotation.PreDestroy;
@@ -18,7 +17,6 @@ public class GrpcServerConfig {
 
     private static final Logger LOG = LoggerFactory.getLogger(GrpcServerConfig.class);
 
-    private final EventReceiverGrpcService eventReceiverService;
     private final AnomalyResultReceiverGrpcService anomalyResultReceiverService;
     private final ConstraintResultReceiverGrpcService constraintResultReceiverService;
     private final int grpcServerPort;
@@ -27,12 +25,10 @@ public class GrpcServerConfig {
     private Server analysisServer;
 
     public GrpcServerConfig(
-            EventReceiverGrpcService eventReceiverService,
             AnomalyResultReceiverGrpcService anomalyResultReceiverService,
             ConstraintResultReceiverGrpcService constraintResultReceiverService,
             @Value("${timeseries.grpc.server-port:9105}") int grpcServerPort,
             @Value("${timeseries.grpc.analysis-receiver-port:9106}") int analysisReceiverPort) {
-        this.eventReceiverService = eventReceiverService;
         this.anomalyResultReceiverService = anomalyResultReceiverService;
         this.constraintResultReceiverService = constraintResultReceiverService;
         this.grpcServerPort = grpcServerPort;
@@ -42,11 +38,10 @@ public class GrpcServerConfig {
     @jakarta.annotation.PostConstruct
     public void start() throws IOException {
         server = ServerBuilder.forPort(grpcServerPort)
-                .addService(eventReceiverService)
                 .addService(constraintResultReceiverService)
                 .build()
                 .start();
-        LOG.info("gRPC receiver server started on port {} (Event + Constraint)", grpcServerPort);
+        LOG.info("gRPC receiver server started on port {} (Constraint)", grpcServerPort);
 
         analysisServer = ServerBuilder.forPort(analysisReceiverPort)
                 .addService(anomalyResultReceiverService)
@@ -62,7 +57,7 @@ public class GrpcServerConfig {
 
     @PreDestroy
     public void stop() {
-        shutdownServer(server, "event-receiver");
+        shutdownServer(server, "core-receiver");
         shutdownServer(analysisServer, "analysis-receiver");
     }
 

@@ -22,7 +22,5 @@ public interface TimeseriesForecastTaskService {
 
     void validateForecastHorizon(String forecastHorizon);
 
-    void syncForecastTaskToCore(String taskId);
-
     void syncForecastTaskToForecastService(String taskId);
 }

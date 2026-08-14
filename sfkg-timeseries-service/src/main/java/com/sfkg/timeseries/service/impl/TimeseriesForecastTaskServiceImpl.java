@@ -14,7 +14,6 @@ import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.ForecastGrpcClient;
-import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
 import com.sfkg.timeseries.dto.ForecastTaskSaveRequest;
 import com.sfkg.timeseries.dto.TaskQueryRequest;
@@ -32,19 +31,16 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
     private final TimeseriesForecastTaskMapper forecastTaskMapper;
     private final TimeseriesMemoryCache memoryCache;
     private final TimeseriesCacheManager cacheManager;
-    private final TimeseriesCoreGrpcClient coreGrpcClient;
     private final ForecastGrpcClient forecastGrpcClient;
 
     public TimeseriesForecastTaskServiceImpl(
             TimeseriesForecastTaskMapper forecastTaskMapper,
             TimeseriesMemoryCache memoryCache,
             TimeseriesCacheManager cacheManager,
-            TimeseriesCoreGrpcClient coreGrpcClient,
             ForecastGrpcClient forecastGrpcClient) {
         this.forecastTaskMapper = forecastTaskMapper;
         this.memoryCache = memoryCache;
         this.cacheManager = cacheManager;
-        this.coreGrpcClient = coreGrpcClient;
         this.forecastGrpcClient = forecastGrpcClient;
     }
 
@@ -98,7 +94,6 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
         });
 
         forecastTaskMapper.insert(entity);
-        // syncForecastTaskToCore(taskId);  // C端 SyncTaskStatus 暂不启用
         syncForecastTaskToForecastService(taskId);
         return taskId;
     }
@@ -140,7 +135,6 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
         });
 
         forecastTaskMapper.updateById(entity);
-        // syncForecastTaskToCore(request.getTaskId());  // C端 SyncTaskStatus 暂不启用
         forecastGrpcClient.updateForecastTaskStatus(request.getTaskId(), request.getStatus());
     }
 
@@ -216,13 +210,6 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
             throw new BusinessException("forecastHorizon exceeds maximum allowed: " + horizon
                     + " (max " + MAX_FORECAST_HORIZON + ")");
         }
-    }
-
-    @Override
-    public void syncForecastTaskToCore(String taskId) {
-        if (taskId == null) return;
-        cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
-        memoryCache.getForecastTask(taskId).ifPresent(coreGrpcClient::syncForecastTaskConfig);
     }
 
     @Override

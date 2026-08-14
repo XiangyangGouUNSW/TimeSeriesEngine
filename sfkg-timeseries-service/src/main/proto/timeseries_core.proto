@@ -12,7 +12,6 @@ service TimeseriesCoreService {
   rpc syncConstraints (SyncConstraintsRequest) returns (SyncConfigResponse);
   rpc syncRelations (SyncRelationsRequest) returns (SyncConfigResponse);
   rpc ingestData (IngestDataRequest) returns (IngestDataResponse);
-  rpc SyncTaskStatus (SyncTaskStatusRequest) returns (SyncResponse);
   rpc queryHistoryData (QueryHistoryDataRequest) returns (QueryHistoryDataResponse);
   rpc queryHistoryOverview (QueryHistoryOverviewRequest) returns (QueryHistoryOverviewResponse);
   rpc queryWindowData (QueryWindowDataRequest) returns (QueryWindowDataResponse);
@@ -162,7 +161,8 @@ message TimeseriesBatch {
 
 message IngestDataRequest {
   repeated TimeseriesIngestData points = 1;
-  int64 window_size = 2;
+  reserved 2;
+  // The normalized batch is omitted by default to avoid an unnecessary copy.
   bool return_resolved_data = 3;
 }
 
@@ -172,15 +172,12 @@ message IngestDataResponse {
   OperationResult storage_result = 3;
   OperationResult window_result = 4;
   TimeseriesBatch resolved_data = 5;
+  OperationResult constraint_notification_result = 6;
+  OperationResult derived_result = 7;
+  bool storage_queued = 8;
 }
 
-// ── Task status & history ─────────────────────────────────────────
-
-message SyncTaskStatusRequest {
-  string task_id = 1;
-  string task_type = 2;
-  string status = 3;
-}
+// ── History ───────────────────────────────────────────────────────
 
 message QueryHistoryDataRequest {
   repeated string sequence_ids = 1;
@@ -250,33 +247,6 @@ message QueryWindowDataRequest {
 message QueryWindowDataResponse {
   OperationResult operation = 1;
   WindowData data = 2;
-}
-
-// ── Event receiver (C++ / external → Java) ────────────────────────
-
-service TimeseriesEventReceiverService {
-  rpc ReceiveEvent (EventMessage) returns (SyncResponse);
-}
-
-message EventMessage {
-  string event_id = 1;
-  string event_name = 2;
-  string event_type = 3;
-  string event_source = 4;
-  repeated string related_sequences = 5;
-  repeated string related_rules = 6;
-  string event_description = 7;
-  string event_level = 8;
-  string event_time = 9;
-  string confirm_status = 10;
-  string handle_status = 11;
-  string diagnosis_result = 12;
-  string diagnosis_basis = 13;
-  string disposal_result = 14;
-  string create_time = 15;
-  string update_time = 16;
-  string create_user = 17;
-  string update_user = 18;
 }
 
 // ── Constraint result receiver (Core → Service) ───────────────────
