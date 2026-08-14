@@ -212,13 +212,14 @@ env \
   SFKG_TAOS_DB=sfkg_timeseries \
   SFKG_TAOS_KEEP_DAYS=365000 \
   SFKG_TAOS_RAW_STABLE=raw_timeseries_data \
-  SFKG_TAOS_WRITE_CONNECTIONS=8 \
-  SFKG_INGEST_COLD_WORKERS=8 \
-  SFKG_INGEST_HOT_WORKERS=8 \
+  SFKG_TAOS_WRITE_CONNECTIONS=16 \
+  SFKG_INGEST_COLD_WORKERS=16 \
+  SFKG_INGEST_HOT_WORKERS=16 \
+  SFKG_INGEST_HOT_SEQUENCE_WORKERS=32 \
   SFKG_INGEST_QUEUE_CAPACITY=128 \
   SFKG_INGEST_DIAGNOSTIC_LOG=1 \
   SFKG_INGEST_DIAGNOSTIC_SAMPLE_EVERY=50 \
-  SFKG_CONSTRAINT_RESULT_RECEIVER_ADDRESS=0.0.0.0:9105 \
+  SFKG_CONSTRAINT_RESULT_RECEIVER_ADDRESS=222.29.156.142:9105 \
   SFKG_TIMESERIES_CORE_ADDRESS=0.0.0.0:50051 \
   ./build-taos-local/sfkg-timeseries-core-server 0.0.0.0:50051
 ```
@@ -262,6 +263,13 @@ env \
   依赖，同一序列的后续批次必须等待前一批热处理完成；涉及不同序列的批次仍可并行。这样在
   调用方保证同一序列按时间递增发送时，多 HOT worker 不会自行打乱增量更新顺序。跨序列查询
   不承诺一个全局原子快照；
+- `SFKG_INGEST_HOT_SEQUENCE_WORKERS`：热窗口内部序列级有界线程池的大小，默认 8，最大 64。
+  它与 `SFKG_INGEST_HOT_WORKERS` 不同：前者用于处理一个 IngestData 批次内部的多个序列，
+  后者用于并行处理多个 IngestData 批次。无论一个请求包含少量序列还是上千个序列，Core
+  都不会为每个序列创建临时线程；同一序列的 FIFO 依赖仍由 IngestData 任务接纳层保证。
+  热窗口会根据当前批次中每个序列的点数、乱序情况和修正开销估算工作量，将轻量序列动态合并
+  为任务组；单个重序列不会被拆分。诊断日志中的 `window_seq_tasks` 和
+  `window_seq_groups` 分别表示序列任务数和合并后的线程池任务组数。
 - `SFKG_INGEST_QUEUE_CAPACITY`：最多同时接纳的 IngestData 批次数，默认 128；队列同时限制尚未完成
   冷写的批次数。
 - `SFKG_INGEST_DIAGNOSTIC_LOG`：设为 `1` 开启 IngestData 阶段诊断日志，默认关闭；

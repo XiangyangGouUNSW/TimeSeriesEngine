@@ -170,11 +170,24 @@ bool evaluateRuleAt(
 
 void finalizeResult(ConstraintCheckResult* result) {
     result->satisfied = result->violations.empty();
+    std::string message = result->satisfied
+        ? "constraint checks completed; all satisfied"
+        : "constraint checks completed; violations found";
+    if (result->pending_count != 0) {
+        message += "; " + std::to_string(result->pending_count) +
+            " aligned samples pending because mapped sequence data was "
+            "not available yet";
+    }
     result->operation = internal::ok(
         result->evaluated_count,
-        result->satisfied
-            ? "constraint checks completed; all instances satisfied"
-            : "constraint checks completed; violations found");
+        std::move(message));
+}
+
+bool isMissingMappedSequenceError(const std::string& error) {
+    constexpr const char* kPrefix =
+        "aligned sample is missing mapped sequence: ";
+    return error.compare(0, std::char_traits<char>::length(kPrefix), kPrefix) ==
+        0;
 }
 
 }  // namespace
@@ -376,6 +389,15 @@ ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
                 &error,
                 &resolved_terms);
             if (!evaluated) {
+                // A continuous ingest request can arrive before the other
+                // RPC lanes carrying the remaining sequence values. This is
+                // a temporarily non-evaluable sample, not an invalid rule or
+                // malformed aligned window. A later update of the missing
+                // sequence will retry the affected range.
+                if (isMissingMappedSequenceError(error)) {
+                    ++result.pending_count;
+                    continue;
+                }
                 return failure(internal::invalidArgument(error));
             }
         }

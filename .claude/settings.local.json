@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//tmp/**)",
+      "Bash(sed -n '980,1100p' detail_design.txt)",
+      "Bash(sed -n '800,880p' detail_design.txt)"
+    ]
+  }
+}

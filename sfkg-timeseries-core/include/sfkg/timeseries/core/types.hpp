@@ -170,6 +170,10 @@ struct ConstraintViolation {
 struct ConstraintCheckResult {
     OperationResult operation;
     std::size_t evaluated_count{};
+    // Aligned samples that could not be evaluated yet because one or more
+    // mapped sequences were not present in that sample. Continuous ingest
+    // retries these samples when the affected sequence arrives later.
+    std::size_t pending_count{};
     bool satisfied{false};
     std::vector<ConstraintViolation> violations;
 };

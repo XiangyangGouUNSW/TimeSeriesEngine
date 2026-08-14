@@ -86,6 +86,14 @@ int main() {
     assert(result.operation.success_count == 3);
     assert(result.satisfied);
 
+    aligned.samples[1].values.erase("pressure-1");
+    result = engine.checkConstraints({aligned_rule}, aligned);
+    assert(result.operation.code == OperationCode::Ok);
+    assert(result.operation.success_count == 2);
+    assert(result.pending_count == 1);
+    assert(result.satisfied);
+
+    aligned.samples[1].values.emplace("pressure-1", 22.0);
     aligned_rule.constraint_id = "temperature-next-pressure";
     aligned_rule.terms = {
         {"temperature", 1.0, 0},

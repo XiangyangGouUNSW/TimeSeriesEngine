@@ -2,17 +2,184 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
+#include <cstdlib>
+#include <deque>
+#include <functional>
 #include <future>
 #include <limits>
 #include <mutex>
 #include <shared_mutex>
+#include <stdexcept>
 #include <string>
+#include <thread>
+#include <type_traits>
 #include <unordered_set>
 #include <utility>
 
 #include "operation_helpers.hpp"
 
 namespace sfkg::timeseries::core {
+
+namespace {
+
+std::size_t sequenceExecutorWorkerCount() {
+    constexpr std::size_t kDefaultWorkers = 8;
+    constexpr std::size_t kMaxWorkers = 64;
+    const char* value = std::getenv("SFKG_INGEST_HOT_SEQUENCE_WORKERS");
+    if (value != nullptr && *value != '\0') {
+        char* end = nullptr;
+        const auto parsed = std::strtoull(value, &end, 10);
+        if (end != value && *end == '\0' && parsed > 0) {
+            return std::min<std::size_t>(
+                kMaxWorkers, static_cast<std::size_t>(parsed));
+        }
+    }
+    return kDefaultWorkers;
+}
+
+constexpr std::size_t kSequenceTaskBaseCost = 1;
+constexpr std::size_t kSequenceTaskPointCost = 1;
+constexpr std::size_t kSequenceTaskCorrectionCost = 4;
+constexpr std::size_t kSequenceTaskOversubscription = 2;
+constexpr std::size_t kMinimumSequenceGroupCost = 8;
+
+template <typename Item, typename CostFunction>
+std::vector<std::vector<Item>> groupSequenceTasks(
+    std::vector<Item> items,
+    std::size_t worker_count,
+    CostFunction cost_function) {
+    if (items.empty()) {
+        return {};
+    }
+    if (worker_count == 0) {
+        return {std::move(items)};
+    }
+
+    std::size_t total_cost = 0;
+    for (const auto& item : items) {
+        total_cost += cost_function(item);
+    }
+    const auto denominator = worker_count * kSequenceTaskOversubscription;
+    const auto calculated_target = (total_cost + denominator - 1) /
+        denominator;
+    const auto target_cost = std::max(
+        kMinimumSequenceGroupCost,
+        std::max<std::size_t>(1, calculated_target));
+
+    // Longest-processing-time-first keeps a large sequence from being
+    // hidden behind a group of many small sequences. A sequence itself is
+    // never split; only independent small sequences are coalesced.
+    std::stable_sort(
+        items.begin(),
+        items.end(),
+        [&cost_function](const Item& left, const Item& right) {
+            return cost_function(left) > cost_function(right);
+        });
+
+    std::vector<std::vector<Item>> groups;
+    std::vector<std::size_t> group_costs;
+    for (auto& item : items) {
+        const auto item_cost = cost_function(item);
+        std::optional<std::size_t> best_group;
+        for (std::size_t index = 0; index < group_costs.size(); ++index) {
+            if (group_costs[index] + item_cost > target_cost) {
+                continue;
+            }
+            if (!best_group ||
+                group_costs[index] < group_costs[*best_group]) {
+                best_group = index;
+            }
+        }
+        if (!best_group) {
+            groups.emplace_back();
+            group_costs.push_back(0);
+            best_group = groups.size() - 1;
+        }
+        groups[*best_group].push_back(std::move(item));
+        group_costs[*best_group] += item_cost;
+    }
+    return groups;
+}
+
+}  // namespace
+
+struct WindowService::SequenceExecutor {
+    explicit SequenceExecutor(std::size_t worker_count) {
+        workers.reserve(worker_count);
+        for (std::size_t index = 0; index < worker_count; ++index) {
+            workers.emplace_back([this] { run(); });
+        }
+    }
+
+    ~SequenceExecutor() {
+        {
+            std::lock_guard lock(mutex);
+            stopping = true;
+        }
+        condition.notify_all();
+        for (auto& worker : workers) {
+            if (worker.joinable()) {
+                worker.join();
+            }
+        }
+    }
+
+    template <typename Function>
+    auto submit(Function function) ->
+        std::future<std::invoke_result_t<Function>> {
+        using Result = std::invoke_result_t<Function>;
+        auto task = std::make_shared<std::packaged_task<Result()>>(
+            std::move(function));
+        auto future = task->get_future();
+        {
+            std::lock_guard lock(mutex);
+            if (stopping) {
+                throw std::runtime_error("sequence executor is stopping");
+            }
+            queue.emplace_back([task = std::move(task)]() mutable {
+                (*task)();
+            });
+        }
+        condition.notify_one();
+        return future;
+    }
+
+    std::size_t workerCount() const {
+        return workers.size();
+    }
+
+private:
+    void run() {
+        while (true) {
+            std::function<void()> task;
+            {
+                std::unique_lock lock(mutex);
+                condition.wait(lock, [this] {
+                    return stopping || !queue.empty();
+                });
+                if (stopping && queue.empty()) {
+                    return;
+                }
+                task = std::move(queue.front());
+                queue.pop_front();
+            }
+            task();
+        }
+    }
+
+    std::mutex mutex;
+    std::condition_variable condition;
+    std::deque<std::function<void()>> queue;
+    std::vector<std::thread> workers;
+    bool stopping{false};
+};
+
+WindowService::WindowService()
+    : sequence_executor_(
+          std::make_unique<SequenceExecutor>(sequenceExecutorWorkerCount())) {}
+
+WindowService::~WindowService() = default;
 
 void WindowService::replaceSequence(
     SequenceWindow& sequence,
@@ -413,6 +580,7 @@ WindowUpdateResult WindowService::updateWindowIncremental(
         std::shared_ptr<SequenceWindow> sequence;
         std::vector<RawTimeseriesPoint> incoming;
         bool strictly_increasing{false};
+        std::size_t estimated_cost{0};
     };
     struct SequenceUpdateTiming {
         SequenceId sequence_id;
@@ -455,88 +623,114 @@ WindowUpdateResult WindowService::updateWindowIncremental(
             }
             incoming = std::move(unique_incoming);
         }
+        const auto estimated_cost =
+            kSequenceTaskBaseCost +
+            incoming.size() * kSequenceTaskPointCost +
+            (strictly_increasing
+                 ? 0
+                 : incoming.size() * kSequenceTaskCorrectionCost);
         prepared_updates.push_back({
             sequence_id,
             sequence_refs.at(sequence_id),
             std::move(incoming),
-            strictly_increasing});
+            strictly_increasing,
+            estimated_cost});
     }
 
-    std::vector<std::future<SequenceUpdateTiming>> updates;
-    updates.reserve(prepared_updates.size());
-    for (auto& prepared : prepared_updates) {
-        updates.push_back(std::async(
-            std::launch::async,
-            [sequence_id = prepared.sequence_id,
-             sequence = prepared.sequence,
-             incoming = std::move(prepared.incoming),
-             strictly_increasing = prepared.strictly_increasing]() mutable {
-                SequenceUpdateTiming timing;
-                timing.sequence_id = sequence_id;
-                const auto wait_started = std::chrono::steady_clock::now();
-                std::unique_lock lock(sequence->mutex);
-                const auto lock_acquired = std::chrono::steady_clock::now();
-                timing.lock_wait_ms =
-                    std::chrono::duration<double, std::milli>(
-                        lock_acquired - wait_started).count();
+    result.sequence_task_count = prepared_updates.size();
+    auto sequence_groups = groupSequenceTasks(
+        std::move(prepared_updates),
+        sequence_executor_->workerCount(),
+        [](const PreparedSequenceUpdate& prepared) {
+            return prepared.estimated_cost;
+        });
+    result.sequence_group_count = sequence_groups.size();
 
-                const auto has_active_points = !sequence->empty();
-                const bool append_only = strictly_increasing &&
-                    !incoming.empty() &&
-                    (!sequence->latest_time ||
-                     incoming.front().time > *sequence->latest_time);
-                const auto update_started = lock_acquired;
-                if (append_only) {
-                    const auto required_capacity =
-                        sequence->points.size() + incoming.size();
-                    if (sequence->points.capacity() < required_capacity) {
-                        const auto doubled_capacity = sequence->points.capacity() >
-                                std::numeric_limits<std::size_t>::max() / 2
-                            ? std::numeric_limits<std::size_t>::max()
-                            : sequence->points.capacity() * 2;
-                        sequence->points.reserve(std::max(
-                            required_capacity,
-                            std::max<std::size_t>(1, doubled_capacity)));
-                    }
-                    for (auto& point : incoming) {
-                        sequence->points.push_back(std::move(point));
-                        sequence->latest_time = sequence->points.back().time;
-                    }
-                    timing.incremental_safe = true;
-                } else if (!has_active_points && sequence->late_points.empty()) {
-                    mergeSortedPoints(*sequence, std::move(incoming));
-                } else {
-                    for (auto& point : incoming) {
-                        const auto point_time = point.time;
-                        sequence->late_points[point.time] = std::move(point);
-                        if (!sequence->latest_time ||
-                            point_time > *sequence->latest_time) {
-                            sequence->latest_time = point_time;
-                        }
-                    }
-                    if (sequence->late_points.size() >=
-                        kLatePointFlushThreshold) {
-                        // Corrections remain cheap while sparse, but the
-                        // side buffer is periodically folded back into the
-                        // append-oriented vector so it cannot grow without
-                        // bound or turn every query into a large merge.
-                        flushLatePoints(*sequence);
-                    }
+    const auto update_sequence = [](PreparedSequenceUpdate prepared) {
+        SequenceUpdateTiming timing;
+        timing.sequence_id = prepared.sequence_id;
+        const auto wait_started = std::chrono::steady_clock::now();
+        std::unique_lock lock(prepared.sequence->mutex);
+        const auto lock_acquired = std::chrono::steady_clock::now();
+        timing.lock_wait_ms =
+            std::chrono::duration<double, std::milli>(
+                lock_acquired - wait_started).count();
+
+        const auto has_active_points = !prepared.sequence->empty();
+        const bool append_only = prepared.strictly_increasing &&
+            !prepared.incoming.empty() &&
+            (!prepared.sequence->latest_time ||
+             prepared.incoming.front().time >
+                 *prepared.sequence->latest_time);
+        const auto update_started = lock_acquired;
+        if (append_only) {
+            const auto required_capacity =
+                prepared.sequence->points.size() + prepared.incoming.size();
+            if (prepared.sequence->points.capacity() < required_capacity) {
+                const auto doubled_capacity =
+                    prepared.sequence->points.capacity() >
+                            std::numeric_limits<std::size_t>::max() / 2
+                        ? std::numeric_limits<std::size_t>::max()
+                        : prepared.sequence->points.capacity() * 2;
+                prepared.sequence->points.reserve(std::max(
+                    required_capacity,
+                    std::max<std::size_t>(1, doubled_capacity)));
+            }
+            for (auto& point : prepared.incoming) {
+                prepared.sequence->points.push_back(std::move(point));
+                prepared.sequence->latest_time =
+                    prepared.sequence->points.back().time;
+            }
+            timing.incremental_safe = true;
+        } else if (!has_active_points &&
+                   prepared.sequence->late_points.empty()) {
+            WindowService::mergeSortedPoints(
+                *prepared.sequence, std::move(prepared.incoming));
+        } else {
+            for (auto& point : prepared.incoming) {
+                const auto point_time = point.time;
+                prepared.sequence->late_points[point.time] = std::move(point);
+                if (!prepared.sequence->latest_time ||
+                    point_time > *prepared.sequence->latest_time) {
+                    prepared.sequence->latest_time = point_time;
                 }
-                timing.update_ms =
-                    std::chrono::duration<double, std::milli>(
-                        std::chrono::steady_clock::now() - update_started).count();
-                return timing;
+            }
+            if (prepared.sequence->late_points.size() >=
+                WindowService::kLatePointFlushThreshold) {
+                // Corrections remain cheap while sparse, but the side buffer
+                // is periodically folded back into the append-oriented
+                // vector so it cannot grow without bound.
+                WindowService::flushLatePoints(*prepared.sequence);
+            }
+        }
+        timing.update_ms =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - update_started).count();
+        return timing;
+    };
+
+    std::vector<std::future<std::vector<SequenceUpdateTiming>>> updates;
+    updates.reserve(sequence_groups.size());
+    for (auto& group : sequence_groups) {
+        updates.push_back(sequence_executor_->submit(
+            [group = std::move(group), update_sequence]() mutable {
+                std::vector<SequenceUpdateTiming> timings;
+                timings.reserve(group.size());
+                for (auto& prepared : group) {
+                    timings.push_back(update_sequence(std::move(prepared)));
+                }
+                return timings;
             }));
     }
     for (auto& update : updates) {
-        const auto timing = update.get();
-        result.incremental_safe =
-            timing.incremental_safe && result.incremental_safe;
-        result.sequence_updates[timing.sequence_id].incremental_safe =
-            timing.incremental_safe;
-        result.sequence_lock_wait_ms += timing.lock_wait_ms;
-        result.sequence_update_ms += timing.update_ms;
+        for (const auto& timing : update.get()) {
+            result.incremental_safe =
+                timing.incremental_safe && result.incremental_safe;
+            result.sequence_updates[timing.sequence_id].incremental_safe =
+                timing.incremental_safe;
+            result.sequence_lock_wait_ms += timing.lock_wait_ms;
+            result.sequence_update_ms += timing.update_ms;
+        }
     }
 
     // Eviction is not an ordering failure. It is removed independently while
@@ -642,9 +836,9 @@ bool WindowService::pruneExpiredPoints(
         return timing;
     };
 
-    // For the usual small ETTh1-style window, thread creation costs more than
-    // the lower_bound calls.  Reserve the parallel path for a genuinely wide
-    // variable set; the per-sequence locks still keep it safe there.
+    // For a small sequence set, queueing work is more expensive than the
+    // lower_bound calls. The threshold is based only on executor overhead,
+    // not on a particular dataset or workload shape.
     constexpr std::size_t kParallelPruneThreshold = 16;
     if (sequences.size() < kParallelPruneThreshold) {
         bool evicted = false;
@@ -664,25 +858,38 @@ bool WindowService::pruneExpiredPoints(
         return evicted;
     }
 
-    std::vector<std::future<PruneTiming>> futures;
-    futures.reserve(sequences.size());
-    for (const auto& entry : sequences) {
-        futures.push_back(std::async(
-            std::launch::async, pruneOne, entry));
+    auto sequence_groups = groupSequenceTasks(
+        std::vector<std::pair<SequenceId, std::shared_ptr<SequenceWindow>>>(
+            sequences.begin(), sequences.end()),
+        sequence_executor_->workerCount(),
+        [](const auto&) { return std::size_t{1}; });
+    using PruneResult = std::pair<SequenceId, PruneTiming>;
+    std::vector<std::future<std::vector<PruneResult>>> futures;
+    futures.reserve(sequence_groups.size());
+    for (auto& group : sequence_groups) {
+        futures.push_back(sequence_executor_->submit(
+            [pruneOne, group = std::move(group)]() mutable {
+                std::vector<PruneResult> results;
+                results.reserve(group.size());
+                for (const auto& entry : group) {
+                    results.emplace_back(entry.first, pruneOne(entry));
+                }
+                return results;
+            }));
     }
     bool evicted = false;
-    for (std::size_t index = 0; index < futures.size(); ++index) {
-        auto& future = futures[index];
-        const auto timing = future.get();
-        evicted = timing.evicted || evicted;
-        if (timing.evicted && evicted_sequence_ids != nullptr) {
-            evicted_sequence_ids->insert(sequences[index].first);
-        }
-        if (lock_wait_ms != nullptr) {
-            *lock_wait_ms += timing.lock_wait_ms;
-        }
-        if (update_ms != nullptr) {
-            *update_ms += timing.update_ms;
+    for (auto& future : futures) {
+        for (const auto& [sequence_id, timing] : future.get()) {
+            evicted = timing.evicted || evicted;
+            if (timing.evicted && evicted_sequence_ids != nullptr) {
+                evicted_sequence_ids->insert(sequence_id);
+            }
+            if (lock_wait_ms != nullptr) {
+                *lock_wait_ms += timing.lock_wait_ms;
+            }
+            if (update_ms != nullptr) {
+                *update_ms += timing.update_ms;
+            }
         }
     }
     return evicted;

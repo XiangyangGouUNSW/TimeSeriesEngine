@@ -165,6 +165,11 @@ if(SFKG_BUILD_GRPC)
         target_link_libraries(etth1_grpc_ingest_benchmark
             PRIVATE sfkg_timeseries_proto Threads::Threads)
 
+        add_executable(grpc_ordered_load_test
+            tools/grpc_ordered_load_test.cpp)
+        target_link_libraries(grpc_ordered_load_test
+            PRIVATE sfkg_timeseries_proto Threads::Threads)
+
     endif()
 
 endif()

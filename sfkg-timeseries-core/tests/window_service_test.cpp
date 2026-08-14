@@ -285,6 +285,42 @@ int main() {
     assert(!mixed.sequence_updates.at("late").incremental_safe);
     assert(mixed.sequence_updates.at("append").incremental_safe);
 
+    // One RPC may legitimately carry a wide variable set.  Its correctness
+    // and per-sequence incremental status must not depend on the client
+    // having pre-sharded the sequences into separate requests.
+    WindowService wide_request_window;
+    assert(wide_request_window.configureWindowSize(10'000).code ==
+           OperationCode::Ok);
+    TimeseriesBatch wide_first;
+    TimeseriesBatch wide_second;
+    wide_first.points.reserve(1'000);
+    wide_second.points.reserve(1'000);
+    for (int index = 0; index < 1'000; ++index) {
+        const auto sequence_id = "wide-" + std::to_string(index);
+        wide_first.points.push_back({
+            0, sequence_id, static_cast<double>(index)});
+        wide_second.points.push_back({
+            1, sequence_id, static_cast<double>(index + 1)});
+    }
+    const auto wide_first_result =
+        wide_request_window.buildTimeWindowIncremental(wide_first);
+    const auto wide_second_result =
+        wide_request_window.buildTimeWindowIncremental(wide_second);
+    assert(wide_first_result.operation.code == OperationCode::Ok);
+    assert(wide_first_result.incremental_safe);
+    assert(wide_first_result.changed_sequence_ids.size() == 1'000);
+    assert(wide_second_result.operation.code == OperationCode::Ok);
+    assert(wide_second_result.incremental_safe);
+    assert(wide_second_result.sequence_updates.size() == 1'000);
+    assert(wide_second_result.sequence_updates.at("wide-0").incremental_safe);
+    assert(wide_second_result.sequence_updates.at("wide-999").incremental_safe);
+    queried = wide_request_window.queryWindowData({
+        {"wide-0", "wide-500", "wide-999"},
+        std::optional<Timestamp>{0}, std::optional<Timestamp>{2}});
+    assertTimes(pointsFor(queried.data, "wide-0"), {0, 1});
+    assertTimes(pointsFor(queried.data, "wide-500"), {0, 1});
+    assertTimes(pointsFor(queried.data, "wide-999"), {0, 1});
+
     for (int worker = 0; worker < 4; ++worker) {
         const auto sequence_id = "concurrent-" + std::to_string(worker);
         queried = concurrent_window.queryWindowData({

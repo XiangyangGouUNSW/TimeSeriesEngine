@@ -50,6 +50,11 @@ struct WindowUpdateResult {
     // than time spent modifying the vector/tree itself.
     double sequence_lock_wait_ms{0.0};
     double sequence_update_ms{0.0};
+    // sequence_task_count is the number of independent sequence updates;
+    // sequence_group_count is the number of executor tasks after small
+    // sequence updates have been coalesced by estimated work.
+    std::size_t sequence_task_count{0};
+    std::size_t sequence_group_count{0};
     double eviction_lock_wait_ms{0.0};
     double eviction_update_ms{0.0};
 };
@@ -58,6 +63,12 @@ class WindowService {
 public:
     static constexpr std::int64_t kDefaultWindowSizeMs =
         ::sfkg::timeseries::core::kDefaultWindowSizeMs;
+
+    WindowService();
+    ~WindowService();
+
+    WindowService(const WindowService&) = delete;
+    WindowService& operator=(const WindowService&) = delete;
 
     OperationResult configureWindowSize(std::int64_t window_size);
     std::int64_t windowSize() const;
@@ -95,6 +106,8 @@ public:
         const WindowQuery& query) const;
 
 private:
+    struct SequenceExecutor;
+
     // Keep a small side buffer for rare corrections. Once it reaches this
     // bound, merge it into the ordered vector in one batch instead of moving
     // the whole live vector for every single out-of-order point.
@@ -152,6 +165,7 @@ private:
     std::optional<Timestamp> watermark_;
     std::int64_t window_size_{kDefaultWindowSizeMs};
     std::uint64_t update_generation_{0};
+    std::unique_ptr<SequenceExecutor> sequence_executor_;
 };
 
 }  // namespace sfkg::timeseries::core

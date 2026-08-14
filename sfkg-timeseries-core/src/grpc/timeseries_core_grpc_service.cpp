@@ -46,6 +46,9 @@ struct TimeseriesCoreGrpcService::IngestDiagnostics {
     std::size_t cold_shard_count{0};
     double resolve_ms{0.0};
     double hot_window_ms{0.0};
+    double config_snapshot_ms{0.0};
+    double constraint_prepare_ms{0.0};
+    double constraint_group_span_ms{0.0};
     double window_sequence_lock_wait_ms{0.0};
     double window_sequence_update_ms{0.0};
     double window_eviction_lock_wait_ms{0.0};
@@ -58,6 +61,8 @@ struct TimeseriesCoreGrpcService::IngestDiagnostics {
     bool window_evicted{false};
     std::size_t window_sequence_count{0};
     std::size_t window_incremental_safe_sequence_count{0};
+    std::size_t window_sequence_task_count{0};
+    std::size_t window_sequence_group_count{0};
     std::unordered_map<std::size_t, WriterTiming> writers;
 };
 
@@ -275,6 +280,9 @@ std::vector<SequenceId> mappedSequenceIds(const ConstraintRule& rule) {
     return sequence_ids;
 }
 
+using ConstraintSequenceCache =
+    std::unordered_map<std::string, std::vector<SequenceId>>;
+
 struct ConstraintIncrementalRange {
     Timestamp start_time{0};
     Timestamp end_time{0};
@@ -283,7 +291,8 @@ struct ConstraintIncrementalRange {
 
 std::optional<ConstraintIncrementalRange> incrementalRangeFor(
     const WindowUpdateResult* update,
-    const std::vector<SequenceId>& sequence_ids) {
+    const std::vector<SequenceId>& sequence_ids,
+    const std::unordered_set<SequenceId>* changed_sequence_set = nullptr) {
     if (update == nullptr || sequence_ids.empty()) {
         return std::nullopt;
     }
@@ -306,10 +315,14 @@ std::optional<ConstraintIncrementalRange> incrementalRangeFor(
 
     std::optional<ConstraintIncrementalRange> range;
     for (const auto& sequence_id : sequence_ids) {
-        if (std::find(
-                update->changed_sequence_ids.begin(),
-                update->changed_sequence_ids.end(),
-                sequence_id) == update->changed_sequence_ids.end()) {
+        const bool changed = changed_sequence_set != nullptr
+            ? changed_sequence_set->find(sequence_id) !=
+                changed_sequence_set->end()
+            : std::find(
+                  update->changed_sequence_ids.begin(),
+                  update->changed_sequence_ids.end(),
+                  sequence_id) != update->changed_sequence_ids.end();
+        if (!changed) {
             // Unchanged rule inputs remain query context; only changed
             // dependencies determine whether this rule can be incremental.
             continue;
@@ -381,7 +394,8 @@ ConstraintCheckResult runContinuousConstraintCheck(
     const std::vector<ConstraintRule>& enabled_rules,
     const AlignmentService& alignment_service,
     const ConstraintCheckEngine& constraint_engine,
-    const std::optional<ConstraintIncrementalRange>& incremental_range) {
+    const std::optional<ConstraintIncrementalRange>& incremental_range,
+    const ConstraintSequenceCache& sequence_cache) {
     ConstraintCheckResult result;
     result.satisfied = true;
     result.operation = internal::ok(
@@ -393,7 +407,7 @@ ConstraintCheckResult runContinuousConstraintCheck(
     std::vector<ConstraintRule> single_sequence_rules;
     std::vector<ConstraintRule> multi_sequence_rules;
     for (const auto& rule : enabled_rules) {
-        const auto sequence_ids = mappedSequenceIds(rule);
+        const auto& sequence_ids = sequence_cache.at(rule.constraint_id);
         // A rule whose sequences have not appeared in the current hot window
         // is not an error during continuous ingest; it becomes checkable once
         // the missing sequence data arrives.
@@ -415,7 +429,8 @@ ConstraintCheckResult runContinuousConstraintCheck(
                 incremental_range->start_time,
                 incremental_range->end_time};
             for (const auto& rule : single_sequence_rules) {
-                const auto sequence_ids = mappedSequenceIds(rule);
+                const auto& sequence_ids =
+                    sequence_cache.at(rule.constraint_id);
                 if (sequence_ids.size() != 1) {
                     range.reset();
                     break;
@@ -511,6 +526,7 @@ ConstraintCheckResult runContinuousConstraintCheck(
             return multi_result;
         }
         result.evaluated_count += multi_result.evaluated_count;
+        result.pending_count += multi_result.pending_count;
         result.violations.insert(
             result.violations.end(),
             multi_result.violations.begin(),
@@ -518,11 +534,16 @@ ConstraintCheckResult runContinuousConstraintCheck(
     }
 
     result.satisfied = result.violations.empty();
+    std::string message = result.satisfied
+        ? "continuous constraint checks completed; all satisfied"
+        : "continuous constraint checks completed; violations found";
+    if (result.pending_count != 0) {
+        message += "; " + std::to_string(result.pending_count) +
+            " aligned samples pending";
+    }
     result.operation = internal::ok(
         result.evaluated_count,
-        result.satisfied
-            ? "continuous constraint checks completed; all satisfied"
-            : "continuous constraint checks completed; violations found");
+        std::move(message));
     return result;
 }
 
@@ -722,14 +743,56 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
             window_update.sequence_lock_wait_ms;
         diagnostics->window_sequence_update_ms =
             window_update.sequence_update_ms;
+        diagnostics->window_sequence_task_count =
+            window_update.sequence_task_count;
+        diagnostics->window_sequence_group_count =
+            window_update.sequence_group_count;
         diagnostics->window_eviction_lock_wait_ms =
             window_update.eviction_lock_wait_ms;
         diagnostics->window_eviction_update_ms =
             window_update.eviction_update_ms;
     }
     result.window_result = window_update.operation;
+    const auto constraint_prepare_started = std::chrono::steady_clock::now();
+    const auto recordConstraintPrepare = [&] {
+        if (!diagnostics) {
+            return;
+        }
+        std::lock_guard lock(diagnostics->mutex);
+        diagnostics->constraint_prepare_ms =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() -
+                constraint_prepare_started).count();
+    };
+    std::unordered_set<SequenceId> changed_sequence_set;
+    changed_sequence_set.reserve(window_update.changed_sequence_ids.size());
+    for (const auto& sequence_id : window_update.changed_sequence_ids) {
+        changed_sequence_set.insert(sequence_id);
+    }
+
+    const auto config_started = std::chrono::steady_clock::now();
     const auto enabled_rules = config_registry_.allEnabledConstraints();
     const auto derived_configs = config_registry_.allDerivedSeries();
+    const auto config_finished = std::chrono::steady_clock::now();
+    if (diagnostics) {
+        std::lock_guard lock(diagnostics->mutex);
+        diagnostics->config_snapshot_ms =
+            std::chrono::duration<double, std::milli>(
+                config_finished - config_started).count();
+    }
+
+    ConstraintSequenceCache mapped_sequence_cache;
+    mapped_sequence_cache.reserve(enabled_rules.size());
+    for (const auto& rule : enabled_rules) {
+        mapped_sequence_cache.emplace(
+            rule.constraint_id, mappedSequenceIds(rule));
+    }
+    const auto sequenceIdsFor = [&mapped_sequence_cache](
+                                   const ConstraintRule& rule)
+        -> const std::vector<SequenceId>& {
+        return mapped_sequence_cache.at(rule.constraint_id);
+    };
+
     std::unordered_set<SequenceId> enabled_derived_ids;
     for (const auto& derived : derived_configs) {
         if (derived.enabled) {
@@ -740,7 +803,7 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     bool constraints_depend_on_derived = false;
     if (!enabled_rules.empty() && has_enabled_derived) {
         for (const auto& rule : enabled_rules) {
-            for (const auto& sequence_id : mappedSequenceIds(rule)) {
+            for (const auto& sequence_id : sequenceIdsFor(rule)) {
                 if (enabled_derived_ids.find(sequence_id) !=
                     enabled_derived_ids.end()) {
                     constraints_depend_on_derived = true;
@@ -805,11 +868,13 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     result.constraint_notification_result = internal::ok(
         0, "constraint check skipped because hot window update failed");
     if (!isSuccessful(result.window_result.code)) {
+        recordConstraintPrepare();
         finishDerived();
         return result;
     }
 
     if (enabled_rules.empty()) {
+        recordConstraintPrepare();
         finishDerived();
         result.constraint_notification_result = internal::ok(
             0, "no enabled constraints; notification skipped");
@@ -818,19 +883,17 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
 
     std::vector<ConstraintRule> single_sequence_rules;
     std::vector<ConstraintRule> multi_sequence_rules;
-    const auto sequenceWasAffected = [&window_update](
+    const auto sequenceWasAffected = [&changed_sequence_set](
                                          const std::vector<SequenceId>& ids) {
         return std::any_of(
             ids.begin(), ids.end(),
-            [&window_update](const SequenceId& sequence_id) {
-                return std::find(
-                    window_update.changed_sequence_ids.begin(),
-                    window_update.changed_sequence_ids.end(),
-                    sequence_id) != window_update.changed_sequence_ids.end();
+            [&changed_sequence_set](const SequenceId& sequence_id) {
+                return changed_sequence_set.find(sequence_id) !=
+                    changed_sequence_set.end();
             });
     };
     for (const auto& rule : enabled_rules) {
-        const auto sequence_ids = mappedSequenceIds(rule);
+        const auto& sequence_ids = sequenceIdsFor(rule);
         if (sequence_ids.empty() || !sequenceWasAffected(sequence_ids)) {
             // A rule unrelated to this window update cannot produce a new
             // violation. Its sequences are not queried or checked here.
@@ -864,15 +927,16 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
         WindowQuery query;
     };
 
-    const auto makeGroup = [](std::vector<ConstraintRule> rules,
-                              std::optional<ConstraintIncrementalRange> range) {
+    const auto makeGroup = [&sequenceIdsFor](
+                               std::vector<ConstraintRule> rules,
+                               std::optional<ConstraintIncrementalRange> range) {
         ConstraintGroupSpec group;
         group.rules = std::move(rules);
         group.range = range;
         std::unordered_set<SequenceId> seen;
         std::size_t maximum_offset = 0;
         for (const auto& rule : group.rules) {
-            for (const auto& sequence_id : mappedSequenceIds(rule)) {
+            for (const auto& sequence_id : sequenceIdsFor(rule)) {
                 if (seen.insert(sequence_id).second) {
                     group.query.sequence_ids.push_back(sequence_id);
                 }
@@ -895,13 +959,16 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
         return group;
     };
 
-    const auto splitRulesBySafety = [&window_update](
+    const auto splitRulesBySafety = [&window_update, &sequenceIdsFor,
+                                     &changed_sequence_set](
                                           const std::vector<ConstraintRule>& rules) {
         std::vector<ConstraintRule> incremental_rules;
         std::vector<ConstraintRule> full_rules;
         for (const auto& rule : rules) {
             if (incrementalRangeFor(
-                    &window_update, mappedSequenceIds(rule))) {
+                    &window_update,
+                    sequenceIdsFor(rule),
+                    &changed_sequence_set)) {
                 incremental_rules.push_back(rule);
             } else {
                 full_rules.push_back(rule);
@@ -913,7 +980,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
 
     std::vector<ConstraintGroupSpec> groups;
     const auto addRuleGroups = [&groups, &window_update, &makeGroup,
-                                &splitRulesBySafety](
+                                &splitRulesBySafety, &sequenceIdsFor,
+                                &changed_sequence_set](
                                    const std::vector<ConstraintRule>& rules) {
         if (rules.empty()) {
             return;
@@ -923,7 +991,9 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
             std::optional<ConstraintIncrementalRange> range;
             for (const auto& rule : split.first) {
                 const auto rule_range = incrementalRangeFor(
-                    &window_update, mappedSequenceIds(rule));
+                    &window_update,
+                    sequenceIdsFor(rule),
+                    &changed_sequence_set);
                 if (!range) {
                     range = rule_range;
                 } else {
@@ -943,8 +1013,10 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     };
     addRuleGroups(single_sequence_rules);
     addRuleGroups(multi_sequence_rules);
+    recordConstraintPrepare();
 
-    const auto run_group = [this](ConstraintGroupSpec group) {
+    const auto run_group = [this, &mapped_sequence_cache](
+                               ConstraintGroupSpec group) {
         ConstraintGroupExecution execution;
         if (group.rules.empty()) {
             execution.result.satisfied = true;
@@ -974,7 +1046,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
             group.rules,
             alignment_service_,
             constraint_engine_,
-            group.range);
+            group.range,
+            mapped_sequence_cache);
         const auto check_finished = std::chrono::steady_clock::now();
         execution.check_ms = std::chrono::duration<double, std::milli>(
             check_finished - check_started).count();
@@ -989,6 +1062,7 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     double constraint_check_ms = 0.0;
     std::vector<std::future<ConstraintGroupExecution>> group_futures;
     group_futures.reserve(groups.size());
+    const auto constraint_group_started = std::chrono::steady_clock::now();
     for (auto& group : groups) {
         group_futures.push_back(std::async(
             std::launch::async, run_group, std::move(group)));
@@ -1006,21 +1080,31 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
             continue;
         }
         check.evaluated_count += execution.result.evaluated_count;
+        check.pending_count += execution.result.pending_count;
         check.violations.insert(
             check.violations.end(),
             execution.result.violations.begin(),
             execution.result.violations.end());
     }
+    const auto constraint_group_finished = std::chrono::steady_clock::now();
     if (!group_failed) {
         check.satisfied = check.violations.empty();
+        std::string message = check.satisfied
+            ? "continuous constraint checks completed; all satisfied"
+            : "continuous constraint checks completed; violations found";
+        if (check.pending_count != 0) {
+            message += "; " + std::to_string(check.pending_count) +
+                " aligned samples pending";
+        }
         check.operation = internal::ok(
             check.evaluated_count,
-            check.satisfied
-                ? "continuous constraint checks completed; all satisfied"
-                : "continuous constraint checks completed; violations found");
+            std::move(message));
     }
     if (diagnostics) {
         std::lock_guard lock(diagnostics->mutex);
+        diagnostics->constraint_group_span_ms =
+            std::chrono::duration<double, std::milli>(
+                constraint_group_finished - constraint_group_started).count();
         diagnostics->constraint_query_ms = constraint_query_ms;
         diagnostics->constraint_check_ms = constraint_check_ms;
     }
@@ -1033,14 +1117,18 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
         finishDerived();
         result.constraint_notification_result = internal::ok(
             check.evaluated_count,
-            "no constraint violations; notification skipped");
+            check.pending_count == 0
+                ? "no constraint violations; notification skipped"
+                : "no currently evaluable constraint violations; " +
+                    std::to_string(check.pending_count) +
+                    " aligned samples pending");
         return result;
     }
 
     std::unordered_map<std::string, std::vector<SequenceId>>
         sequences_by_constraint;
     for (const auto& rule : enabled_rules) {
-        sequences_by_constraint[rule.constraint_id] = mappedSequenceIds(rule);
+        sequences_by_constraint[rule.constraint_id] = sequenceIdsFor(rule);
     }
 
     std::vector<std::string> violated_constraint_ids;
@@ -1305,6 +1393,12 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                  << " cold_span_ms=" << cold_span_ms
                  << " hot_ms=" << hot_ms
                  << " hot_window_ms=" << diagnostics->hot_window_ms
+                 << " hot_after_window_ms="
+                 << std::max(0.0, hot_ms - diagnostics->hot_window_ms)
+                 << " config_snapshot_ms="
+                 << diagnostics->config_snapshot_ms
+                 << " constraint_prepare_ms="
+                 << diagnostics->constraint_prepare_ms
                  << " window_seq_wait_ms="
                  << diagnostics->window_sequence_lock_wait_ms
                  << " window_seq_work_ms="
@@ -1318,6 +1412,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                  << diagnostics->constraint_query_ms
                  << " constraint_check_ms="
                  << diagnostics->constraint_check_ms
+                 << " constraint_group_span_ms="
+                 << diagnostics->constraint_group_span_ms
                  << " constraint_notify_ms="
                  << diagnostics->constraint_notify_ms
                  << " window_incremental_safe="
@@ -1325,6 +1421,10 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                  << " window_safe_sequences="
                  << diagnostics->window_incremental_safe_sequence_count << "/"
                  << diagnostics->window_sequence_count
+                 << " window_seq_tasks="
+                 << diagnostics->window_sequence_task_count
+                 << " window_seq_groups="
+                 << diagnostics->window_sequence_group_count
                  << " window_evicted="
                  << (diagnostics->window_evicted ? "true" : "false")
                  << " pipeline_ms=" << duration(
