@@ -2,6 +2,7 @@ package com.sfkg.timeseries.mapper;
 
 import com.sfkg.timeseries.dto.RelationQueryRequest;
 import com.sfkg.timeseries.entity.TimeseriesRelation;
+import com.sfkg.timeseries.dataingest.DataIngestPersistenceService;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -12,18 +13,24 @@ import org.springframework.stereotype.Repository;
 public class TimeseriesRelationFileMapper implements TimeseriesRelationMapper {
 
     private final LocalJsonTableStore<TimeseriesRelation> store;
+    private final DataIngestPersistenceService dataIngestPersistenceService;
 
     public TimeseriesRelationFileMapper(
-            @Value("${timeseries.local-store-dir:data}") String storeDir) {
+            @Value("${timeseries.local-store-dir:data}") String storeDir,
+            DataIngestPersistenceService dataIngestPersistenceService) {
         this.store = new LocalJsonTableStore<>(
                 storeDir,
                 "timeseries-relation.json",
                 TimeseriesRelation.class);
+        this.dataIngestPersistenceService = dataIngestPersistenceService;
     }
 
     @Override
     public void insert(TimeseriesRelation entity) {
         store.upsert(item -> sameBusinessKey(entity, item), entity);
+        if (entity != null) {
+            dataIngestPersistenceService.submitRecord("timeseries_relation", entity.getRelationId(), entity);
+        }
     }
 
     @Override
@@ -51,6 +58,10 @@ public class TimeseriesRelationFileMapper implements TimeseriesRelationMapper {
         store.update(
                 entity -> Objects.equals(relationId, entity.getRelationId()),
                 entity -> entity.setEffectiveStatus(status));
+        TimeseriesRelation entity = selectById(relationId);
+        if (entity != null) {
+            dataIngestPersistenceService.submitRecord("timeseries_relation", entity.getRelationId(), entity);
+        }
     }
 
     private boolean sameBusinessKey(TimeseriesRelation incoming, TimeseriesRelation stored) {

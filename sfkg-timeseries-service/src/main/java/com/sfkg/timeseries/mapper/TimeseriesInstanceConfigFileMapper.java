@@ -2,6 +2,7 @@ package com.sfkg.timeseries.mapper;
 
 import com.sfkg.timeseries.dto.InstanceConfigQueryRequest;
 import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
+import com.sfkg.timeseries.dataingest.DataIngestPersistenceService;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -12,18 +13,24 @@ import org.springframework.stereotype.Repository;
 public class TimeseriesInstanceConfigFileMapper implements TimeseriesInstanceConfigMapper {
 
     private final LocalJsonTableStore<TimeseriesInstanceConfig> store;
+    private final DataIngestPersistenceService dataIngestPersistenceService;
 
     public TimeseriesInstanceConfigFileMapper(
-            @Value("${timeseries.local-store-dir:data}") String storeDir) {
+            @Value("${timeseries.local-store-dir:data}") String storeDir,
+            DataIngestPersistenceService dataIngestPersistenceService) {
         this.store = new LocalJsonTableStore<>(
                 storeDir,
                 "timeseries-instance-config.json",
                 TimeseriesInstanceConfig.class);
+        this.dataIngestPersistenceService = dataIngestPersistenceService;
     }
 
     @Override
     public void insert(TimeseriesInstanceConfig entity) {
         store.upsert(item -> sameBusinessKey(entity, item), entity);
+        if (entity != null) {
+            dataIngestPersistenceService.submitRecord("timeseries_instance_config", entity.getSequenceId(), entity);
+        }
     }
 
     @Override

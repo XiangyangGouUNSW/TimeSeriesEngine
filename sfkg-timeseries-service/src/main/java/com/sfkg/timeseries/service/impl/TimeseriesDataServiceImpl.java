@@ -54,10 +54,9 @@ public class TimeseriesDataServiceImpl implements TimeseriesDataService {
             throw new BusinessException("ingest points are required");
         }
 
-        // ── Local persistence disabled (removed from ingest hot path) ──
-        // List<TimeseriesDataPoint> localPoints = convertToDataPoints(request);
-        // dataFileMapper.appendDataPoints(localPoints);
-        // memoryCache.putTimeseriesDataPoints(localPoints);
+        List<TimeseriesDataPoint> localPoints = convertToDataPoints(request);
+        dataFileMapper.appendDataPoints(localPoints);
+        memoryCache.putTimeseriesDataPoints(localPoints);
 
         // Route each point through the hash-partitioned buffer pool
         int pointCount = request.getPoints().size();

@@ -2,6 +2,7 @@ package com.sfkg.timeseries.mapper;
 
 import com.sfkg.timeseries.dto.ConstraintQueryRequest;
 import com.sfkg.timeseries.entity.TimeseriesConstraint;
+import com.sfkg.timeseries.dataingest.DataIngestPersistenceService;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -12,18 +13,24 @@ import org.springframework.stereotype.Repository;
 public class TimeseriesConstraintFileMapper implements TimeseriesConstraintMapper {
 
     private final LocalJsonTableStore<TimeseriesConstraint> store;
+    private final DataIngestPersistenceService dataIngestPersistenceService;
 
     public TimeseriesConstraintFileMapper(
-            @Value("${timeseries.local-store-dir:data}") String storeDir) {
+            @Value("${timeseries.local-store-dir:data}") String storeDir,
+            DataIngestPersistenceService dataIngestPersistenceService) {
         this.store = new LocalJsonTableStore<>(
                 storeDir,
                 "timeseries-constraint.json",
                 TimeseriesConstraint.class);
+        this.dataIngestPersistenceService = dataIngestPersistenceService;
     }
 
     @Override
     public void insert(TimeseriesConstraint entity) {
         store.upsert(item -> sameBusinessKey(entity, item), entity);
+        if (entity != null) {
+            dataIngestPersistenceService.submitRecord("timeseries_constraint", entity.getConstraintId(), entity);
+        }
     }
 
     @Override
@@ -51,6 +58,10 @@ public class TimeseriesConstraintFileMapper implements TimeseriesConstraintMappe
         store.update(
                 entity -> Objects.equals(constraintId, entity.getConstraintId()),
                 entity -> entity.setEffectiveStatus(status));
+        TimeseriesConstraint entity = selectById(constraintId);
+        if (entity != null) {
+            dataIngestPersistenceService.submitRecord("timeseries_constraint", entity.getConstraintId(), entity);
+        }
     }
 
     private boolean sameBusinessKey(TimeseriesConstraint incoming, TimeseriesConstraint stored) {

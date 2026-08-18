@@ -2,6 +2,7 @@ package com.sfkg.timeseries.mapper;
 
 import com.sfkg.timeseries.dto.CategoryQueryRequest;
 import com.sfkg.timeseries.entity.TimeseriesCategory;
+import com.sfkg.timeseries.dataingest.DataIngestPersistenceService;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -12,18 +13,24 @@ import org.springframework.stereotype.Repository;
 public class TimeseriesCategoryFileMapper implements TimeseriesCategoryMapper {
 
     private final LocalJsonTableStore<TimeseriesCategory> store;
+    private final DataIngestPersistenceService dataIngestPersistenceService;
 
     public TimeseriesCategoryFileMapper(
-            @Value("${timeseries.local-store-dir:data}") String storeDir) {
+            @Value("${timeseries.local-store-dir:data}") String storeDir,
+            DataIngestPersistenceService dataIngestPersistenceService) {
         this.store = new LocalJsonTableStore<>(
                 storeDir,
                 "timeseries-category.json",
                 TimeseriesCategory.class);
+        this.dataIngestPersistenceService = dataIngestPersistenceService;
     }
 
     @Override
     public void insert(TimeseriesCategory entity) {
         store.upsert(item -> sameBusinessKey(entity, item), entity);
+        if (entity != null) {
+            dataIngestPersistenceService.submitRecord("timeseries_category", entity.getCategoryId(), entity);
+        }
     }
 
     @Override

@@ -2,6 +2,7 @@ package com.sfkg.timeseries.mapper;
 
 import com.sfkg.timeseries.dto.EventQueryRequest;
 import com.sfkg.timeseries.entity.TimeseriesEvent;
+import com.sfkg.timeseries.dataingest.DataIngestPersistenceService;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
@@ -13,18 +14,24 @@ import org.springframework.stereotype.Repository;
 public class TimeseriesEventFileMapper implements TimeseriesEventMapper {
 
     private final LocalJsonTableStore<TimeseriesEvent> store;
+    private final DataIngestPersistenceService dataIngestPersistenceService;
 
     public TimeseriesEventFileMapper(
-            @Value("${timeseries.local-store-dir:data}") String storeDir) {
+            @Value("${timeseries.local-store-dir:data}") String storeDir,
+            DataIngestPersistenceService dataIngestPersistenceService) {
         this.store = new LocalJsonTableStore<>(
                 storeDir,
                 "timeseries-event.json",
                 TimeseriesEvent.class);
+        this.dataIngestPersistenceService = dataIngestPersistenceService;
     }
 
     @Override
     public void insert(TimeseriesEvent entity) {
         store.upsert(item -> sameBusinessKey(entity, item), entity);
+        if (entity != null) {
+            dataIngestPersistenceService.submitRecord("timeseries_event", entity.getEventId(), entity);
+        }
     }
 
     @Override
@@ -52,6 +59,7 @@ public class TimeseriesEventFileMapper implements TimeseriesEventMapper {
         store.update(
                 entity -> Objects.equals(eventId, entity.getEventId()),
                 entity -> entity.setHandleStatus(status));
+        upsertUpdatedEvent(eventId);
     }
 
     @Override
@@ -59,6 +67,7 @@ public class TimeseriesEventFileMapper implements TimeseriesEventMapper {
         store.update(
                 entity -> Objects.equals(eventId, entity.getEventId()),
                 entity -> entity.setDiagnosisResult(diagnosisResult));
+        upsertUpdatedEvent(eventId);
     }
 
     @Override
@@ -66,6 +75,14 @@ public class TimeseriesEventFileMapper implements TimeseriesEventMapper {
         store.update(
                 entity -> Objects.equals(eventId, entity.getEventId()),
                 entity -> entity.setDisposalResult(disposalResult));
+        upsertUpdatedEvent(eventId);
+    }
+
+    private void upsertUpdatedEvent(String eventId) {
+        TimeseriesEvent entity = selectById(eventId);
+        if (entity != null) {
+            dataIngestPersistenceService.submitRecord("timeseries_event", entity.getEventId(), entity);
+        }
     }
 
     private boolean sameBusinessKey(TimeseriesEvent incoming, TimeseriesEvent stored) {
