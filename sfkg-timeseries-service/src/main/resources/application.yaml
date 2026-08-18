@@ -21,7 +21,7 @@ timeseries:
   local-store-dir: ${TIMESERIES_LOCAL_STORE_DIR:data}
   local-data-file: ${TIMESERIES_LOCAL_DATA_FILE:data/timeseries-data.jsonl}
   data-ingest:
-    enabled: ${TIMESERIES_DATA_INGEST_ENABLED:false}
+    enabled: ${TIMESERIES_DATA_INGEST_ENABLED:true}
     endpoint: ${TIMESERIES_DATA_INGEST_ENDPOINT:http://127.0.0.1:8006}
     database: ${TIMESERIES_DATA_INGEST_DATABASE:ship_power_system}
     timeout-seconds: ${TIMESERIES_DATA_INGEST_TIMEOUT_SECONDS:5}

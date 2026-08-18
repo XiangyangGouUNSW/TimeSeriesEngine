@@ -30,16 +30,16 @@ public class DataIngestClient {
         return properties.isEnabled();
     }
 
-    public String insert(DataIngestInsertPayload payload) {
+    public DataIngestInsertResponse insert(DataIngestInsertPayload payload) {
         if (!isEnabled()) {
-            return "";
+            return new DataIngestInsertResponse();
         }
         HttpRequest request = HttpRequest.newBuilder(insertUri())
                 .timeout(Duration.ofSeconds(Math.max(1, properties.getTimeoutSeconds())))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(toJson(payload), StandardCharsets.UTF_8))
                 .build();
-        return send(request);
+        return parseInsertResponse(sendRaw(request));
     }
 
     public String health() {
@@ -51,12 +51,19 @@ public class DataIngestClient {
     }
 
     private String send(HttpRequest request) {
+        HttpResponse<String> response = sendRaw(request);
+        if (response.statusCode() >= 400) {
+            throw new BusinessException("DataIngest request failed: status="
+                    + response.statusCode()
+                    + ", body="
+                    + response.body());
+        }
+        return response.body();
+    }
+
+    private HttpResponse<String> sendRaw(HttpRequest request) {
         try {
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if (response.statusCode() >= 400) {
-                throw new BusinessException("DataIngest request failed: status=" + response.statusCode());
-            }
-            return response.body();
+            return httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         } catch (IOException exception) {
             throw new BusinessException("DataIngest request failed: " + exception.getMessage());
         } catch (InterruptedException exception) {
@@ -89,6 +96,25 @@ public class DataIngestClient {
             return objectMapper.writeValueAsString(payload);
         } catch (JsonProcessingException exception) {
             throw new BusinessException("serialize DataIngest request failed");
+        }
+    }
+
+    private DataIngestInsertResponse parseInsertResponse(HttpResponse<String> httpResponse) {
+        String body = httpResponse.body();
+        try {
+            DataIngestInsertResponse response = objectMapper.readValue(body, DataIngestInsertResponse.class);
+            if (!response.isSuccess()) {
+                throw new BusinessException("DataIngest insert failed: status="
+                        + httpResponse.statusCode()
+                        + ", "
+                        + response.summary());
+            }
+            return response;
+        } catch (JsonProcessingException exception) {
+            throw new BusinessException("parse DataIngest insert response failed: status="
+                    + httpResponse.statusCode()
+                    + ", body="
+                    + body);
         }
     }
 }

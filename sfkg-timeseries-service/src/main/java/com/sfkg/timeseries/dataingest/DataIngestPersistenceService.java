@@ -38,7 +38,15 @@ public class DataIngestPersistenceService {
         try {
             DataIngestInsertPayload payload = newInsertPayload();
             payload.getEntities().add(toEntityPayload(tableName, businessKey, entity));
-            dataIngestClient.insert(payload);
+            DataIngestInsertResponse response = dataIngestClient.insert(payload);
+            LOG.info("DataIngest write success: table={} key={} db={} entities={} relations={} triples={} message={}",
+                    tableName,
+                    businessKey,
+                    response.getDbName(),
+                    response.getEntities(),
+                    response.getRelations(),
+                    response.getTriples(),
+                    response.getMessage());
         } catch (RuntimeException exception) {
             LOG.warn("DataIngest dual-write failed: table={} key={} reason={}",
                     tableName, businessKey, exception.getMessage());
