@@ -193,15 +193,27 @@ bool isMissingMappedSequenceError(const std::string& error) {
 }  // namespace
 
 ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
+    const ProjectId& project_id,
     const std::vector<ConstraintRule>& rules,
     const WindowData& data) const {
-    return checkConstraints(rules, data, std::nullopt);
+    return checkConstraints(project_id, rules, data, std::nullopt);
 }
 
 ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
     const std::vector<ConstraintRule>& rules,
+    const WindowData& data) const {
+    return checkConstraints(
+        data.project_id.empty() ? ProjectId{"default"} : data.project_id,
+        rules,
+        data);
+}
+
+ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
+    const ProjectId& project_id,
+    const std::vector<ConstraintRule>& rules,
     const WindowData& data,
     const std::optional<ConstraintCheckRange>& range) const {
+    (void)project_id;
     if (rules.empty()) {
         return failure(internal::invalidArgument(
             "constraint rules must not be empty"));
@@ -216,6 +228,7 @@ ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
     }
 
     ConstraintCheckResult result;
+    result.project_id = project_id;
     for (const auto& rule : rules) {
         std::size_t max_offset = 0;
         std::string error;
@@ -300,14 +313,37 @@ ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
 
 ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
     const std::vector<ConstraintRule>& rules,
+    const WindowData& data,
+    const std::optional<ConstraintCheckRange>& range) const {
+    return checkConstraints(
+        data.project_id.empty() ? ProjectId{"default"} : data.project_id,
+        rules,
+        data,
+        range);
+}
+
+ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
+    const ProjectId& project_id,
+    const std::vector<ConstraintRule>& rules,
     const AlignedWindowData& data) const {
-    return checkConstraints(rules, data, std::nullopt);
+    return checkConstraints(project_id, rules, data, std::nullopt);
 }
 
 ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
     const std::vector<ConstraintRule>& rules,
+    const AlignedWindowData& data) const {
+    return checkConstraints(
+        data.project_id.empty() ? ProjectId{"default"} : data.project_id,
+        rules,
+        data);
+}
+
+ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
+    const ProjectId& project_id,
+    const std::vector<ConstraintRule>& rules,
     const AlignedWindowData& data,
     const std::optional<ConstraintCheckRange>& range) const {
+    (void)project_id;
     if (rules.empty()) {
         return failure(internal::invalidArgument(
             "constraint rules must not be empty"));
@@ -328,6 +364,7 @@ ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
     }
 
     ConstraintCheckResult result;
+    result.project_id = project_id;
     for (const auto& rule : rules) {
         std::size_t max_offset = 0;
         std::string error;
@@ -405,6 +442,17 @@ ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
 
     finalizeResult(&result);
     return result;
+}
+
+ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
+    const std::vector<ConstraintRule>& rules,
+    const AlignedWindowData& data,
+    const std::optional<ConstraintCheckRange>& range) const {
+    return checkConstraints(
+        data.project_id.empty() ? ProjectId{"default"} : data.project_id,
+        rules,
+        data,
+        range);
 }
 
 }  // namespace sfkg::timeseries::core

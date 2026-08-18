@@ -9,6 +9,7 @@
 
 ```cpp
 using Timestamp = std::int64_t;       // 毫秒时间戳
+using ProjectId = std::string;        // 项目/租户隔离键
 using SequenceId = std::string;
 using TimeseriesValue =
     std::variant<double, std::int64_t, bool, std::string>;
@@ -25,6 +26,7 @@ using TimeseriesValue =
 message IngestDataRequest {
   repeated TimeseriesIngestData points = 1;
   bool return_resolved_data = 3;
+  string project_id = 4;
 }
 
 message TimeseriesIngestData {
@@ -33,6 +35,7 @@ message TimeseriesIngestData {
   string external_sequence_id = 3;
   int64 time = 4;
   TimeseriesValue value = 5;
+  string project_id = 6;
 }
 ```
 
@@ -48,6 +51,7 @@ struct TimeseriesIngestData {
     std::string external_sequence_id;
     Timestamp time{};
     TimeseriesValue value;
+    ProjectId project_id;
 };
 ```
 
@@ -65,15 +69,18 @@ struct RawTimeseriesPoint {
     Timestamp time{};
     SequenceId sequence_id;
     TimeseriesValue value;
+    ProjectId project_id;
 };
 
 struct TimeseriesBatch {
     std::vector<RawTimeseriesPoint> points;
+    ProjectId project_id;
 };
 
 struct IngestResult {
     OperationResult operation;
     TimeseriesBatch resolved_data;
+    ProjectId project_id;
 };
 ```
 

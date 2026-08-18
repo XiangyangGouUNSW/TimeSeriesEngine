@@ -144,15 +144,17 @@ IngestTaskExecutor::~IngestTaskExecutor() {
 }
 
 std::size_t IngestTaskExecutor::writerForSequence(
+    const ProjectId& project_id,
     const SequenceId& sequence_id) {
+    const auto key = project_id + '\x1e' + sequence_id;
     std::lock_guard lock(routing_mutex_);
-    const auto existing = sequence_writers_.find(sequence_id);
+    const auto existing = sequence_writers_.find(key);
     if (existing != sequence_writers_.end()) {
         return existing->second;
     }
     const auto writer_index = next_writer_index_;
     next_writer_index_ = (next_writer_index_ + 1) % cold_worker_count_;
-    sequence_writers_.emplace(sequence_id, writer_index);
+    sequence_writers_.emplace(key, writer_index);
     return writer_index;
 }
 
@@ -192,7 +194,9 @@ IngestTaskSubmission IngestTaskExecutor::trySubmit(
     for (const auto& sequence_id : batch_sequence_ids) {
         batch_writers.emplace(
             sequence_id,
-            writerForSequence(sequence_id));
+            writerForSequence(
+                task->resolved->resolved_data.project_id,
+                sequence_id));
     }
 
     std::vector<bool> has_cold_work(cold_worker_count_, false);
@@ -227,11 +231,13 @@ IngestTaskSubmission IngestTaskExecutor::trySubmit(
     auto completion = task->completion.get_future();
     task->hot_predecessors.reserve(batch_sequence_ids.size());
     for (const auto& sequence_id : batch_sequence_ids) {
-        const auto predecessor = sequence_hot_tails_.find(sequence_id);
+        const auto key = task->resolved->resolved_data.project_id +
+            '\x1e' + sequence_id;
+        const auto predecessor = sequence_hot_tails_.find(key);
         if (predecessor != sequence_hot_tails_.end()) {
             task->hot_predecessors.push_back(predecessor->second);
         }
-        sequence_hot_tails_[sequence_id] = task->hot_order_future;
+        sequence_hot_tails_[key] = task->hot_order_future;
     }
     ++pending_tasks_;
     // Admission and all shard queue insertions are protected together. A

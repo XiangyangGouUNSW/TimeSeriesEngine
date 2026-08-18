@@ -18,6 +18,28 @@
 - 对齐中的 lag range 和未设置 lag 仍明确返回不支持状态；
 - Core 不负责启动 TDengine，也不保存统一服务的业务配置；Core 启动后由统一服务通过同步 RPC 写入运行时配置。
 
+## Project ID 多租户隔离
+
+所有运行时配置、时序实例、关系、约束、派生序列、热窗口、查询结果和异步写入任务都按
+`project_id` 隔离。gRPC 请求级消息和相关数据结构均带有 `project_id`；生产调用方应在
+每次同步、写入、窗口、对齐、统计和历史查询请求中显式填写同一个项目 ID。为兼容旧客户端，
+空值仍映射到 `default` 项目，但新接入不应依赖这个默认值。
+
+TDengine 仍只启动一个进程、使用一个数据库。Core 在该数据库中为每个项目按需创建独立的
+原始数据超级表，表名由 `SFKG_TAOS_RAW_STABLE` 加项目 ID 的稳定哈希组成；因此不同项目
+不会共享原始数据表、热窗口或运行时配置。项目 ID 不直接拼接进 SQL 标识符，避免特殊字符
+造成标识符问题。
+
+有序 gRPC 压测客户端可用 `--project-id` 选择测试项目。例如：
+
+```bash
+./scripts/run_grpc_ordered_load_test.sh \
+  --address 127.0.0.1:50051 \
+  --project-id throughput-project-a \
+  --sequences 32 --rows 50000 --batch-rows 1000 \
+  --workers 4 --derived 4 --constraints 40
+```
+
 ## 构建
 
 需要 CMake 3.20+、C++17 编译器、Protobuf、gRPC，以及 TDengine Native Client。生成文件和二进制必须放在 `build-*` 目录中。

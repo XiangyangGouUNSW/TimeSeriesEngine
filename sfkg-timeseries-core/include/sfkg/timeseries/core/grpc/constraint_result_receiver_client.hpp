@@ -21,6 +21,11 @@ public:
     explicit ConstraintResultReceiverClient(std::string address);
 
     OperationResult receiveConstraintResult(
+        const ProjectId& project_id,
+        Timestamp check_time_ms,
+        const std::vector<std::string>& violated_constraint_ids,
+        const std::vector<SequenceId>& sequence_ids);
+    OperationResult receiveConstraintResult(
         Timestamp check_time_ms,
         const std::vector<std::string>& violated_constraint_ids,
         const std::vector<SequenceId>& sequence_ids);

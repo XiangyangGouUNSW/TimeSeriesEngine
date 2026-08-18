@@ -18,6 +18,7 @@ ConstraintResultReceiverClient::ConstraintResultReceiverClient(
 }
 
 OperationResult ConstraintResultReceiverClient::receiveConstraintResult(
+    const ProjectId& project_id,
     Timestamp check_time_ms,
     const std::vector<std::string>& violated_constraint_ids,
     const std::vector<SequenceId>& sequence_ids) {
@@ -30,6 +31,7 @@ OperationResult ConstraintResultReceiverClient::receiveConstraintResult(
     }
 
     pb::ConstraintResultMessage request;
+    request.set_project_id(project_id);
     request.set_check_time_ms(check_time_ms);
     for (const auto& constraint_id : violated_constraint_ids) {
         request.add_violated_constraint_ids(constraint_id);
@@ -65,6 +67,14 @@ OperationResult ConstraintResultReceiverClient::receiveConstraintResult(
         response.message().empty()
             ? "constraint result notified"
             : response.message());
+}
+
+OperationResult ConstraintResultReceiverClient::receiveConstraintResult(
+    Timestamp check_time_ms,
+    const std::vector<std::string>& violated_constraint_ids,
+    const std::vector<SequenceId>& sequence_ids) {
+    return receiveConstraintResult(
+        "default", check_time_ms, violated_constraint_ids, sequence_ids);
 }
 
 }  // namespace sfkg::timeseries::core::grpc

@@ -12,6 +12,9 @@
 namespace sfkg::timeseries::core {
 
 using Timestamp = std::int64_t;
+// ProjectId is the tenant/task isolation key. Every stateful object and
+// service call that can be persisted or cached is scoped by this value.
+using ProjectId = std::string;
 using SequenceId = std::string;
 inline constexpr Timestamp kDefaultWindowSizeMs =
     3LL * 24 * 60 * 60 * 1000;
@@ -53,16 +56,19 @@ struct TimeseriesIngestData {
     std::string external_sequence_id;
     Timestamp time{};
     TimeseriesValue value;
+    ProjectId project_id;
 };
 
 struct RawTimeseriesPoint {
     Timestamp time{};
     SequenceId sequence_id;
     TimeseriesValue value;
+    ProjectId project_id;
 };
 
 struct TimeseriesBatch {
     std::vector<RawTimeseriesPoint> points;
+    ProjectId project_id;
 };
 
 struct WindowData {
@@ -70,6 +76,7 @@ struct WindowData {
     Timestamp window_end_time{};
     std::unordered_map<SequenceId, std::vector<RawTimeseriesPoint>>
         sequence_values;
+    ProjectId project_id;
 };
 
 struct AlignedSample {
@@ -81,6 +88,7 @@ struct AlignedWindowData {
     Timestamp window_start_time{};
     Timestamp window_end_time{};
     std::vector<AlignedSample> samples;
+    ProjectId project_id;
 };
 
 enum class VariableRole {
@@ -124,6 +132,7 @@ struct AlignmentConfig {
     // If omitted, AlignmentService infers the smallest positive timestamp
     // gap in the current window.
     std::optional<std::int64_t> bucket_interval;
+    ProjectId project_id;
 };
 
 // A range used by incremental alignment. prefix_samples keeps the samples
@@ -147,6 +156,7 @@ struct ConstraintRule {
     double lower_bound{};
     double upper_bound{};
     std::vector<ConstraintTerm> terms;
+    ProjectId project_id;
 };
 
 struct ConstraintTermValue {
@@ -169,6 +179,7 @@ struct ConstraintViolation {
 
 struct ConstraintCheckResult {
     OperationResult operation;
+    ProjectId project_id;
     std::size_t evaluated_count{};
     // Aligned samples that could not be evaluated yet because one or more
     // mapped sequences were not present in that sample. Continuous ingest
@@ -192,6 +203,7 @@ struct WindowQuery {
     // Internal consumers such as incremental alignment can request a partial
     // point set while retaining the actual live-window bounds as metadata.
     bool preserve_window_bounds{false};
+    ProjectId project_id;
 };
 
 struct HistoryQuery {
@@ -199,6 +211,7 @@ struct HistoryQuery {
     Timestamp start_time{};
     Timestamp end_time{};
     std::optional<std::int64_t> granularity;
+    ProjectId project_id;
 };
 
 // 历史数据总体信息查询条件。序列和时间边界均可省略；省略时查询
@@ -207,6 +220,7 @@ struct HistoryOverviewQuery {
     std::vector<SequenceId> sequence_ids;
     std::optional<Timestamp> start_time;
     std::optional<Timestamp> end_time;
+    ProjectId project_id;
 };
 
 struct RuntimeInstanceConfig {
@@ -216,6 +230,7 @@ struct RuntimeInstanceConfig {
     std::string category_id;
     std::string data_type;
     SeriesKind series_kind{SeriesKind::Unspecified};
+    ProjectId project_id;
 };
 
 // Confirmed constraint copied from the unified service for runtime use.
@@ -223,6 +238,7 @@ struct RuntimeInstanceConfig {
 struct RuntimeConstraintConfig {
     ConstraintRule rule;
     bool enabled{false};
+    ProjectId project_id;
 };
 
 struct RelationLagRange {
@@ -249,12 +265,14 @@ struct RuntimeRelationConfig {
     std::string relation_type;
     double confidence{};
     bool enabled{false};
+    ProjectId project_id;
 };
 
 // The current Core process owns one hot-window configuration. The unified
 // service may replace it at runtime; an instance starts with the default.
 struct RuntimeWindowConfig {
     Timestamp window_size{kDefaultWindowSizeMs};
+    ProjectId project_id;
 };
 
 enum class DerivedOperator {
@@ -302,26 +320,31 @@ struct RuntimeDerivedSeriesConfig {
     SequenceId derived_sequence_id;
     bool enabled{false};
     DerivedFormula formula;
+    ProjectId project_id;
 };
 
 template <typename T>
 struct RuntimeConfigSnapshot {
     std::vector<T> items;
+    ProjectId project_id;
 };
 
 struct IngestResult {
     OperationResult operation;
     TimeseriesBatch resolved_data;
+    ProjectId project_id;
 };
 
 struct WindowQueryResult {
     OperationResult operation;
     WindowData data;
+    ProjectId project_id;
 };
 
 struct AlignmentResult {
     OperationResult operation;
     AlignedWindowData aligned_data;
+    ProjectId project_id;
 };
 
 struct SequenceCorrelation {
@@ -341,11 +364,13 @@ struct StatisticsResult {
         std::unordered_map<std::string, TimeseriesValue>>
         sequence_metrics;
     std::optional<CorrelationVector> correlation_vector;
+    ProjectId project_id;
 };
 
 struct HistoryQueryResult {
     OperationResult operation;
     TimeseriesBatch data;
+    ProjectId project_id;
 };
 
 // 单个表头变量（sequence_id）的历史数据规模摘要。
@@ -365,11 +390,13 @@ struct HistoryOverview {
     std::optional<Timestamp> first_time;
     std::optional<Timestamp> last_time;
     std::vector<HistorySeriesSummary> series;
+    ProjectId project_id;
 };
 
 struct HistoryOverviewResult {
     OperationResult operation;
     HistoryOverview overview;
+    ProjectId project_id;
 };
 
 }  // namespace sfkg::timeseries::core

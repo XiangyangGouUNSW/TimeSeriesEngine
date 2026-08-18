@@ -369,16 +369,27 @@ EvaluationResult evaluateFormula(
 
 }  // namespace
 
+OperationResult DerivedSeriesService::refresh(const ProjectId& project_id) {
+    return refreshInternal(project_id, nullptr);
+}
+
 OperationResult DerivedSeriesService::refresh() {
-    return refreshInternal(nullptr);
+    return refresh("default");
 }
 
 OperationResult DerivedSeriesService::refresh(
     const WindowUpdateResult& update) {
-    return refreshInternal(&update);
+    return refresh(update.project_id, update);
+}
+
+OperationResult DerivedSeriesService::refresh(
+    const ProjectId& project_id,
+    const WindowUpdateResult& update) {
+    return refreshInternal(project_id, &update);
 }
 
 OperationResult DerivedSeriesService::refreshInternal(
+    const ProjectId& project_id,
     const WindowUpdateResult* update) {
     if (update != nullptr && !isSuccessful(update->operation.code)) {
         return update->operation;
@@ -388,7 +399,7 @@ OperationResult DerivedSeriesService::refreshInternal(
     if (update == nullptr) {
         full_refresh_lock.lock();
     }
-    const auto configs = configs_.allDerivedSeries();
+    const auto configs = configs_.allDerivedSeries(project_id);
     std::vector<SequenceId> changed_sequence_ids;
     if (update != nullptr) {
         changed_sequence_ids = update->changed_sequence_ids;
@@ -464,7 +475,7 @@ OperationResult DerivedSeriesService::refreshInternal(
         bool use_incremental = source_range.has_value();
         for (const auto& source_id : source_ids) {
             const auto [source_it, inserted] = source_configs.emplace(
-                source_id, configs_.findInstance(source_id));
+                source_id, configs_.findInstance(project_id, source_id));
             (void)inserted;
             if (use_incremental &&
                 (!source_it->second ||
@@ -483,11 +494,12 @@ OperationResult DerivedSeriesService::refreshInternal(
         }
     }
 
-    const auto buildQuery = [](
+    const auto buildQuery = [&project_id](
                                   const std::vector<SequenceId>& sequence_ids,
                                   const std::optional<IncrementalRefreshRange>&
                                       range) {
         WindowQuery query;
+        query.project_id = project_id;
         query.sequence_ids = sequence_ids;
         if (range) {
             query.start_time = range->start_time;
@@ -507,10 +519,12 @@ OperationResult DerivedSeriesService::refreshInternal(
     const bool has_full_window = !full_source_ids.empty();
     if (has_incremental_window) {
         incremental_window = window_service_.queryWindowData(
+            project_id,
             buildQuery(incremental_source_ids, incremental_query_range));
     }
     if (has_full_window) {
         full_window = window_service_.queryWindowData(
+            project_id,
             buildQuery(full_source_ids, std::nullopt));
     }
 
@@ -570,7 +584,8 @@ OperationResult DerivedSeriesService::refreshInternal(
         incremental_snapshot_ready,
         full_snapshot_ready,
         &changed,
-        update](
+        update,
+        project_id](
                                 const RuntimeDerivedSeriesConfig& config) {
         DerivedRefreshItem item;
         item.sequence_id = config.derived_sequence_id;
@@ -753,7 +768,8 @@ OperationResult DerivedSeriesService::refreshInternal(
                 continue;
             }
             derived.points.push_back({
-                time, config.derived_sequence_id, evaluation.value});
+                time, config.derived_sequence_id, evaluation.value,
+                project_id});
         }
         item.failed_count += expression_errors;
         item.points.points = std::move(derived.points);
@@ -817,6 +833,7 @@ OperationResult DerivedSeriesService::refreshInternal(
         if (!item.sequence_id.empty() && item.clear_only) {
             std::lock_guard publish_lock(publish_mutex_);
             const auto cleared = window_service_.replaceDerivedSequence(
+                project_id,
                 item.sequence_id, {});
             if (cleared.code != OperationCode::Ok) {
                 ++failed_count;
@@ -843,11 +860,13 @@ OperationResult DerivedSeriesService::refreshInternal(
                     }
                     published = item.incremental
                         ? window_service_.patchDerivedSequence(
+                              project_id,
                               item.sequence_id,
                               item.patch_start,
                               item.patch_end,
                               item.points)
                         : window_service_.replaceDerivedSequence(
+                              project_id,
                               item.sequence_id, item.points);
                 }
             }

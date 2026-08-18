@@ -43,6 +43,7 @@ bool fromProto(
     }
     target->time = source.time();
     target->sequence_id = source.sequence_id();
+    target->project_id = source.project_id();
     return true;
 }
 
@@ -51,6 +52,7 @@ void toProto(
     pb::RawTimeseriesPoint* target) {
     target->set_time(source.time);
     target->set_sequence_id(source.sequence_id);
+    target->set_project_id(source.project_id);
     conversion::toProto(source.value, target->mutable_value());
 }
 
@@ -63,6 +65,7 @@ bool fromProto(
         return false;
     }
     target->constraint_id = source.constraint_id();
+    target->project_id = source.project_id();
     target->lower_bound = source.lower_bound();
     target->upper_bound = source.upper_bound();
     target->variable_mapping.clear();
@@ -152,6 +155,7 @@ bool fromProto(
     target->data_source_id = source.data_source_id();
     target->external_sequence_id = source.external_sequence_id();
     target->time = source.time();
+    target->project_id = source.project_id();
     return true;
 }
 
@@ -160,11 +164,15 @@ bool fromProto(
     TimeseriesBatch* target,
     std::string* error) {
     target->points.clear();
+    target->project_id = source.project_id();
     target->points.reserve(source.points_size());
     for (const auto& point : source.points()) {
         RawTimeseriesPoint converted;
         if (!fromProto(point, &converted, error)) {
             return false;
+        }
+        if (converted.project_id.empty()) {
+            converted.project_id = target->project_id;
         }
         target->points.push_back(std::move(converted));
     }
@@ -172,6 +180,7 @@ bool fromProto(
 }
 
 void toProto(const TimeseriesBatch& source, pb::TimeseriesBatch* target) {
+    target->set_project_id(source.project_id);
     target->clear_points();
     for (const auto& point : source.points) {
         toProto(point, target->add_points());
@@ -184,6 +193,7 @@ bool fromProto(
     std::string* error) {
     target->window_start_time = source.window_start_time();
     target->window_end_time = source.window_end_time();
+    target->project_id = source.project_id();
     target->sequence_values.clear();
     for (const auto& sequence : source.sequences()) {
         if (sequence.sequence_id().empty()) {
@@ -200,6 +210,7 @@ bool fromProto(
             RawTimeseriesPoint converted;
             converted.time = point.time();
             converted.sequence_id = sequence.sequence_id();
+            converted.project_id = target->project_id;
             if (!fromProto(point.value(), &converted.value, error)) {
                 return false;
             }
@@ -210,6 +221,7 @@ bool fromProto(
 }
 
 void toProto(const WindowData& source, pb::WindowData* target) {
+    target->set_project_id(source.project_id);
     target->set_window_start_time(source.window_start_time);
     target->set_window_end_time(source.window_end_time);
     target->clear_sequences();
@@ -230,6 +242,7 @@ bool fromProto(
     std::string* error) {
     target->window_start_time = source.window_start_time();
     target->window_end_time = source.window_end_time();
+    target->project_id = source.project_id();
     target->samples.clear();
     target->samples.reserve(source.samples_size());
     for (const auto& sample : source.samples()) {
@@ -258,6 +271,7 @@ bool fromProto(
 void toProto(
     const AlignedWindowData& source,
     pb::AlignedWindowData* target) {
+    target->set_project_id(source.project_id);
     target->set_window_start_time(source.window_start_time);
     target->set_window_end_time(source.window_end_time);
     target->clear_samples();
@@ -277,6 +291,7 @@ bool fromProto(
     AlignmentConfig* target,
     std::string* error) {
     target->bucket_interval.reset();
+    target->project_id = source.project_id();
     if (source.has_bucket_interval() && source.bucket_interval() <= 0) {
         *error = "bucket_interval must be positive";
         return false;
@@ -383,6 +398,7 @@ bool fromProto(
             *error = "unknown series_kind";
             return false;
     }
+    target->project_id = source.project_id();
     return true;
 }
 
@@ -395,6 +411,7 @@ bool fromProto(
         return false;
     }
     target->enabled = source.enabled();
+    target->project_id = source.project_id();
     return fromProto(source.rule(), &target->rule, error);
 }
 
@@ -457,6 +474,7 @@ bool fromProto(
     target->relation_type = source.relation_type();
     target->confidence = source.confidence();
     target->enabled = source.enabled();
+    target->project_id = source.project_id();
     return true;
 }
 
@@ -469,6 +487,7 @@ bool fromProto(
         return false;
     }
     target->window_size = source.window_size();
+    target->project_id = source.project_id();
     return true;
 }
 
@@ -587,6 +606,7 @@ bool fromProto(
     }
     target->derived_sequence_id = source.derived_sequence_id();
     target->enabled = source.enabled();
+    target->project_id = source.project_id();
     switch (source.formula_case()) {
         case pb::DerivedSeriesConfig::kLinearCombination: {
             DerivedLinearCombination formula;
@@ -615,6 +635,7 @@ bool fromProto(
 
 WindowQuery fromProto(const pb::QueryWindowDataRequest& source) {
     WindowQuery result;
+    result.project_id = source.project_id();
     result.sequence_ids.assign(
         source.sequence_ids().begin(), source.sequence_ids().end());
     if (source.has_start_time()) {
@@ -628,6 +649,7 @@ WindowQuery fromProto(const pb::QueryWindowDataRequest& source) {
 
 HistoryQuery fromProto(const pb::QueryHistoryDataRequest& source) {
     HistoryQuery result;
+    result.project_id = source.project_id();
     result.sequence_ids.assign(
         source.sequence_ids().begin(), source.sequence_ids().end());
     result.start_time = source.start_time();
@@ -641,6 +663,7 @@ HistoryQuery fromProto(const pb::QueryHistoryDataRequest& source) {
 HistoryOverviewQuery fromProto(
     const pb::QueryHistoryOverviewRequest& source) {
     HistoryOverviewQuery result;
+    result.project_id = source.project_id();
     result.sequence_ids.assign(
         source.sequence_ids().begin(), source.sequence_ids().end());
     if (source.has_start_time()) {
@@ -655,6 +678,7 @@ HistoryOverviewQuery fromProto(
 void toProto(
     const StatisticsResult& source,
     pb::ComputeStatisticsResponse* target) {
+    target->set_project_id(source.project_id);
     toProto(source.operation, target->mutable_operation());
     target->clear_sequence_metrics();
     for (const auto& [sequence_id, metrics] : source.sequence_metrics) {
@@ -682,6 +706,7 @@ void toProto(
 void toProto(
     const ConstraintCheckResult& source,
     pb::CheckConstraintsResponse* target) {
+    target->set_project_id(source.project_id);
     toProto(source.operation, target->mutable_operation());
     target->set_satisfied(source.satisfied);
     target->set_evaluated_count(source.evaluated_count);
@@ -708,6 +733,7 @@ void toProto(
 void toProto(
     const HistoryOverviewResult& source,
     pb::QueryHistoryOverviewResponse* target) {
+    target->set_project_id(source.project_id);
     toProto(source.operation, target->mutable_operation());
     auto* overview = target->mutable_overview();
     overview->set_total_point_count(source.overview.total_point_count);

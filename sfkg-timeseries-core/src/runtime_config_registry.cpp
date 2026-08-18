@@ -15,9 +15,34 @@ namespace sfkg::timeseries::core {
 namespace {
 
 std::string externalKey(
+    const ProjectId& project_id,
     const std::string& data_source_id,
     const std::string& external_sequence_id) {
-    return data_source_id + '\x1f' + external_sequence_id;
+    return project_id + '\x1e' + data_source_id + '\x1f' +
+        external_sequence_id;
+}
+
+std::string scopedKey(const ProjectId& project_id, const std::string& id) {
+    return project_id + '\x1e' + id;
+}
+
+ProjectId snapshotProject(const ProjectId& project_id) {
+    // Legacy direct C++ callers may omit the context; gRPC requests are
+    // validated before they reach the registry and always provide it.
+    return project_id.empty() ? ProjectId{"default"} : project_id;
+}
+
+std::unordered_map<SequenceId, RuntimeInstanceConfig> localInstances(
+    const std::unordered_map<std::string, RuntimeInstanceConfig>& all,
+    const ProjectId& project_id) {
+    std::unordered_map<SequenceId, RuntimeInstanceConfig> result;
+    const auto prefix = project_id + '\x1e';
+    for (const auto& [key, config] : all) {
+        if (key.rfind(prefix, 0) == 0) {
+            result.emplace(config.sequence_id, config);
+        }
+    }
+    return result;
 }
 
 bool isBlank(const std::string& value) {
@@ -165,7 +190,8 @@ bool validateDerivedConfig(
 
 OperationResult RuntimeConfigRegistry::replaceInstanceConfigs(
     const RuntimeConfigSnapshot<RuntimeInstanceConfig>& snapshot) {
-    std::unordered_map<SequenceId, RuntimeInstanceConfig> instances;
+    const auto project_id = snapshotProject(snapshot.project_id);
+    std::unordered_map<std::string, RuntimeInstanceConfig> instances;
     std::unordered_map<std::string, SequenceId> external_index;
 
     for (const auto& item : snapshot.items) {
@@ -178,12 +204,15 @@ OperationResult RuntimeConfigRegistry::replaceInstanceConfigs(
             return internal::invalidArgument(
                 "instance series_kind is invalid");
         }
-        if (!instances.emplace(item.sequence_id, item).second) {
+        auto stored = item;
+        stored.project_id = project_id;
+        if (!instances.emplace(scopedKey(project_id, item.sequence_id), stored)
+                 .second) {
             return internal::invalidArgument(
                 "duplicate sequence_id: " + item.sequence_id);
         }
         const auto key = externalKey(
-            item.data_source_id, item.external_sequence_id);
+            project_id, item.data_source_id, item.external_sequence_id);
         if (!external_index.emplace(key, item.sequence_id).second) {
             return internal::invalidArgument(
                 "duplicate external sequence identifier");
@@ -195,14 +224,26 @@ OperationResult RuntimeConfigRegistry::replaceInstanceConfigs(
         // Build and validate the replacement indexes before taking this lock;
         // only the short publication step needs exclusive access.
         std::unique_lock lock(mutex_);
-        instance_configs_.swap(instances);
-        external_sequence_index_.swap(external_index);
+        const auto prefix = project_id + '\x1e';
+        for (const auto& [key, config] : instance_configs_) {
+            if (key.rfind(prefix, 0) != 0) {
+                instances.emplace(key, config);
+            }
+        }
+        for (const auto& [key, sequence_id] : external_sequence_index_) {
+            if (key.rfind(prefix, 0) != 0) {
+                external_index.emplace(key, sequence_id);
+            }
+        }
+        instance_configs_ = std::move(instances);
+        external_sequence_index_ = std::move(external_index);
     }
     return internal::ok(count, "instance configuration snapshot replaced");
 }
 
 OperationResult RuntimeConfigRegistry::upsertInstanceConfigs(
     const RuntimeConfigSnapshot<RuntimeInstanceConfig>& snapshot) {
+    const auto project_id = snapshotProject(snapshot.project_id);
     std::unique_lock lock(mutex_);
     auto instances = instance_configs_;
     auto external_index = external_sequence_index_;
@@ -224,9 +265,11 @@ OperationResult RuntimeConfigRegistry::upsertInstanceConfigs(
                 item.sequence_id);
         }
 
-        const auto existing = instances.find(item.sequence_id);
+        const auto scoped_sequence = scopedKey(project_id, item.sequence_id);
+        const auto existing = instances.find(scoped_sequence);
         if (existing != instances.end()) {
             const auto old_key = externalKey(
+                project_id,
                 existing->second.data_source_id,
                 existing->second.external_sequence_id);
             const auto old_external = external_index.find(old_key);
@@ -237,14 +280,16 @@ OperationResult RuntimeConfigRegistry::upsertInstanceConfigs(
         }
 
         const auto new_key = externalKey(
-            item.data_source_id, item.external_sequence_id);
+            project_id, item.data_source_id, item.external_sequence_id);
         const auto conflicting = external_index.find(new_key);
         if (conflicting != external_index.end() &&
             conflicting->second != item.sequence_id) {
             return internal::invalidArgument(
                 "duplicate external sequence identifier");
         }
-        instances[item.sequence_id] = item;
+        auto stored = item;
+        stored.project_id = project_id;
+        instances[scoped_sequence] = std::move(stored);
         external_index[new_key] = item.sequence_id;
     }
 
@@ -256,6 +301,7 @@ OperationResult RuntimeConfigRegistry::upsertInstanceConfigs(
 
 OperationResult RuntimeConfigRegistry::replaceConstraints(
     const RuntimeConfigSnapshot<RuntimeConstraintConfig>& snapshot) {
+    const auto project_id = snapshotProject(snapshot.project_id);
     // Constraint validation below reads the current instance index, so keep
     // the snapshot replacement atomic with respect to readers.
     std::unique_lock lock(mutex_);
@@ -300,25 +346,37 @@ OperationResult RuntimeConfigRegistry::replaceConstraints(
 
         for (const auto& [variable, sequence_id] : rule.variable_mapping) {
             if (isBlank(variable) ||
-                instance_configs_.find(sequence_id) == instance_configs_.end()) {
+                instance_configs_.find(scopedKey(project_id, sequence_id)) ==
+                    instance_configs_.end()) {
                 return internal::invalidArgument(
                     "constraint references an unknown sequence: " + sequence_id);
             }
         }
 
-        if (!constraints.emplace(rule.constraint_id, item).second) {
+        auto stored = item;
+        stored.project_id = project_id;
+        stored.rule.project_id = project_id;
+        if (!constraints.emplace(scopedKey(project_id, rule.constraint_id),
+                                 std::move(stored)).second) {
             return internal::invalidArgument(
                 "duplicate constraint_id: " + rule.constraint_id);
         }
     }
 
     const auto count = constraints.size();
-    constraints_.swap(constraints);
+    const auto prefix = project_id + '\x1e';
+    for (const auto& [key, config] : constraints_) {
+        if (key.rfind(prefix, 0) != 0) {
+            constraints.emplace(key, config);
+        }
+    }
+    constraints_ = std::move(constraints);
     return internal::ok(count, "constraint configuration snapshot replaced");
 }
 
 OperationResult RuntimeConfigRegistry::upsertConstraints(
     const RuntimeConfigSnapshot<RuntimeConstraintConfig>& snapshot) {
+    const auto project_id = snapshotProject(snapshot.project_id);
     std::unique_lock lock(mutex_);
     auto constraints = constraints_;
     std::unordered_set<std::string> seen_constraint_ids;
@@ -367,12 +425,17 @@ OperationResult RuntimeConfigRegistry::upsertConstraints(
 
         for (const auto& [variable, sequence_id] : rule.variable_mapping) {
             if (isBlank(variable) ||
-                instance_configs_.find(sequence_id) == instance_configs_.end()) {
+                instance_configs_.find(scopedKey(project_id, sequence_id)) ==
+                    instance_configs_.end()) {
                 return internal::invalidArgument(
                     "constraint references an unknown sequence: " + sequence_id);
             }
         }
-        constraints[rule.constraint_id] = item;
+        auto stored = item;
+        stored.project_id = project_id;
+        stored.rule.project_id = project_id;
+        constraints[scopedKey(project_id, rule.constraint_id)] =
+            std::move(stored);
     }
 
     const auto count = snapshot.items.size();
@@ -382,6 +445,7 @@ OperationResult RuntimeConfigRegistry::upsertConstraints(
 
 OperationResult RuntimeConfigRegistry::replaceRelations(
     const RuntimeConfigSnapshot<RuntimeRelationConfig>& snapshot) {
+    const auto project_id = snapshotProject(snapshot.project_id);
     std::unordered_map<std::string, RuntimeRelationConfig> relations;
     for (const auto& item : snapshot.items) {
         if (isBlank(item.relation_id) || isBlank(item.target_sequence_id) ||
@@ -414,7 +478,10 @@ OperationResult RuntimeConfigRegistry::replaceRelations(
                     "relation source lag range is invalid");
             }
         }
-        if (!relations.emplace(item.relation_id, item).second) {
+        auto stored = item;
+        stored.project_id = project_id;
+        if (!relations.emplace(scopedKey(project_id, item.relation_id),
+                               std::move(stored)).second) {
             return internal::invalidArgument(
                 "duplicate relation_id: " + item.relation_id);
         }
@@ -424,13 +491,20 @@ OperationResult RuntimeConfigRegistry::replaceRelations(
     {
         // Publish the fully validated relation snapshot as one replacement.
         std::unique_lock lock(mutex_);
-        relations_.swap(relations);
+        const auto prefix = project_id + '\x1e';
+        for (const auto& [key, config] : relations_) {
+            if (key.rfind(prefix, 0) != 0) {
+                relations.emplace(key, config);
+            }
+        }
+        relations_ = std::move(relations);
     }
     return internal::ok(count, "relation configuration snapshot replaced");
 }
 
 OperationResult RuntimeConfigRegistry::upsertRelations(
     const RuntimeConfigSnapshot<RuntimeRelationConfig>& snapshot) {
+    const auto project_id = snapshotProject(snapshot.project_id);
     std::unique_lock lock(mutex_);
     auto relations = relations_;
     std::unordered_set<std::string> seen_relation_ids;
@@ -471,7 +545,9 @@ OperationResult RuntimeConfigRegistry::upsertRelations(
                     "relation source lag range is invalid");
             }
         }
-        relations[item.relation_id] = item;
+        auto stored = item;
+        stored.project_id = project_id;
+        relations[scopedKey(project_id, item.relation_id)] = std::move(stored);
     }
 
     const auto count = snapshot.items.size();
@@ -481,6 +557,7 @@ OperationResult RuntimeConfigRegistry::upsertRelations(
 
 OperationResult RuntimeConfigRegistry::upsertDerivedSeriesConfigs(
     const RuntimeConfigSnapshot<RuntimeDerivedSeriesConfig>& snapshot) {
+    const auto project_id = snapshotProject(snapshot.project_id);
     std::unique_lock lock(mutex_);
     auto derived_series = derived_series_;
     std::unordered_set<SequenceId> seen_ids;
@@ -491,10 +568,14 @@ OperationResult RuntimeConfigRegistry::upsertDerivedSeriesConfigs(
                 item.derived_sequence_id);
         }
         std::string error;
-        if (!validateDerivedConfig(item, instance_configs_, &error)) {
+        auto stored = item;
+        stored.project_id = project_id;
+        const auto instances = localInstances(instance_configs_, project_id);
+        if (!validateDerivedConfig(stored, instances, &error)) {
             return internal::invalidArgument(error);
         }
-        derived_series[item.derived_sequence_id] = item;
+        derived_series[scopedKey(project_id, item.derived_sequence_id)] =
+            std::move(stored);
     }
     const auto count = snapshot.items.size();
     derived_series_.swap(derived_series);
@@ -503,12 +584,33 @@ OperationResult RuntimeConfigRegistry::upsertDerivedSeriesConfigs(
 }
 
 std::optional<RuntimeInstanceConfig> RuntimeConfigRegistry::findInstance(
+    const ProjectId& project_id,
     const SequenceId& sequence_id) const {
     // Copy the result while holding a shared lock; callers do not retain
     // references into the registry after this method returns.
     std::shared_lock lock(mutex_);
-    const auto found = instance_configs_.find(sequence_id);
+    const auto found = instance_configs_.find(scopedKey(project_id, sequence_id));
     if (found == instance_configs_.end()) {
+        return std::nullopt;
+    }
+    return found->second;
+}
+
+std::optional<RuntimeInstanceConfig> RuntimeConfigRegistry::findInstance(
+    const SequenceId& sequence_id) const {
+    return findInstance("default", sequence_id);
+}
+
+std::optional<SequenceId> RuntimeConfigRegistry::resolveSequenceId(
+    const ProjectId& project_id,
+    const std::string& data_source_id,
+    const std::string& external_sequence_id) const {
+    // External-id resolution is a read-only lookup and can share the lock
+    // with other readers; snapshot replacement remains exclusive.
+    std::shared_lock lock(mutex_);
+    const auto found = external_sequence_index_.find(
+        externalKey(project_id, data_source_id, external_sequence_id));
+    if (found == external_sequence_index_.end()) {
         return std::nullopt;
     }
     return found->second;
@@ -517,12 +619,15 @@ std::optional<RuntimeInstanceConfig> RuntimeConfigRegistry::findInstance(
 std::optional<SequenceId> RuntimeConfigRegistry::resolveSequenceId(
     const std::string& data_source_id,
     const std::string& external_sequence_id) const {
-    // External-id resolution is a read-only lookup and can share the lock
-    // with other readers; snapshot replacement remains exclusive.
+    return resolveSequenceId("default", data_source_id, external_sequence_id);
+}
+
+std::optional<RuntimeRelationConfig> RuntimeConfigRegistry::findRelation(
+    const ProjectId& project_id,
+    const std::string& relation_id) const {
     std::shared_lock lock(mutex_);
-    const auto found = external_sequence_index_.find(
-        externalKey(data_source_id, external_sequence_id));
-    if (found == external_sequence_index_.end()) {
+    const auto found = relations_.find(scopedKey(project_id, relation_id));
+    if (found == relations_.end()) {
         return std::nullopt;
     }
     return found->second;
@@ -530,22 +635,19 @@ std::optional<SequenceId> RuntimeConfigRegistry::resolveSequenceId(
 
 std::optional<RuntimeRelationConfig> RuntimeConfigRegistry::findRelation(
     const std::string& relation_id) const {
-    std::shared_lock lock(mutex_);
-    const auto found = relations_.find(relation_id);
-    if (found == relations_.end()) {
-        return std::nullopt;
-    }
-    return found->second;
+    return findRelation("default", relation_id);
 }
 
 std::vector<RuntimeDerivedSeriesConfig>
-RuntimeConfigRegistry::allDerivedSeries() const {
+RuntimeConfigRegistry::allDerivedSeries(
+    const ProjectId& project_id) const {
     std::shared_lock lock(mutex_);
     std::vector<RuntimeDerivedSeriesConfig> result;
-    result.reserve(derived_series_.size());
+    const auto prefix = project_id + '\x1e';
     for (const auto& [sequence_id, config] : derived_series_) {
-        (void)sequence_id;
-        result.push_back(config);
+        if (sequence_id.rfind(prefix, 0) == 0) {
+            result.push_back(config);
+        }
     }
     std::sort(
         result.begin(), result.end(),
@@ -555,14 +657,20 @@ RuntimeConfigRegistry::allDerivedSeries() const {
     return result;
 }
 
+std::vector<RuntimeDerivedSeriesConfig>
+RuntimeConfigRegistry::allDerivedSeries() const {
+    return allDerivedSeries("default");
+}
+
 ConstraintLookupResult RuntimeConfigRegistry::lookupConstraints(
+    const ProjectId& project_id,
     const std::vector<std::string>& constraint_ids) const {
     // Return copied rules so the shared lock need not escape this method.
     std::shared_lock lock(mutex_);
     ConstraintLookupResult result;
     result.enabled_rules.reserve(constraint_ids.size());
     for (const auto& constraint_id : constraint_ids) {
-        const auto constraint = constraints_.find(constraint_id);
+        const auto constraint = constraints_.find(scopedKey(project_id, constraint_id));
         if (constraint == constraints_.end()) {
             result.missing_ids.push_back(constraint_id);
         } else if (!constraint->second.enabled) {
@@ -574,21 +682,32 @@ ConstraintLookupResult RuntimeConfigRegistry::lookupConstraints(
     return result;
 }
 
-std::vector<ConstraintRule> RuntimeConfigRegistry::enabledConstraints(
+ConstraintLookupResult RuntimeConfigRegistry::lookupConstraints(
     const std::vector<std::string>& constraint_ids) const {
-    return lookupConstraints(constraint_ids).enabled_rules;
+    return lookupConstraints("default", constraint_ids);
 }
 
-std::vector<ConstraintRule> RuntimeConfigRegistry::allEnabledConstraints() const {
+std::vector<ConstraintRule> RuntimeConfigRegistry::enabledConstraints(
+    const ProjectId& project_id,
+    const std::vector<std::string>& constraint_ids) const {
+    return lookupConstraints(project_id, constraint_ids).enabled_rules;
+}
+
+std::vector<ConstraintRule> RuntimeConfigRegistry::enabledConstraints(
+    const std::vector<std::string>& constraint_ids) const {
+    return enabledConstraints("default", constraint_ids);
+}
+
+std::vector<ConstraintRule> RuntimeConfigRegistry::allEnabledConstraints(
+    const ProjectId& project_id) const {
     // Copy the rules while holding the shared lock, then sort the snapshot so
     // continuous checks and their logs are deterministic despite the
     // unordered runtime index.
     std::shared_lock lock(mutex_);
     std::vector<ConstraintRule> result;
-    result.reserve(constraints_.size());
+    const auto prefix = project_id + '\x1e';
     for (const auto& [constraint_id, config] : constraints_) {
-        (void)constraint_id;
-        if (config.enabled) {
+        if (constraint_id.rfind(prefix, 0) == 0 && config.enabled) {
             result.push_back(config.rule);
         }
     }
@@ -598,6 +717,10 @@ std::vector<ConstraintRule> RuntimeConfigRegistry::allEnabledConstraints() const
             return left.constraint_id < right.constraint_id;
         });
     return result;
+}
+
+std::vector<ConstraintRule> RuntimeConfigRegistry::allEnabledConstraints() const {
+    return allEnabledConstraints("default");
 }
 
 }  // namespace sfkg::timeseries::core

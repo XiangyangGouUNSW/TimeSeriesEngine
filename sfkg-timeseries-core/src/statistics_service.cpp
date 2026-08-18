@@ -119,8 +119,10 @@ bool pearsonCorrelation(
 }  // namespace
 
 StatisticsResult StatisticsService::computeBasicStatistics(
+    const ProjectId& project_id,
     const WindowData& data) const {
     StatisticsResult result;
+    result.project_id = project_id;
     if (data.window_start_time > data.window_end_time) {
         result.operation = internal::invalidArgument(
             "statistics window start time must not be after end time");
@@ -210,9 +212,18 @@ StatisticsResult StatisticsService::computeBasicStatistics(
 }
 
 StatisticsResult StatisticsService::computeBasicStatistics(
+    const WindowData& data) const {
+    return computeBasicStatistics(
+        data.project_id.empty() ? ProjectId{"default"} : data.project_id,
+        data);
+}
+
+StatisticsResult StatisticsService::computeBasicStatistics(
+    const ProjectId& project_id,
     const AlignedWindowData& data,
     const RuntimeRelationConfig& relation) const {
     StatisticsResult result;
+    result.project_id = project_id;
     if (data.window_start_time > data.window_end_time) {
         result.operation = internal::invalidArgument(
             "statistics window start time must not be after end time");
@@ -256,6 +267,7 @@ StatisticsResult StatisticsService::computeBasicStatistics(
     }
 
     WindowData metric_window;
+    metric_window.project_id = project_id;
     metric_window.window_start_time = data.window_start_time;
     metric_window.window_end_time = data.window_end_time;
     for (const auto& sample : data.samples) {
@@ -263,10 +275,11 @@ StatisticsResult StatisticsService::computeBasicStatistics(
             metric_window.sequence_values[sequence_id].push_back({
                 sample.time,
                 sequence_id,
-                value});
+                value,
+                project_id});
         }
     }
-    result = computeBasicStatistics(metric_window);
+    result = computeBasicStatistics(project_id, metric_window);
     const auto metric_failed_count = result.operation.failed_count;
 
     CorrelationVector correlation;
@@ -315,6 +328,15 @@ StatisticsResult StatisticsService::computeBasicStatistics(
             success_count, "aligned statistics and correlations computed");
     }
     return result;
+}
+
+StatisticsResult StatisticsService::computeBasicStatistics(
+    const AlignedWindowData& data,
+    const RuntimeRelationConfig& relation) const {
+    return computeBasicStatistics(
+        data.project_id.empty() ? ProjectId{"default"} : data.project_id,
+        data,
+        relation);
 }
 
 }  // namespace sfkg::timeseries::core

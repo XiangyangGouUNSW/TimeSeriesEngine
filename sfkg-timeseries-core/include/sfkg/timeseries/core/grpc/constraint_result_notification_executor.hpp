@@ -27,12 +27,18 @@ public:
         const ConstraintResultNotificationExecutor&) = delete;
 
     OperationResult tryEnqueue(
+        const ProjectId& project_id,
+        Timestamp check_time_ms,
+        std::vector<std::string> violated_constraint_ids,
+        std::vector<SequenceId> sequence_ids);
+    OperationResult tryEnqueue(
         Timestamp check_time_ms,
         std::vector<std::string> violated_constraint_ids,
         std::vector<SequenceId> sequence_ids);
 
 private:
     struct Event {
+        ProjectId project_id;
         Timestamp check_time_ms{};
         std::vector<std::string> violated_constraint_ids;
         std::vector<SequenceId> sequence_ids;

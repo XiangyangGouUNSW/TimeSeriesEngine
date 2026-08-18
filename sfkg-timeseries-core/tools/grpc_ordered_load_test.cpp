@@ -27,6 +27,7 @@ using Clock = std::chrono::steady_clock;
 
 struct Options {
     std::string address{"127.0.0.1:50051"};
+    std::string project_id{"grpc-ordered-load-test"};
     std::string prefix;
     std::size_t sequence_count{32};
     std::size_t rows{50'000};
@@ -199,6 +200,7 @@ void printUsage(const char* program) {
     std::cout
         << "Usage: " << program << " [options]\n"
         << "  --address ADDR             Core address (default 127.0.0.1:50051)\n"
+        << "  --project-id TEXT          Project scope (default grpc-ordered-load-test)\n"
         << "  --prefix TEXT              unique ID prefix\n"
         << "  --sequences N              raw sequence count (default 32)\n"
         << "  --rows N                   measured timestamps (default 50000)\n"
@@ -224,12 +226,15 @@ bool parseOptions(int argc, char* argv[], Options* options) {
             printUsage(argv[0]);
             return false;
         }
-        if (argument == "--address" || argument == "--prefix") {
+        if (argument == "--address" || argument == "--project-id" ||
+            argument == "--prefix") {
             if (!takeValue(argc, argv, &index, argument, &value)) {
                 return false;
             }
             if (argument == "--address") {
                 options->address = value;
+            } else if (argument == "--project-id") {
+                options->project_id = value;
             } else {
                 options->prefix = value;
             }
@@ -317,12 +322,15 @@ bool successful(const pb::OperationResult& operation) {
 
 bool syncInstances(
     const std::shared_ptr<::grpc::Channel>& channel,
+    const std::string& project_id,
     const std::string& prefix,
     const std::vector<std::string>& sequence_ids) {
     auto stub = pb::TimeseriesCoreService::NewStub(channel);
     pb::SyncInstanceConfigsRequest request;
+    request.set_project_id(project_id);
     for (const auto& sequence_id : sequence_ids) {
         auto* item = request.add_items();
+        item->set_project_id(project_id);
         item->set_sequence_id(sequence_id);
         item->set_data_source_id(prefix + "-source");
         item->set_external_sequence_id(sequence_id);
@@ -348,9 +356,12 @@ bool syncInstances(
 
 bool syncWindow(
     const std::shared_ptr<::grpc::Channel>& channel,
+    const std::string& project_id,
     std::int64_t window_size_ms) {
     auto stub = pb::TimeseriesCoreService::NewStub(channel);
     pb::SyncWindowConfigRequest request;
+    request.set_project_id(project_id);
+    request.mutable_config()->set_project_id(project_id);
     request.mutable_config()->set_window_size(window_size_ms);
     pb::SyncConfigResponse response;
     ::grpc::ClientContext context;
@@ -370,6 +381,7 @@ bool syncWindow(
 
 bool syncConstraints(
     const std::shared_ptr<::grpc::Channel>& channel,
+    const std::string& project_id,
     const std::string& prefix,
     const std::vector<std::string>& sequence_ids,
     std::size_t count) {
@@ -378,10 +390,13 @@ bool syncConstraints(
     }
     auto stub = pb::TimeseriesCoreService::NewStub(channel);
     pb::SyncConstraintsRequest request;
+    request.set_project_id(project_id);
     for (std::size_t constraint = 0; constraint < count; ++constraint) {
         auto* item = request.add_items();
+        item->set_project_id(project_id);
         item->set_enabled(true);
         auto* rule = item->mutable_rule();
+        rule->set_project_id(project_id);
         rule->set_constraint_id(
             prefix + "-constraint-" + std::to_string(constraint));
         rule->set_lower_bound(-1.0e9);
@@ -429,6 +444,7 @@ bool syncConstraints(
 
 bool syncDerived(
     const std::shared_ptr<::grpc::Channel>& channel,
+    const std::string& project_id,
     const std::string& prefix,
     const std::vector<std::string>& sequence_ids,
     std::size_t count) {
@@ -437,8 +453,10 @@ bool syncDerived(
     }
     auto stub = pb::TimeseriesCoreService::NewStub(channel);
     pb::SyncDerivedSeriesConfigsRequest request;
+    request.set_project_id(project_id);
     for (std::size_t derived = 0; derived < count; ++derived) {
         auto* item = request.add_items();
+        item->set_project_id(project_id);
         item->set_derived_sequence_id(
             prefix + "-derived-" + std::to_string(derived));
         item->set_enabled(true);
@@ -481,6 +499,7 @@ double valueFor(std::size_t row, std::size_t sequence) {
 void workerMain(
     std::size_t worker_id,
     const Options& options,
+    const std::string& project_id,
     const std::string& prefix,
     const std::vector<std::string>& sequence_ids,
     BatchBarrier* barrier,
@@ -493,11 +512,13 @@ void workerMain(
         const auto batch_end = std::min(options.rows,
                                         batch_start + options.batch_rows);
         pb::IngestDataRequest request;
+        request.set_project_id(project_id);
         request.set_return_resolved_data(false);
         for (std::size_t row = batch_start; row < batch_end; ++row) {
             for (std::size_t sequence = worker_id;
                  sequence < sequence_ids.size(); sequence += options.workers) {
                 auto* point = request.add_points();
+                point->set_project_id(project_id);
                 point->set_sequence_id(sequence_ids[sequence]);
                 point->set_data_source_id(prefix + "-source");
                 point->set_external_sequence_id(sequence_ids[sequence]);
@@ -582,11 +603,18 @@ int run(const Options& options) {
         std::cerr << "Core is not reachable at " << options.address << '\n';
         return 2;
     }
-    if (!syncInstances(channel, prefix, sequence_ids) ||
-        !syncWindow(channel, options.window_size_ms) ||
+    if (options.project_id.empty()) {
+        std::cerr << "--project-id must not be empty\n";
+        return 2;
+    }
+    if (!syncInstances(channel, options.project_id, prefix, sequence_ids) ||
+        !syncWindow(channel, options.project_id, options.window_size_ms) ||
         !syncConstraints(
-            channel, prefix, sequence_ids, options.constraint_count) ||
-        !syncDerived(channel, prefix, sequence_ids, options.derived_count)) {
+            channel, options.project_id, prefix, sequence_ids,
+            options.constraint_count) ||
+        !syncDerived(
+            channel, options.project_id, prefix, sequence_ids,
+            options.derived_count)) {
         return 2;
     }
 
@@ -596,6 +624,7 @@ int run(const Options& options) {
         (options.rows + options.batch_rows - 1) / options.batch_rows;
     std::cout << "grpc ordered load test\n"
               << "  address=" << options.address << '\n'
+              << "  project_id=" << options.project_id << '\n'
               << "  prefix=" << prefix << '\n'
               << "  sequences=" << options.sequence_count << '\n'
               << "  rows=" << options.rows << '\n'
@@ -620,7 +649,8 @@ int run(const Options& options) {
     workers.reserve(options.workers);
     for (std::size_t worker = 0; worker < options.workers; ++worker) {
         workers.emplace_back(
-            workerMain, worker, std::cref(options), std::cref(prefix),
+            workerMain, worker, std::cref(options), std::cref(options.project_id),
+            std::cref(prefix),
             std::cref(sequence_ids), &barrier, std::cref(channel), base_time,
             &stats);
     }

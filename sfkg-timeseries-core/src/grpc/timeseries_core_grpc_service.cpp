@@ -162,6 +162,13 @@ std::string joinConstraintIds(const std::vector<std::string>& ids) {
     return output.str();
 }
 
+ProjectId projectFor(const std::string& project_id) {
+    // Empty is retained as the wire-compatible single-project default. New
+    // clients should always send a non-empty project_id; the default keeps
+    // older replay tools readable while still isolating all explicit IDs.
+    return project_id.empty() ? ProjectId{"default"} : project_id;
+}
+
 template <typename Response, typename Function>
 ::grpc::Status guardedCall(
     const char* rpc_name,
@@ -390,6 +397,7 @@ void appendUnique(std::vector<Value>* values, const Value& value) {
 }
 
 ConstraintCheckResult runContinuousConstraintCheck(
+    const ProjectId& project_id,
     const WindowData& window_data,
     const std::vector<ConstraintRule>& enabled_rules,
     const AlignmentService& alignment_service,
@@ -397,6 +405,7 @@ ConstraintCheckResult runContinuousConstraintCheck(
     const std::optional<ConstraintIncrementalRange>& incremental_range,
     const ConstraintSequenceCache& sequence_cache) {
     ConstraintCheckResult result;
+    result.project_id = project_id;
     result.satisfied = true;
     result.operation = internal::ok(
         0, "constraint check skipped: no applicable enabled rules");
@@ -463,8 +472,10 @@ ConstraintCheckResult runContinuousConstraintCheck(
         }
         const auto single_result = range
             ? constraint_engine.checkConstraints(
+                  project_id,
                   single_sequence_rules, window_data, range)
             : constraint_engine.checkConstraints(
+                  project_id,
                   single_sequence_rules, window_data);
         if (!isSuccessful(single_result.operation.code)) {
             return single_result;
@@ -505,12 +516,13 @@ ConstraintCheckResult runContinuousConstraintCheck(
         }
         const auto alignment = range
             ? alignment_service.alignWindowData(
+                  project_id,
                   window_data,
                   AlignmentRange{
                       range->start_time,
                       range->end_time,
                       maximum_offset})
-            : alignment_service.alignWindowData(window_data);
+            : alignment_service.alignWindowData(project_id, window_data);
         if (!isSuccessful(alignment.operation.code)) {
             ConstraintCheckResult failed;
             failed.operation = alignment.operation;
@@ -519,8 +531,10 @@ ConstraintCheckResult runContinuousConstraintCheck(
         }
         const auto multi_result = range
             ? constraint_engine.checkConstraints(
+                  project_id,
                   multi_sequence_rules, alignment.aligned_data, range)
             : constraint_engine.checkConstraints(
+                  project_id,
                   multi_sequence_rules, alignment.aligned_data);
         if (!isSuccessful(multi_result.operation.code)) {
             return multi_result;
@@ -572,7 +586,10 @@ OperationResult withConstraintNotificationFailure(
     pb::SyncConfigResponse* response) {
     (void)context;
     return guardedCall("syncInstanceConfigs", response, [&] {
+        const auto project_id = projectFor(request->project_id());
+        response->set_project_id(project_id);
         RuntimeConfigSnapshot<RuntimeInstanceConfig> snapshot;
+        snapshot.project_id = project_id;
         snapshot.items.reserve(request->items_size());
         std::string error;
         for (const auto& item : request->items()) {
@@ -583,6 +600,7 @@ OperationResult withConstraintNotificationFailure(
                     response->mutable_operation());
                 return ::grpc::Status::OK;
             }
+            converted.project_id = project_id;
             snapshot.items.push_back(std::move(converted));
         }
         conversion::toProto(
@@ -598,7 +616,10 @@ OperationResult withConstraintNotificationFailure(
     pb::SyncConfigResponse* response) {
     (void)context;
     return guardedCall("syncConstraints", response, [&] {
+        const auto project_id = projectFor(request->project_id());
+        response->set_project_id(project_id);
         RuntimeConfigSnapshot<RuntimeConstraintConfig> snapshot;
+        snapshot.project_id = project_id;
         snapshot.items.reserve(request->items_size());
         std::string error;
         for (const auto& item : request->items()) {
@@ -609,6 +630,8 @@ OperationResult withConstraintNotificationFailure(
                     response->mutable_operation());
                 return ::grpc::Status::OK;
             }
+            converted.project_id = project_id;
+            converted.rule.project_id = project_id;
             snapshot.items.push_back(std::move(converted));
         }
         conversion::toProto(
@@ -624,7 +647,10 @@ OperationResult withConstraintNotificationFailure(
     pb::SyncConfigResponse* response) {
     (void)context;
     return guardedCall("syncRelations", response, [&] {
+        const auto project_id = projectFor(request->project_id());
+        response->set_project_id(project_id);
         RuntimeConfigSnapshot<RuntimeRelationConfig> snapshot;
+        snapshot.project_id = project_id;
         snapshot.items.reserve(request->items_size());
         std::string error;
         for (const auto& item : request->items()) {
@@ -635,6 +661,7 @@ OperationResult withConstraintNotificationFailure(
                     response->mutable_operation());
                 return ::grpc::Status::OK;
             }
+            converted.project_id = project_id;
             snapshot.items.push_back(std::move(converted));
         }
         conversion::toProto(
@@ -650,6 +677,8 @@ OperationResult withConstraintNotificationFailure(
     pb::SyncConfigResponse* response) {
     (void)context;
     return guardedCall("syncWindowConfig", response, [&] {
+        const auto project_id = projectFor(request->project_id());
+        response->set_project_id(project_id);
         if (!request->has_config()) {
             conversion::toProto(
                 internal::invalidArgument("window config is required"),
@@ -665,8 +694,9 @@ OperationResult withConstraintNotificationFailure(
                 response->mutable_operation());
             return ::grpc::Status::OK;
         }
+        config.project_id = project_id;
         conversion::toProto(
-            window_service_.configureWindowSize(config.window_size),
+            window_service_.configureWindowSize(project_id, config.window_size),
             response->mutable_operation());
         return ::grpc::Status::OK;
     });
@@ -678,7 +708,10 @@ OperationResult withConstraintNotificationFailure(
     pb::SyncConfigResponse* response) {
     (void)context;
     return guardedCall("syncDerivedSeriesConfigs", response, [&] {
+        const auto project_id = projectFor(request->project_id());
+        response->set_project_id(project_id);
         RuntimeConfigSnapshot<RuntimeDerivedSeriesConfig> snapshot;
+        snapshot.project_id = project_id;
         snapshot.items.reserve(request->items_size());
         std::string error;
         for (const auto& item : request->items()) {
@@ -689,6 +722,7 @@ OperationResult withConstraintNotificationFailure(
                     response->mutable_operation());
                 return ::grpc::Status::OK;
             }
+            converted.project_id = project_id;
             snapshot.items.push_back(std::move(converted));
         }
 
@@ -698,7 +732,7 @@ OperationResult withConstraintNotificationFailure(
             conversion::toProto(configured, response->mutable_operation());
             return ::grpc::Status::OK;
         }
-        const auto refreshed = derived_series_service_.refresh();
+        const auto refreshed = derived_series_service_.refresh(project_id);
         if (!isSuccessful(refreshed.code)) {
             auto result = refreshed;
             if (!result.message.empty()) {
@@ -714,12 +748,13 @@ OperationResult withConstraintNotificationFailure(
 }
 
 IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
+    const ProjectId& project_id,
     const TimeseriesBatch& data,
     const std::shared_ptr<IngestDiagnostics>& diagnostics) {
     IngestPipelineResult result;
     const auto window_started = std::chrono::steady_clock::now();
     const auto window_update =
-        window_service_.buildTimeWindowIncremental(data);
+        window_service_.buildTimeWindowIncremental(project_id, data);
     const auto window_finished = std::chrono::steady_clock::now();
     if (diagnostics) {
         std::lock_guard lock(diagnostics->mutex);
@@ -771,8 +806,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     }
 
     const auto config_started = std::chrono::steady_clock::now();
-    const auto enabled_rules = config_registry_.allEnabledConstraints();
-    const auto derived_configs = config_registry_.allDerivedSeries();
+    const auto enabled_rules = config_registry_.allEnabledConstraints(project_id);
+    const auto derived_configs = config_registry_.allDerivedSeries(project_id);
     const auto config_finished = std::chrono::steady_clock::now();
     if (diagnostics) {
         std::lock_guard lock(diagnostics->mutex);
@@ -835,8 +870,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
         derived_executed = true;
         derived_future = std::async(
             std::launch::async,
-            [this, window_update] {
-                return derived_series_service_.refresh(window_update);
+            [this, project_id, window_update] {
+                return derived_series_service_.refresh(project_id, window_update);
             });
     } else {
         derived_executed = true;
@@ -927,7 +962,7 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
         WindowQuery query;
     };
 
-    const auto makeGroup = [&sequenceIdsFor](
+    const auto makeGroup = [&sequenceIdsFor, &project_id](
                                std::vector<ConstraintRule> rules,
                                std::optional<ConstraintIncrementalRange> range) {
         ConstraintGroupSpec group;
@@ -938,7 +973,7 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
         for (const auto& rule : group.rules) {
             for (const auto& sequence_id : sequenceIdsFor(rule)) {
                 if (seen.insert(sequence_id).second) {
-                    group.query.sequence_ids.push_back(sequence_id);
+        group.query.sequence_ids.push_back(sequence_id);
                 }
             }
             for (const auto& term : rule.terms) {
@@ -946,6 +981,7 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
             }
         }
         if (group.range) {
+            group.query.project_id = project_id;
             group.query.start_time = group.range->start_time;
             group.query.end_time = group.range->end_time ==
                     std::numeric_limits<Timestamp>::max()
@@ -1015,7 +1051,7 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     addRuleGroups(multi_sequence_rules);
     recordConstraintPrepare();
 
-    const auto run_group = [this, &mapped_sequence_cache](
+    const auto run_group = [this, project_id, &mapped_sequence_cache](
                                ConstraintGroupSpec group) {
         ConstraintGroupExecution execution;
         if (group.rules.empty()) {
@@ -1025,7 +1061,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
             return execution;
         }
         const auto query_started = std::chrono::steady_clock::now();
-        const auto window = window_service_.queryWindowData(group.query);
+        const auto window = window_service_.queryWindowData(
+            project_id, group.query);
         const auto query_finished = std::chrono::steady_clock::now();
         execution.query_ms = std::chrono::duration<double, std::milli>(
             query_finished - query_started).count();
@@ -1042,6 +1079,7 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
         }
         const auto check_started = std::chrono::steady_clock::now();
         execution.result = runContinuousConstraintCheck(
+            project_id,
             window.data,
             group.rules,
             alignment_service_,
@@ -1149,6 +1187,7 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     const auto constraint_notify_started = std::chrono::steady_clock::now();
     result.constraint_notification_result =
         constraint_notification_executor_.tryEnqueue(
+            project_id,
             window_update.affected_end_time.value_or(
                 window_update.window_start_time.value_or(0)),
             std::move(violated_constraint_ids),
@@ -1170,6 +1209,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     pb::IngestDataResponse* response) {
     (void)context;
     return guardedCall("ingestData", response, [&] {
+        const auto project_id = projectFor(request->project_id());
+        response->set_project_id(project_id);
         const auto request_started = std::chrono::steady_clock::now();
         const auto diagnostics = shouldCollectIngestDiagnostics()
             ? std::make_shared<IngestDiagnostics>()
@@ -1200,12 +1241,13 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                     invalid, response->mutable_derived_result());
                 return ::grpc::Status::OK;
             }
+            converted.project_id = project_id;
             input.push_back(std::move(converted));
         }
 
         const auto resolve_started = std::chrono::steady_clock::now();
         auto resolved = std::make_shared<IngestResult>(
-            ingest_service_.ingestAndResolveData(input));
+            ingest_service_.ingestAndResolveData(project_id, input));
         const auto resolve_finished = std::chrono::steady_clock::now();
         if (diagnostics) {
             diagnostics->resolved_points = resolved->resolved_data.points.size();
@@ -1225,11 +1267,12 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
         if (isSuccessful(resolved->operation.code)) {
             auto submission = ingest_task_executor_.trySubmit(
                 resolved,
-                [this, diagnostics](
+                [this, project_id, diagnostics](
                     std::size_t writer_index,
                     const TimeseriesBatch& data) {
                     const auto started = std::chrono::steady_clock::now();
                     const auto result = storage_service_.writeRawDataOnConnection(
+                        project_id,
                         writer_index,
                         data);
                     const auto finished = std::chrono::steady_clock::now();
@@ -1283,9 +1326,10 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                     }
                     return result;
                 },
-                [this, diagnostics](const TimeseriesBatch& data) {
+                [this, project_id, diagnostics](const TimeseriesBatch& data) {
                     const auto started = std::chrono::steady_clock::now();
-                    const auto result = processHotIngest(data, diagnostics);
+                    const auto result = processHotIngest(
+                        project_id, data, diagnostics);
                     const auto finished = std::chrono::steady_clock::now();
                     if (diagnostics) {
                         std::lock_guard lock(diagnostics->mutex);
@@ -1475,6 +1519,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     pb::IngestResponse* response) {
     (void)context;
     return guardedCall("ingestAndResolveData", response, [&] {
+        const auto project_id = projectFor(request->project_id());
+        response->set_project_id(project_id);
         if (request->points().empty()) {
             conversion::toProto(
                 internal::invalidArgument("points must not be empty"),
@@ -1492,9 +1538,11 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                     response->mutable_operation());
                 return ::grpc::Status::OK;
             }
+            converted.project_id = project_id;
             input.push_back(std::move(converted));
         }
-        const auto result = ingest_service_.ingestAndResolveData(input);
+        const auto result = ingest_service_.ingestAndResolveData(
+            project_id, input);
         conversion::toProto(result.operation, response->mutable_operation());
         conversion::toProto(
             result.resolved_data, response->mutable_resolved_data());
@@ -1508,6 +1556,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     pb::WriteRawDataResponse* response) {
     (void)context;
     return guardedCall("writeRawData", response, [&] {
+        const auto project_id = projectFor(request->project_id());
+        response->set_project_id(project_id);
         if (!request->has_data() || request->data().points().empty()) {
             conversion::toProto(
                 internal::invalidArgument("data points must not be empty"),
@@ -1522,8 +1572,12 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                 response->mutable_operation());
             return ::grpc::Status::OK;
         }
+        data.project_id = project_id;
+        for (auto& point : data.points) {
+            point.project_id = project_id;
+        }
         conversion::toProto(
-            storage_service_.writeRawData(data),
+            storage_service_.writeRawData(project_id, data),
             response->mutable_operation());
         return ::grpc::Status::OK;
     });
@@ -1535,6 +1589,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     pb::BuildTimeWindowResponse* response) {
     (void)context;
     return guardedCall("buildTimeWindow", response, [&] {
+        const auto project_id = projectFor(request->project_id());
+        response->set_project_id(project_id);
         if (!request->has_data() || request->data().points().empty() ||
             request->window_size() <= 0) {
             conversion::toProto(
@@ -1551,8 +1607,13 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                 response->mutable_operation());
             return ::grpc::Status::OK;
         }
+        data.project_id = project_id;
+        for (auto& point : data.points) {
+            point.project_id = project_id;
+        }
         conversion::toProto(
-            window_service_.buildTimeWindow(data, request->window_size()),
+            window_service_.buildTimeWindow(
+                project_id, data, request->window_size()),
             response->mutable_operation());
         return ::grpc::Status::OK;
     });
@@ -1564,7 +1625,10 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     pb::QueryWindowDataResponse* response) {
     (void)context;
     return guardedCall("queryWindowData", response, [&] {
+        const auto project_id = projectFor(request->project_id());
+        response->set_project_id(project_id);
         WindowQuery query = conversion::fromProto(*request);
+        query.project_id = project_id;
         if (query.sequence_ids.empty() ||
             !validTimeRange(query.start_time, query.end_time)) {
             conversion::toProto(
@@ -1573,7 +1637,7 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                 response->mutable_operation());
             return ::grpc::Status::OK;
         }
-        const auto result = window_service_.queryWindowData(query);
+        const auto result = window_service_.queryWindowData(project_id, query);
         conversion::toProto(result.operation, response->mutable_operation());
         conversion::toProto(result.data, response->mutable_data());
         return ::grpc::Status::OK;
@@ -1586,6 +1650,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     pb::AlignWindowDataResponse* response) {
     (void)context;
     return guardedCall("alignWindowData", response, [&] {
+        const auto project_id = projectFor(request->project_id());
+        response->set_project_id(project_id);
         AlignmentConfig config;
         std::string error;
         if (request->has_config() &&
@@ -1596,6 +1662,7 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                 response->mutable_operation());
             return ::grpc::Status::OK;
         }
+        config.project_id = project_id;
 
         WindowData data;
         if (request->source_case() == pb::AlignWindowDataRequest::kData) {
@@ -1605,10 +1672,18 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                     response->mutable_operation());
                 return ::grpc::Status::OK;
             }
+            data.project_id = project_id;
+            for (auto& [sequence_id, points] : data.sequence_values) {
+                for (auto& point : points) {
+                    point.project_id = project_id;
+                }
+            }
         } else if (request->source_case() ==
                    pb::AlignWindowDataRequest::kWindowQuery) {
+            auto query = conversion::fromProto(request->window_query());
+            query.project_id = project_id;
             const auto window_result = window_service_.queryWindowData(
-                conversion::fromProto(request->window_query()));
+                project_id, query);
             if (!isSuccessful(window_result.operation.code)) {
                 conversion::toProto(
                     window_result.operation, response->mutable_operation());
@@ -1632,7 +1707,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                     response->mutable_operation());
                 return ::grpc::Status::OK;
             }
-            const auto relation = config_registry_.findRelation(relation_id);
+            const auto relation = config_registry_.findRelation(
+                project_id, relation_id);
             if (!relation) {
                 conversion::toProto(
                     internal::makeOperationResult(
@@ -1654,7 +1730,7 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
         }
 
         const auto result = alignment_service_.alignWindowData(
-            data, config, relations);
+            project_id, data, config, relations);
         conversion::toProto(result.operation, response->mutable_operation());
         conversion::toProto(
             result.aligned_data, response->mutable_aligned_data());
@@ -1668,6 +1744,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     pb::ComputeStatisticsResponse* response) {
     (void)context;
     return guardedCall("computeBasicStatistics", response, [&] {
+        const auto project_id = projectFor(request->project_id());
+        response->set_project_id(project_id);
         std::string error;
         if (request->source_case() ==
             pb::ComputeStatisticsRequest::kWindowData) {
@@ -1685,8 +1763,9 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                     response->mutable_operation());
                 return ::grpc::Status::OK;
             }
+            data.project_id = project_id;
             conversion::toProto(
-                statistics_service_.computeBasicStatistics(data), response);
+                statistics_service_.computeBasicStatistics(project_id, data), response);
             return ::grpc::Status::OK;
         }
 
@@ -1701,6 +1780,7 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                     response->mutable_operation());
                 return ::grpc::Status::OK;
             }
+            data.project_id = project_id;
 
             if (request->relation_id().empty()) {
                 conversion::toProto(
@@ -1710,7 +1790,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                 return ::grpc::Status::OK;
             }
             const auto relation =
-                config_registry_.findRelation(request->relation_id());
+                config_registry_.findRelation(
+                    project_id, request->relation_id());
             if (!relation) {
                 conversion::toProto(
                     internal::makeOperationResult(
@@ -1729,7 +1810,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                 return ::grpc::Status::OK;
             }
             conversion::toProto(
-                statistics_service_.computeBasicStatistics(data, *relation),
+                statistics_service_.computeBasicStatistics(
+                    project_id, data, *relation),
                 response);
             return ::grpc::Status::OK;
         }
@@ -1743,15 +1825,18 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                     response->mutable_operation());
                 return ::grpc::Status::OK;
             }
+            auto query = conversion::fromProto(request->window_query());
+            query.project_id = project_id;
             const auto window_result = window_service_.queryWindowData(
-                conversion::fromProto(request->window_query()));
+                project_id, query);
             if (!isSuccessful(window_result.operation.code)) {
                 conversion::toProto(
                     window_result.operation, response->mutable_operation());
                 return ::grpc::Status::OK;
             }
             conversion::toProto(
-                statistics_service_.computeBasicStatistics(window_result.data),
+                statistics_service_.computeBasicStatistics(
+                    project_id, window_result.data),
                 response);
             return ::grpc::Status::OK;
         }
@@ -1769,6 +1854,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     pb::CheckConstraintsResponse* response) {
     (void)context;
     return guardedCall("checkConstraints", response, [&] {
+        const auto project_id = projectFor(request->project_id());
+        response->set_project_id(project_id);
         if (request->constraint_ids().empty()) {
             conversion::toProto(
                 internal::invalidArgument("constraint_ids must not be empty"),
@@ -1777,7 +1864,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
         }
         const std::vector<std::string> constraint_ids(
             request->constraint_ids().begin(), request->constraint_ids().end());
-        const auto lookup = config_registry_.lookupConstraints(constraint_ids);
+        const auto lookup = config_registry_.lookupConstraints(
+            project_id, constraint_ids);
         if (!lookup.missing_ids.empty() || !lookup.disabled_ids.empty()) {
             std::ostringstream message;
             message << "requested constraints are not all enabled";
@@ -1806,8 +1894,10 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                     response->mutable_operation());
                 return ::grpc::Status::OK;
             }
+            data.project_id = project_id;
             conversion::toProto(
-                constraint_engine_.checkConstraints(rules, data), response);
+                constraint_engine_.checkConstraints(project_id, rules, data),
+                response);
             return ::grpc::Status::OK;
         }
 
@@ -1821,15 +1911,19 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                     response->mutable_operation());
                 return ::grpc::Status::OK;
             }
+            data.project_id = project_id;
             conversion::toProto(
-                constraint_engine_.checkConstraints(rules, data), response);
+                constraint_engine_.checkConstraints(project_id, rules, data),
+                response);
             return ::grpc::Status::OK;
         }
 
         if (request->source_case() ==
             pb::CheckConstraintsRequest::kWindowQuery) {
+            auto query = conversion::fromProto(request->window_query());
+            query.project_id = project_id;
             const auto window_result = window_service_.queryWindowData(
-                conversion::fromProto(request->window_query()));
+                project_id, query);
             if (!isSuccessful(window_result.operation.code)) {
                 conversion::toProto(
                     window_result.operation, response->mutable_operation());
@@ -1837,7 +1931,7 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
             }
             conversion::toProto(
                 constraint_engine_.checkConstraints(
-                    rules, window_result.data),
+                    project_id, rules, window_result.data),
                 response);
             return ::grpc::Status::OK;
         }
@@ -1855,7 +1949,10 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     pb::QueryHistoryDataResponse* response) {
     (void)context;
     return guardedCall("queryHistoryData", response, [&] {
-        const HistoryQuery query = conversion::fromProto(*request);
+        const auto project_id = projectFor(request->project_id());
+        response->set_project_id(project_id);
+        HistoryQuery query = conversion::fromProto(*request);
+        query.project_id = project_id;
         if (query.sequence_ids.empty() || query.start_time > query.end_time ||
             (query.granularity && *query.granularity <= 0)) {
             conversion::toProto(
@@ -1864,7 +1961,7 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                 response->mutable_operation());
             return ::grpc::Status::OK;
         }
-        const auto result = history_service_.queryHistoryData(query);
+        const auto result = history_service_.queryHistoryData(project_id, query);
         conversion::toProto(result.operation, response->mutable_operation());
         conversion::toProto(result.data, response->mutable_data());
         return ::grpc::Status::OK;
@@ -1877,8 +1974,11 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     pb::QueryHistoryOverviewResponse* response) {
     (void)context;
     return guardedCall("queryHistoryOverview", response, [&] {
-        const HistoryOverviewQuery query =
+        const auto project_id = projectFor(request->project_id());
+        response->set_project_id(project_id);
+        HistoryOverviewQuery query =
             conversion::fromProto(*request);
+        query.project_id = project_id;
         if (query.start_time && query.end_time &&
             *query.start_time > *query.end_time) {
             conversion::toProto(
@@ -1887,7 +1987,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                 response->mutable_operation());
             return ::grpc::Status::OK;
         }
-        const auto result = history_service_.queryHistoryOverview(query);
+        const auto result = history_service_.queryHistoryOverview(
+            project_id, query);
         conversion::toProto(result, response);
         return ::grpc::Status::OK;
     });

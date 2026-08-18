@@ -19,6 +19,7 @@ public:
     // Independent derived configurations are computed in a bounded parallel
     // phase and published in a serialized phase. Derived results are written
     // to WindowService only.
+    OperationResult refresh(const ProjectId& project_id);
     OperationResult refresh();
 
     // Recomputes only derived sequences affected by an append-only window
@@ -26,9 +27,14 @@ public:
     // source kinds fall back to a full refresh for correctness. Window
     // eviction is handled as an incremental prefix removal plus patch.
     OperationResult refresh(const WindowUpdateResult& update);
+    OperationResult refresh(
+        const ProjectId& project_id,
+        const WindowUpdateResult& update);
 
 private:
-    OperationResult refreshInternal(const WindowUpdateResult* update);
+    OperationResult refreshInternal(
+        const ProjectId& project_id,
+        const WindowUpdateResult* update);
 
     const RuntimeConfigRegistry& configs_;
     WindowService& window_service_;

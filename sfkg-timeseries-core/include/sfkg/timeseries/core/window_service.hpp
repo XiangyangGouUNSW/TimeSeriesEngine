@@ -30,6 +30,7 @@ struct SequenceWindowUpdate {
 
 struct WindowUpdateResult {
     OperationResult operation;
+    ProjectId project_id;
     std::vector<SequenceId> changed_sequence_ids;
     // Incremental consumers must use the status for their dependency set,
     // not the aggregate flag below. A derived formula or constraint can stay
@@ -70,14 +71,25 @@ public:
     WindowService(const WindowService&) = delete;
     WindowService& operator=(const WindowService&) = delete;
 
+    OperationResult configureWindowSize(
+        const ProjectId& project_id,
+        std::int64_t window_size);
     OperationResult configureWindowSize(std::int64_t window_size);
+    std::int64_t windowSize(const ProjectId& project_id) const;
     std::int64_t windowSize() const;
 
     // Uses the runtime-configured window size.
     OperationResult buildTimeWindow(const TimeseriesBatch& data);
+    OperationResult buildTimeWindow(
+        const ProjectId& project_id,
+        const TimeseriesBatch& data);
 
     // Explicit size is retained for fine-grained tests, replay and
     // compensation flows.
+    OperationResult buildTimeWindow(
+        const ProjectId& project_id,
+        const TimeseriesBatch& data,
+        std::int64_t window_size);
     OperationResult buildTimeWindow(
         const TimeseriesBatch& data,
         std::int64_t window_size);
@@ -85,9 +97,16 @@ public:
     // Same hot-window update as buildTimeWindow(), with change information
     // for incremental derived-series and constraint processing.
     WindowUpdateResult buildTimeWindowIncremental(
+        const ProjectId& project_id,
+        const TimeseriesBatch& data);
+    WindowUpdateResult buildTimeWindowIncremental(
         const TimeseriesBatch& data);
 
     // Replaces a derived sequence in memory only. It never reaches storage.
+    OperationResult replaceDerivedSequence(
+        const ProjectId& project_id,
+        const SequenceId& sequence_id,
+        const TimeseriesBatch& data);
     OperationResult replaceDerivedSequence(
         const SequenceId& sequence_id,
         const TimeseriesBatch& data);
@@ -97,13 +116,21 @@ public:
     // formula locally; callers must use replaceDerivedSequence() for a full
     // rebuild or when the affected range is not known safely.
     OperationResult patchDerivedSequence(
+        const ProjectId& project_id,
+        const SequenceId& sequence_id,
+        Timestamp start_time,
+        Timestamp end_time,
+        const TimeseriesBatch& data);
+    OperationResult patchDerivedSequence(
         const SequenceId& sequence_id,
         Timestamp start_time,
         Timestamp end_time,
         const TimeseriesBatch& data);
 
     WindowQueryResult queryWindowData(
+        const ProjectId& project_id,
         const WindowQuery& query) const;
+    WindowQueryResult queryWindowData(const WindowQuery& query) const;
 
 private:
     struct SequenceExecutor;
@@ -138,12 +165,18 @@ private:
     static void compactSequence(SequenceWindow& sequence);
 
     OperationResult updateWindow(
+        const ProjectId& project_id,
+        const TimeseriesBatch& data,
+        std::optional<std::int64_t> window_size_override);
+    OperationResult updateWindow(
         const TimeseriesBatch& data,
         std::optional<std::int64_t> window_size_override);
     WindowUpdateResult updateWindowIncremental(
+        const ProjectId& project_id,
         const TimeseriesBatch& data,
         std::optional<std::int64_t> window_size_override);
     bool pruneExpiredPoints(
+        const ProjectId& project_id,
         Timestamp window_start,
         const std::vector<std::pair<SequenceId, std::shared_ptr<SequenceWindow>>>&
             sequences,
@@ -152,6 +185,7 @@ private:
         double* update_ms = nullptr);
 
     std::shared_ptr<SequenceWindow> sequenceWindowFor(
+        const ProjectId& project_id,
         const SequenceId& sequence_id);
 
     // Protects the hot-window index, watermark and window-size metadata from
@@ -162,9 +196,9 @@ private:
     mutable std::shared_mutex mutex_;
     std::unordered_map<SequenceId, std::shared_ptr<SequenceWindow>>
         sequence_windows_;
-    std::optional<Timestamp> watermark_;
-    std::int64_t window_size_{kDefaultWindowSizeMs};
-    std::uint64_t update_generation_{0};
+    std::unordered_map<ProjectId, Timestamp> watermarks_;
+    std::unordered_map<ProjectId, std::int64_t> window_sizes_;
+    std::unordered_map<ProjectId, std::uint64_t> update_generations_;
     std::unique_ptr<SequenceExecutor> sequence_executor_;
 };
 

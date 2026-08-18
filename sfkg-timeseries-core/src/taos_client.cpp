@@ -343,6 +343,19 @@ std::string tableName(const SequenceId& sequence_id) {
     return stream.str();
 }
 
+std::string projectStableName(
+    const std::string& base_name,
+    const ProjectId& project_id) {
+    std::uint64_t hash = 1469598103934665603ULL;
+    for (const unsigned char ch : project_id) {
+        hash ^= ch;
+        hash *= 1099511628211ULL;
+    }
+    std::ostringstream stream;
+    stream << base_name << "_p_" << std::hex << hash;
+    return stream.str();
+}
+
 struct Group {
     SequenceId sequence_id;
     std::vector<const RawTimeseriesPoint*> points;
@@ -493,6 +506,8 @@ struct TaosClient::Impl {
     std::size_t write_connection_count{4};
     std::string config_error;
     std::string connection_error;
+    mutable std::mutex schema_mutex;
+    mutable std::unordered_set<ProjectId> project_schemas;
     // Each write worker selects one connection and only serializes with other
     // users of that same connection. This is a connection-pool policy, not a
     // claim that TDengine writes are globally required to be single-threaded.
@@ -594,7 +609,7 @@ TaosClient::~TaosClient() {
 #endif
 }
 
-OperationResult TaosClient::ensureSchema() {
+OperationResult TaosClient::ensureSchema() const {
     if (!impl_->config_error.empty()) {
         return invalidArgument(impl_->config_error);
     }
@@ -618,16 +633,6 @@ OperationResult TaosClient::ensureSchema() {
     ResultGuard result{taos_query(first.connection, create_db.c_str())};
     if (result.result == nullptr || taos_errno(result.result) != 0) {
         return queryError(result.result, "create database");
-    }
-    const std::string stable = quoteIdentifier(impl_->raw_stable_name);
-    const std::string create_stable =
-        "CREATE STABLE IF NOT EXISTS " + database + "." + stable + " "
-        "(ts TIMESTAMP, d_value DOUBLE, i_value BIGINT, b_value BOOL, "
-        "s_value NCHAR(256)) TAGS (sequence_id NCHAR(128), value_type TINYINT)";
-    taos_free_result(result.result);
-    result.result = taos_query(first.connection, create_stable.c_str());
-    if (result.result == nullptr || taos_errno(result.result) != 0) {
-        return queryError(result.result, "create raw data stable");
     }
     if (taos_select_db(first.connection, impl_->database.c_str()) != 0) {
         const std::string message = "select TDengine database for writes: " +
@@ -659,6 +664,50 @@ OperationResult TaosClient::ensureSchema() {
         }
     }
     return ok(0, "TDengine schema is ready");
+#endif
+}
+
+OperationResult TaosClient::ensureProjectSchema(
+    const ProjectId& project_id) const {
+    if (project_id.empty()) {
+        return invalidArgument("project_id must not be empty");
+    }
+    const auto database_result = ensureSchema();
+    if (database_result.code != OperationCode::Ok) {
+        return database_result;
+    }
+#if !SFKG_WITH_TAOS
+    return internalError("TDengine support was disabled at configure time");
+#else
+    const auto stable_name = projectStableName(
+        impl_->raw_stable_name, project_id);
+    if (!validDatabaseName(stable_name)) {
+        return invalidArgument("project-specific TDengine stable name is invalid");
+    }
+    std::lock_guard schema_lock(impl_->schema_mutex);
+    if (impl_->project_schemas.find(project_id) !=
+        impl_->project_schemas.end()) {
+        return ok(0, "project TDengine schema is ready");
+    }
+    if (impl_->write_connections.empty()) {
+        return unavailable("TDengine is unreachable: " + impl_->connection_error);
+    }
+    auto& first = *impl_->write_connections.front();
+    std::lock_guard connection_lock(first.mutex);
+    if (first.connection == nullptr) {
+        return unavailable("TDengine is unreachable: " + impl_->connection_error);
+    }
+    const auto sql =
+        "CREATE STABLE IF NOT EXISTS " + quoteIdentifier(impl_->database) +
+        "." + quoteIdentifier(stable_name) +
+        " (ts TIMESTAMP, d_value DOUBLE, i_value BIGINT, b_value BOOL, "
+        "s_value NCHAR(256)) TAGS (sequence_id NCHAR(128), value_type TINYINT)";
+    ResultGuard result{taos_query(first.connection, sql.c_str())};
+    if (result.result == nullptr || taos_errno(result.result) != 0) {
+        return queryError(result.result, "create project raw data stable");
+    }
+    impl_->project_schemas.emplace(project_id);
+    return ok(0, "project TDengine schema is ready");
 #endif
 }
 
@@ -711,13 +760,23 @@ OperationResult TaosClient::dropDatabaseForTesting() {
         return error;
     }
     taos_close(drop_connection);
+    {
+        std::lock_guard schema_lock(impl_->schema_mutex);
+        impl_->project_schemas.clear();
+    }
     return ok(0, "test database dropped");
 #endif
 }
 
-OperationResult TaosClient::insertRaw(const TimeseriesBatch& batch) {
+OperationResult TaosClient::insertRaw(
+    const ProjectId& project_id,
+    const TimeseriesBatch& batch) {
     if (batch.points.empty()) {
         return invalidArgument("raw batch must not be empty");
+    }
+    const auto schema = ensureProjectSchema(project_id);
+    if (schema.code != OperationCode::Ok) {
+        return schema;
     }
 #if !SFKG_WITH_TAOS
     return internalError("TDengine support was disabled at configure time");
@@ -727,11 +786,18 @@ OperationResult TaosClient::insertRaw(const TimeseriesBatch& batch) {
     }
     const auto connection_index = std::hash<SequenceId>{}(
         batch.points.front().sequence_id) % impl_->write_connections.size();
-    return insertRawOnConnection(connection_index, batch);
+    return insertRawOnConnection(project_id, connection_index, batch);
 #endif
 }
 
+OperationResult TaosClient::insertRaw(const TimeseriesBatch& batch) {
+    return insertRaw(
+        batch.project_id.empty() ? ProjectId{"default"} : batch.project_id,
+        batch);
+}
+
 OperationResult TaosClient::insertRawOnConnection(
+    const ProjectId& project_id,
     std::size_t connection_index,
     const TimeseriesBatch& batch) {
     if (batch.points.empty()) {
@@ -739,6 +805,10 @@ OperationResult TaosClient::insertRawOnConnection(
     }
     if (!impl_->config_error.empty()) {
         return invalidArgument(impl_->config_error);
+    }
+    const auto schema = ensureProjectSchema(project_id);
+    if (schema.code != OperationCode::Ok) {
+        return schema;
     }
 #if !SFKG_WITH_TAOS
     return internalError("TDengine support was disabled at configure time");
@@ -816,7 +886,8 @@ OperationResult TaosClient::insertRawOnConnection(
     }
     const std::string sql =
         "INSERT INTO ? USING " + quoteIdentifier(impl_->database) +
-        "." + quoteIdentifier(impl_->raw_stable_name) +
+        "." + quoteIdentifier(projectStableName(
+            impl_->raw_stable_name, project_id)) +
         " TAGS(?,?) VALUES (?,?,?,?,?)";
     TAOS_STMT2_OPTION option{0, true, true, nullptr, nullptr};
     std::unique_ptr<TAOS_STMT2, decltype(&taos_stmt2_close)> statement(
@@ -868,7 +939,17 @@ OperationResult TaosClient::insertRawOnConnection(
     return ok(batch.points.size(), "raw batch inserted");
 #endif
 }
+
+OperationResult TaosClient::insertRawOnConnection(
+    std::size_t connection_index,
+    const TimeseriesBatch& batch) {
+    return insertRawOnConnection(
+        batch.project_id.empty() ? ProjectId{"default"} : batch.project_id,
+        connection_index,
+        batch);
+}
 OperationResult TaosClient::queryRaw(
+    const ProjectId& project_id,
     const std::vector<SequenceId>& sequence_ids,
     Timestamp start,
     Timestamp end,
@@ -878,6 +959,7 @@ OperationResult TaosClient::queryRaw(
     if (out == nullptr) {
         return invalidArgument("query output must not be null");
     }
+    out->project_id = project_id;
     if (sequence_ids.empty()) {
         return invalidArgument("sequence_ids must not be empty");
     }
@@ -892,6 +974,10 @@ OperationResult TaosClient::queryRaw(
     if (!impl_->config_error.empty()) {
         return invalidArgument(impl_->config_error);
     }
+    const auto schema = ensureProjectSchema(project_id);
+    if (schema.code != OperationCode::Ok) {
+        return schema;
+    }
     if (start == end) {
         out->points.clear();
         return ok(0, "query returned no rows");
@@ -905,6 +991,7 @@ OperationResult TaosClient::queryRaw(
     const bool timing_enabled = queryTimingEnabled();
     const auto total_started = std::chrono::steady_clock::now();
     TimeseriesBatch temporary;
+    temporary.project_id = project_id;
     temporary.points.reserve(1024);
     bool time_ordered = true;
     std::optional<Timestamp> previous_time;
@@ -968,7 +1055,8 @@ OperationResult TaosClient::queryRaw(
                        "value_type AS value_type,sequence_id AS sequence_id FROM ";
             }
             sql << quoteIdentifier(impl_->database) << "."
-                << quoteIdentifier(impl_->raw_stable_name)
+                << quoteIdentifier(projectStableName(
+                    impl_->raw_stable_name, project_id))
                 << " WHERE sequence_id IN (";
             for (std::size_t index = 0; index < sequence_ids.size(); ++index) {
                 if (index != 0) {
@@ -1115,9 +1203,10 @@ OperationResult TaosClient::queryRaw(
                         point.value = static_cast<std::int8_t*>(
                             columns[fields.boolean_value])[row_index] != 0;
                     } else {
-                        point.value = decodeNcharColumn(
+                    point.value = decodeNcharColumn(
                             columns[fields.string_value], string_offsets, row_index);
                     }
+                    point.project_id = project_id;
                     temporary.points.push_back(std::move(point));
                 }
                 if (typed_mismatch) {
@@ -1215,13 +1304,34 @@ OperationResult TaosClient::queryRaw(
 #endif
 }
 
+OperationResult TaosClient::queryRaw(
+    const std::vector<SequenceId>& sequence_ids,
+    Timestamp start,
+    Timestamp end,
+    TimeseriesBatch* out,
+    std::optional<std::int64_t> granularity,
+    const std::unordered_map<SequenceId, TimeseriesValueKind>* value_kinds) const {
+    return queryRaw(
+        out != nullptr && !out->project_id.empty()
+            ? out->project_id
+            : ProjectId{"default"},
+        sequence_ids,
+        start,
+        end,
+        out,
+        granularity,
+        value_kinds);
+}
+
 OperationResult TaosClient::queryHistoryOverview(
+    const ProjectId& project_id,
     const HistoryOverviewQuery& query,
     HistoryOverview* out) const {
     if (out == nullptr) {
         return invalidArgument("overview output must not be null");
     }
     *out = HistoryOverview{};
+    out->project_id = project_id;
     if (query.start_time && query.end_time &&
         *query.start_time > *query.end_time) {
         return invalidArgument(
@@ -1234,6 +1344,10 @@ OperationResult TaosClient::queryHistoryOverview(
     }
     if (!impl_->config_error.empty()) {
         return invalidArgument(impl_->config_error);
+    }
+    const auto schema = ensureProjectSchema(project_id);
+    if (schema.code != OperationCode::Ok) {
+        return schema;
     }
     if (query.start_time && query.end_time &&
         *query.start_time == *query.end_time) {
@@ -1254,7 +1368,8 @@ OperationResult TaosClient::queryHistoryOverview(
            "COUNT(*) AS point_count,MIN(ts) AS first_time,"
            "MAX(ts) AS last_time FROM "
         << quoteIdentifier(impl_->database) << "."
-        << quoteIdentifier(impl_->raw_stable_name);
+        << quoteIdentifier(projectStableName(
+            impl_->raw_stable_name, project_id));
     if (!query.sequence_ids.empty() || query.start_time || query.end_time) {
         sql << " WHERE ";
         bool has_condition = false;
@@ -1372,6 +1487,15 @@ OperationResult TaosClient::queryHistoryOverview(
     out->sequence_count = out->series.size();
     return ok(out->total_point_count, "history overview completed");
 #endif
+}
+
+OperationResult TaosClient::queryHistoryOverview(
+    const HistoryOverviewQuery& query,
+    HistoryOverview* out) const {
+    return queryHistoryOverview(
+        query.project_id.empty() ? ProjectId{"default"} : query.project_id,
+        query,
+        out);
 }
 
 }  // namespace sfkg::timeseries::core::internal

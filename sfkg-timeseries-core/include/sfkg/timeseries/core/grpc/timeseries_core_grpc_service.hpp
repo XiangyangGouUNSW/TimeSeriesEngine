@@ -112,6 +112,7 @@ private:
     struct IngestDiagnostics;
 
     IngestPipelineResult processHotIngest(
+        const ProjectId& project_id,
         const TimeseriesBatch& data,
         const std::shared_ptr<IngestDiagnostics>& diagnostics = {});
 

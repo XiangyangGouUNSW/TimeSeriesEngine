@@ -225,6 +225,13 @@ if(SFKG_BUILD_TESTS)
     add_test(NAME window_service_differential_test
         COMMAND window_service_differential_test)
 
+    add_executable(project_isolation_test
+        tests/project_isolation_test.cpp)
+    target_link_libraries(project_isolation_test
+        PRIVATE sfkg_timeseries_domain)
+    add_test(NAME project_isolation_test
+        COMMAND project_isolation_test)
+
     add_executable(derived_series_service_test
         tests/derived_series_service_test.cpp)
     target_link_libraries(derived_series_service_test

@@ -484,23 +484,55 @@ bool fillValues(
 }  // namespace
 
 AlignmentResult AlignmentService::alignWindowData(
+    const ProjectId& project_id,
     const WindowData& window_data) const {
-    return alignWindowData(window_data, AlignmentConfig{}, {});
+    return alignWindowData(project_id, window_data, AlignmentConfig{}, {});
+}
+
+AlignmentResult AlignmentService::alignWindowData(
+    const WindowData& window_data) const {
+    return alignWindowData(
+        window_data.project_id.empty() ? ProjectId{"default"} :
+            window_data.project_id,
+        window_data);
+}
+
+AlignmentResult AlignmentService::alignWindowData(
+    const ProjectId& project_id,
+    const WindowData& window_data,
+    const AlignmentConfig& config) const {
+    return alignWindowData(project_id, window_data, config, {});
 }
 
 AlignmentResult AlignmentService::alignWindowData(
     const WindowData& window_data,
     const AlignmentConfig& config) const {
-    return alignWindowData(window_data, config, {});
+    return alignWindowData(
+        window_data.project_id.empty() ? ProjectId{"default"} :
+            window_data.project_id,
+        window_data,
+        config);
+}
+
+AlignmentResult AlignmentService::alignWindowData(
+    const ProjectId& project_id,
+    const WindowData& window_data,
+    const std::vector<RuntimeRelationConfig>& relations) const {
+    return alignWindowData(project_id, window_data, AlignmentConfig{}, relations);
 }
 
 AlignmentResult AlignmentService::alignWindowData(
     const WindowData& window_data,
     const std::vector<RuntimeRelationConfig>& relations) const {
-    return alignWindowData(window_data, AlignmentConfig{}, relations);
+    return alignWindowData(
+        window_data.project_id.empty() ? ProjectId{"default"} :
+            window_data.project_id,
+        window_data,
+        relations);
 }
 
 AlignmentResult AlignmentService::alignWindowData(
+    const ProjectId& project_id,
     const WindowData& window_data,
     const AlignmentRange& range) const {
     if (range.start_time > range.end_time) {
@@ -563,7 +595,7 @@ AlignmentResult AlignmentService::alignWindowData(
     // applying lower_bound to invalid ranges.
     for (const auto& [sequence_id, points] : window_data.sequence_values) {
         if (!pointsAreSorted(sequence_id, points)) {
-            return cropFullResult(alignWindowData(window_data));
+            return cropFullResult(alignWindowData(project_id, window_data));
         }
     }
 
@@ -631,14 +663,14 @@ AlignmentResult AlignmentService::alignWindowData(
             window_data.window_start_time,
             static_cast<std::uint64_t>(target_first) * interval_u64,
             &target_start)) {
-        return cropFullResult(alignWindowData(window_data));
+        return cropFullResult(alignWindowData(project_id, window_data));
     }
     if (target_last + 1 < bucket_count &&
         !addNonNegativeTimestampOffset(
             window_data.window_start_time,
             static_cast<std::uint64_t>(target_last + 1) * interval_u64,
             &target_end)) {
-        return cropFullResult(alignWindowData(window_data));
+        return cropFullResult(alignWindowData(project_id, window_data));
     }
 
     WindowData local_window;
@@ -712,11 +744,11 @@ AlignmentResult AlignmentService::alignWindowData(
              !has_left_context) ||
             (target_last + 1 < bucket_count && !has_last_target_value &&
              !has_right_context)) {
-            return cropFullResult(alignWindowData(window_data));
+            return cropFullResult(alignWindowData(project_id, window_data));
         }
     }
 
-    auto result = alignWindowData(local_window, config, {});
+    auto result = alignWindowData(project_id, local_window, config, {});
     if (result.operation.code != OperationCode::Ok &&
         result.operation.code != OperationCode::PartialSuccess) {
         return result;
@@ -754,9 +786,22 @@ AlignmentResult AlignmentService::alignWindowData(
 
 AlignmentResult AlignmentService::alignWindowData(
     const WindowData& window_data,
+    const AlignmentRange& range) const {
+    return alignWindowData(
+        window_data.project_id.empty() ? ProjectId{"default"} :
+            window_data.project_id,
+        window_data,
+        range);
+}
+
+AlignmentResult AlignmentService::alignWindowData(
+    const ProjectId& project_id,
+    const WindowData& window_data,
     const AlignmentConfig& requested_config,
     const std::vector<RuntimeRelationConfig>& relations) const {
     AlignmentResult result;
+    result.project_id = project_id;
+    result.aligned_data.project_id = project_id;
     if (window_data.window_start_time > window_data.window_end_time) {
         result.operation = internal::invalidArgument(
             "alignment window start time must not be after end time");
@@ -793,7 +838,8 @@ AlignmentResult AlignmentService::alignWindowData(
         }
 
         SeriesKind kind = SeriesKind::Unspecified;
-        if (const auto instance = configs_.findInstance(sequence.sequence_id)) {
+        if (const auto instance = configs_.findInstance(
+                project_id, sequence.sequence_id)) {
             kind = instance->series_kind;
         }
         if (!sequence.aggregation) {
@@ -1091,6 +1137,18 @@ AlignmentResult AlignmentService::alignWindowData(
             total_values, "window data aligned");
     }
     return result;
+}
+
+AlignmentResult AlignmentService::alignWindowData(
+    const WindowData& window_data,
+    const AlignmentConfig& config,
+    const std::vector<RuntimeRelationConfig>& relations) const {
+    return alignWindowData(
+        window_data.project_id.empty() ? ProjectId{"default"} :
+            window_data.project_id,
+        window_data,
+        config,
+        relations);
 }
 
 }  // namespace sfkg::timeseries::core

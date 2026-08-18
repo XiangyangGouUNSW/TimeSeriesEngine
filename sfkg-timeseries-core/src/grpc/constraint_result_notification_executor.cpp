@@ -51,6 +51,7 @@ ConstraintResultNotificationExecutor::~ConstraintResultNotificationExecutor() {
 }
 
 OperationResult ConstraintResultNotificationExecutor::tryEnqueue(
+    const ProjectId& project_id,
     Timestamp check_time_ms,
     std::vector<std::string> violated_constraint_ids,
     std::vector<SequenceId> sequence_ids) {
@@ -74,6 +75,7 @@ OperationResult ConstraintResultNotificationExecutor::tryEnqueue(
             "constraint notification queue is full; retry later");
     }
     queue_.push_back({
+        project_id,
         check_time_ms,
         std::move(violated_constraint_ids),
         std::move(sequence_ids)});
@@ -81,6 +83,17 @@ OperationResult ConstraintResultNotificationExecutor::tryEnqueue(
     return internal::ok(
         queue_.back().violated_constraint_ids.size(),
         "constraint result notification queued");
+}
+
+OperationResult ConstraintResultNotificationExecutor::tryEnqueue(
+    Timestamp check_time_ms,
+    std::vector<std::string> violated_constraint_ids,
+    std::vector<SequenceId> sequence_ids) {
+    return tryEnqueue(
+        "default",
+        check_time_ms,
+        std::move(violated_constraint_ids),
+        std::move(sequence_ids));
 }
 
 void ConstraintResultNotificationExecutor::workerLoop() {
@@ -102,6 +115,7 @@ void ConstraintResultNotificationExecutor::workerLoop() {
         }
 
         const auto result = receiver_.receiveConstraintResult(
+            event.project_id,
             event.check_time_ms,
             event.violated_constraint_ids,
             event.sequence_ids);

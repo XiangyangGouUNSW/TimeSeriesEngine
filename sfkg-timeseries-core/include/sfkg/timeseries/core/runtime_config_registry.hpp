@@ -44,14 +44,32 @@ public:
         const RuntimeConfigSnapshot<RuntimeDerivedSeriesConfig>& snapshot);
 
     std::optional<RuntimeInstanceConfig> findInstance(
+        const ProjectId& project_id,
         const SequenceId& sequence_id) const;
+    std::optional<RuntimeInstanceConfig> findInstance(
+        const SequenceId& sequence_id) const;
+    std::optional<SequenceId> resolveSequenceId(
+        const ProjectId& project_id,
+        const std::string& data_source_id,
+        const std::string& external_sequence_id) const;
     std::optional<SequenceId> resolveSequenceId(
         const std::string& data_source_id,
         const std::string& external_sequence_id) const;
     std::optional<RuntimeRelationConfig> findRelation(
+        const ProjectId& project_id,
         const std::string& relation_id) const;
+    std::optional<RuntimeRelationConfig> findRelation(
+        const std::string& relation_id) const;
+    std::vector<RuntimeDerivedSeriesConfig> allDerivedSeries(
+        const ProjectId& project_id) const;
     std::vector<RuntimeDerivedSeriesConfig> allDerivedSeries() const;
     ConstraintLookupResult lookupConstraints(
+        const ProjectId& project_id,
+        const std::vector<std::string>& constraint_ids) const;
+    ConstraintLookupResult lookupConstraints(
+        const std::vector<std::string>& constraint_ids) const;
+    std::vector<ConstraintRule> enabledConstraints(
+        const ProjectId& project_id,
         const std::vector<std::string>& constraint_ids) const;
     std::vector<ConstraintRule> enabledConstraints(
         const std::vector<std::string>& constraint_ids) const;
@@ -59,13 +77,15 @@ public:
     // Returns a copied, read-only snapshot of every currently enabled rule.
     // The copy lets continuous ingest checks run without holding the
     // registry's shared lock while the constraint engine evaluates data.
+    std::vector<ConstraintRule> allEnabledConstraints(
+        const ProjectId& project_id) const;
     std::vector<ConstraintRule> allEnabledConstraints() const;
 
 private:
     // Readers may run concurrently; snapshot replacement takes the exclusive
     // lock so all related indexes become visible atomically.
     mutable std::shared_mutex mutex_;
-    std::unordered_map<SequenceId, RuntimeInstanceConfig>
+    std::unordered_map<std::string, RuntimeInstanceConfig>
         instance_configs_;
     std::unordered_map<std::string, SequenceId>
         external_sequence_index_;
@@ -73,7 +93,7 @@ private:
         constraints_;
     std::unordered_map<std::string, RuntimeRelationConfig>
         relations_;
-    std::unordered_map<SequenceId, RuntimeDerivedSeriesConfig>
+    std::unordered_map<std::string, RuntimeDerivedSeriesConfig>
         derived_series_;
 };
 

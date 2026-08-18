@@ -30,14 +30,15 @@ SFKG_CONSTRAINT_RESULT_RECEIVER_ADDRESS=222.29.156.142:9105 \
 ```bash
 ./scripts/run_grpc_ordered_load_test.sh \
   --address 127.0.0.1:50051 \
-  --sequences 32 \
-  --rows 50000 \
-  --batch-rows 300 \
-  --workers 1 \
+  --project-id throughput-project-a \
+  --sequences 1000 \
+  --rows 1000 \
+  --batch-rows 5 \
+  --workers 4 \
   --window-ms 36000000 \
   --sample-ms 1000 \
   --derived 4 \
-  --constraints 40
+  --constraints 20
 ```
 
 如果 Core 在另一台机器上，将 `--address` 改成 Core 的可访问地址。测试数据的序列 ID 会自动带一个本次运行唯一的前缀；也可以显式指定：
@@ -45,6 +46,7 @@ SFKG_CONSTRAINT_RESULT_RECEIVER_ADDRESS=222.29.156.142:9105 \
 ```bash
 ./build-taos/grpc_ordered_load_test \
   --address 192.168.1.20:50051 \
+  --project-id throughput-project-a \
   --prefix throughput-test-a \
   --sequences 64 \
   --rows 100000 \
@@ -62,6 +64,11 @@ SFKG_CONSTRAINT_RESULT_RECEIVER_ADDRESS=222.29.156.142:9105 \
 - `rows × sequences` 是本次测试精确提交的原始点数。
 
 约束使用宽安全范围，默认不会产生通知回调，但每次写入仍会执行约束检查；派生配置和约束数量可以通过命令行调整。
+
+`--project-id` 是本次测试使用的租户范围。测试客户端会把它同时写入配置同步请求、窗口配置
+请求和每个写入请求；不同项目可以复用相同的序列 ID，Core 仍会分别维护配置、热窗口和
+TDengine 原始数据。未指定时客户端使用 `grpc-ordered-load-test`，而不是与其他测试共享
+默认项目。
 
 ## 输出
 

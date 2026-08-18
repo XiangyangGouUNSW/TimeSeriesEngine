@@ -10,6 +10,9 @@ public:
         : configs_(configs) {}
 
     IngestResult ingestAndResolveData(
+        const ProjectId& project_id,
+        const std::vector<TimeseriesIngestData>& input) const;
+    IngestResult ingestAndResolveData(
         const std::vector<TimeseriesIngestData>& input) const;
 
 private:

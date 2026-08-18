@@ -44,6 +44,16 @@ constexpr std::size_t kSequenceTaskCorrectionCost = 4;
 constexpr std::size_t kSequenceTaskOversubscription = 2;
 constexpr std::size_t kMinimumSequenceGroupCost = 8;
 
+ProjectId effectiveProject(const ProjectId& project_id) {
+    return project_id.empty() ? ProjectId{"default"} : project_id;
+}
+
+std::string scopedSequenceKey(
+    const ProjectId& project_id,
+    const SequenceId& sequence_id) {
+    return effectiveProject(project_id) + '\x1e' + sequence_id;
+}
+
 template <typename Item, typename CostFunction>
 std::vector<std::vector<Item>> groupSequenceTasks(
     std::vector<Item> items,
@@ -301,22 +311,32 @@ void WindowService::compactSequence(SequenceWindow& sequence) {
     sequence.active_begin = 0;
 }
 
-std::int64_t WindowService::windowSize() const {
+std::int64_t WindowService::windowSize(const ProjectId& project_id) const {
     std::shared_lock lock(mutex_);
-    return window_size_;
+    const auto found = window_sizes_.find(effectiveProject(project_id));
+    return found == window_sizes_.end() ? kDefaultWindowSizeMs : found->second;
+}
+
+std::int64_t WindowService::windowSize() const {
+    return windowSize("default");
 }
 
 std::shared_ptr<WindowService::SequenceWindow>
-WindowService::sequenceWindowFor(const SequenceId& sequence_id) {
+WindowService::sequenceWindowFor(
+    const ProjectId& project_id,
+    const SequenceId& sequence_id) {
     std::unique_lock lock(mutex_);
-    auto& sequence = sequence_windows_[sequence_id];
+    auto& sequence = sequence_windows_[scopedSequenceKey(project_id, sequence_id)];
     if (!sequence) {
         sequence = std::make_shared<SequenceWindow>();
     }
     return sequence;
 }
 
-OperationResult WindowService::configureWindowSize(std::int64_t window_size) {
+OperationResult WindowService::configureWindowSize(
+    const ProjectId& project_id,
+    std::int64_t window_size) {
+    const auto scoped_project = effectiveProject(project_id);
     if (window_size <= 0) {
         return internal::invalidArgument(
             "window_size must be positive");
@@ -328,42 +348,70 @@ OperationResult WindowService::configureWindowSize(std::int64_t window_size) {
     bool has_watermark = false;
     {
         std::unique_lock lock(mutex_);
-        window_size_ = window_size;
-        has_watermark = watermark_.has_value();
+        window_sizes_[scoped_project] = window_size;
+        const auto watermark = watermarks_.find(scoped_project);
+        has_watermark = watermark != watermarks_.end();
         if (has_watermark) {
-            window_start = *watermark_ <
-                    std::numeric_limits<Timestamp>::min() + window_size_
+            window_start = watermark->second <
+                    std::numeric_limits<Timestamp>::min() + window_size
                 ? std::numeric_limits<Timestamp>::min()
-                : *watermark_ - window_size_;
+                : watermark->second - window_size;
         }
         sequences.reserve(sequence_windows_.size());
-        for (const auto& [sequence_id, sequence] : sequence_windows_) {
-            sequences.emplace_back(sequence_id, sequence);
+        const auto prefix = scoped_project + '\x1e';
+        for (const auto& [sequence_key, sequence] : sequence_windows_) {
+            if (sequence_key.rfind(prefix, 0) == 0) {
+                sequences.emplace_back(sequence_key, sequence);
+            }
         }
     }
     if (!sequences.empty() && has_watermark) {
-        (void)pruneExpiredPoints(window_start, sequences);
+        (void)pruneExpiredPoints(scoped_project, window_start, sequences);
     }
     return internal::ok(0, "hot window size configured");
 }
 
+OperationResult WindowService::configureWindowSize(std::int64_t window_size) {
+    return configureWindowSize("default", window_size);
+}
+
 OperationResult WindowService::buildTimeWindow(
     const TimeseriesBatch& data) {
-    return updateWindowIncremental(data, std::nullopt).operation;
+    return updateWindowIncremental(data.project_id, data, std::nullopt).operation;
+}
+
+OperationResult WindowService::buildTimeWindow(
+    const ProjectId& project_id,
+    const TimeseriesBatch& data) {
+    return updateWindowIncremental(project_id, data, std::nullopt).operation;
+}
+
+OperationResult WindowService::buildTimeWindow(
+    const ProjectId& project_id,
+    const TimeseriesBatch& data,
+    std::int64_t window_size) {
+    return updateWindowIncremental(project_id, data, window_size).operation;
 }
 
 OperationResult WindowService::buildTimeWindow(
     const TimeseriesBatch& data,
     std::int64_t window_size) {
-    return updateWindowIncremental(data, window_size).operation;
+    return buildTimeWindow(data.project_id, data, window_size);
+}
+
+WindowUpdateResult WindowService::buildTimeWindowIncremental(
+    const ProjectId& project_id,
+    const TimeseriesBatch& data) {
+    return updateWindowIncremental(project_id, data, std::nullopt);
 }
 
 WindowUpdateResult WindowService::buildTimeWindowIncremental(
     const TimeseriesBatch& data) {
-    return updateWindowIncremental(data, std::nullopt);
+    return buildTimeWindowIncremental(data.project_id, data);
 }
 
 OperationResult WindowService::replaceDerivedSequence(
+    const ProjectId& project_id,
     const SequenceId& sequence_id,
     const TimeseriesBatch& data) {
     if (sequence_id.empty()) {
@@ -377,7 +425,7 @@ OperationResult WindowService::replaceDerivedSequence(
         }
     }
 
-    const auto output = sequenceWindowFor(sequence_id);
+    const auto output = sequenceWindowFor(project_id, sequence_id);
     {
         std::unique_lock lock(output->mutex);
         replaceSequence(*output, data);
@@ -388,24 +436,36 @@ OperationResult WindowService::replaceDerivedSequence(
     bool has_watermark = false;
     {
         std::shared_lock lock(mutex_);
-        has_watermark = watermark_.has_value();
+        const auto watermark = watermarks_.find(effectiveProject(project_id));
+        has_watermark = watermark != watermarks_.end();
         if (has_watermark) {
-            window_start = *watermark_ <
-                    std::numeric_limits<Timestamp>::min() + window_size_
+            const auto window_size = windowSize(project_id);
+            window_start = watermark->second <
+                    std::numeric_limits<Timestamp>::min() + window_size
                 ? std::numeric_limits<Timestamp>::min()
-                : *watermark_ - window_size_;
+                : watermark->second - window_size;
         }
+        const auto prefix = effectiveProject(project_id) + '\x1e';
         for (const auto& [id, sequence] : sequence_windows_) {
-            sequences.emplace_back(id, sequence);
+            if (id.rfind(prefix, 0) == 0) {
+                sequences.emplace_back(id, sequence);
+            }
         }
     }
     if (has_watermark) {
-        (void)pruneExpiredPoints(window_start, sequences);
+        (void)pruneExpiredPoints(project_id, window_start, sequences);
     }
     return internal::ok(data.points.size(), "derived hot window replaced");
 }
 
+OperationResult WindowService::replaceDerivedSequence(
+    const SequenceId& sequence_id,
+    const TimeseriesBatch& data) {
+    return replaceDerivedSequence(data.project_id, sequence_id, data);
+}
+
 OperationResult WindowService::patchDerivedSequence(
+    const ProjectId& project_id,
     const SequenceId& sequence_id,
     Timestamp start_time,
     Timestamp end_time,
@@ -429,7 +489,7 @@ OperationResult WindowService::patchDerivedSequence(
         }
     }
 
-    const auto output = sequenceWindowFor(sequence_id);
+    const auto output = sequenceWindowFor(project_id, sequence_id);
     std::unique_lock lock(output->mutex);
     auto& points = *output;
     flushLatePoints(points);
@@ -476,16 +536,35 @@ OperationResult WindowService::patchDerivedSequence(
     return internal::ok(data.points.size(), "derived hot window patched");
 }
 
+OperationResult WindowService::patchDerivedSequence(
+    const SequenceId& sequence_id,
+    Timestamp start_time,
+    Timestamp end_time,
+    const TimeseriesBatch& data) {
+    return patchDerivedSequence(
+        data.project_id, sequence_id, start_time, end_time, data);
+}
+
+OperationResult WindowService::updateWindow(
+    const ProjectId& project_id,
+    const TimeseriesBatch& data,
+    std::optional<std::int64_t> window_size_override) {
+    return updateWindowIncremental(project_id, data, window_size_override).operation;
+}
+
 OperationResult WindowService::updateWindow(
     const TimeseriesBatch& data,
     std::optional<std::int64_t> window_size_override) {
-    return updateWindowIncremental(data, window_size_override).operation;
+    return updateWindow(data.project_id, data, window_size_override);
 }
 
 WindowUpdateResult WindowService::updateWindowIncremental(
+    const ProjectId& project_id,
     const TimeseriesBatch& data,
     std::optional<std::int64_t> window_size_override) {
+    const auto scoped_project = effectiveProject(project_id);
     WindowUpdateResult result;
+    result.project_id = scoped_project;
     if (data.points.empty()) {
         result.operation = internal::invalidArgument(
             "window input must not be empty");
@@ -541,36 +620,48 @@ WindowUpdateResult WindowService::updateWindowIncremental(
     {
         std::unique_lock lock(mutex_);
         if (window_size_override) {
-            window_size_ = *window_size_override;
+            window_sizes_[scoped_project] = *window_size_override;
         }
+        const bool had_watermark =
+            watermarks_.find(scoped_project) != watermarks_.end();
+        auto& watermark = watermarks_[scoped_project];
         for (const auto& point : data.points) {
-            if (!watermark_ || point.time > *watermark_) {
-                watermark_ = point.time;
+            if (!had_watermark ||
+                point.time > watermark) {
+                watermark = point.time;
             }
         }
-        if (update_generation_ != std::numeric_limits<std::uint64_t>::max()) {
-            ++update_generation_;
+        auto& update_generation = update_generations_[scoped_project];
+        if (update_generation != std::numeric_limits<std::uint64_t>::max()) {
+            ++update_generation;
         }
-        result.update_generation = update_generation_;
-        if (watermark_) {
-            window_start = *watermark_ <
-                    std::numeric_limits<Timestamp>::min() + window_size_
+        result.update_generation = update_generation;
+        const auto window_size = window_sizes_.count(scoped_project) != 0
+            ? window_sizes_.at(scoped_project)
+            : kDefaultWindowSizeMs;
+        if (watermarks_.find(scoped_project) != watermarks_.end()) {
+            window_start = watermark <
+                    std::numeric_limits<Timestamp>::min() + window_size
                 ? std::numeric_limits<Timestamp>::min()
-                : *watermark_ - window_size_;
+                : watermark - window_size;
             result.window_start_time = window_start;
         }
         sequence_refs.reserve(incoming_by_sequence.size());
         for (const auto& [sequence_id, points] : incoming_by_sequence) {
             (void)points;
-            auto& sequence = sequence_windows_[sequence_id];
+            auto& sequence = sequence_windows_[
+                scopedSequenceKey(scoped_project, sequence_id)];
             if (!sequence) {
                 sequence = std::make_shared<SequenceWindow>();
             }
             sequence_refs.emplace(sequence_id, sequence);
         }
-        all_sequences.reserve(sequence_windows_.size());
-        for (const auto& [sequence_id, sequence] : sequence_windows_) {
-            all_sequences.emplace_back(sequence_id, sequence);
+        const auto prefix = scoped_project + '\x1e';
+        for (const auto& [sequence_key, sequence] : sequence_windows_) {
+            if (sequence_key.rfind(prefix, 0) == 0) {
+                all_sequences.emplace_back(
+                    sequence_key.substr(prefix.size()), sequence);
+            }
         }
     }
 
@@ -737,6 +828,7 @@ WindowUpdateResult WindowService::updateWindowIncremental(
     // the per-sequence update work above can run concurrently.
     std::unordered_set<SequenceId> evicted_sequence_ids;
     result.window_evicted = pruneExpiredPoints(
+        scoped_project,
         window_start,
         all_sequences,
         &evicted_sequence_ids,
@@ -772,6 +864,7 @@ WindowUpdateResult WindowService::updateWindowIncremental(
 }
 
 bool WindowService::pruneExpiredPoints(
+    const ProjectId& project_id,
     Timestamp start,
     const std::vector<std::pair<SequenceId, std::shared_ptr<SequenceWindow>>>&
         sequences,
@@ -781,6 +874,7 @@ bool WindowService::pruneExpiredPoints(
     if (sequences.empty()) {
         return false;
     }
+    (void)project_id;
 
     // Eviction touches independent per-sequence buffers.  Keep the global
     // metadata lock out of this phase and let each sequence use its own lock;
@@ -896,8 +990,11 @@ bool WindowService::pruneExpiredPoints(
 }
 
 WindowQueryResult WindowService::queryWindowData(
+    const ProjectId& project_id,
     const WindowQuery& query) const {
     WindowQueryResult result;
+    result.project_id = effectiveProject(project_id);
+    result.data.project_id = result.project_id;
     if (query.sequence_ids.empty()) {
         result.operation = internal::invalidArgument(
             "window query sequence_ids must not be empty");
@@ -916,11 +1013,18 @@ WindowQueryResult WindowService::queryWindowData(
     std::int64_t window_size = 0;
     {
         std::shared_lock lock(mutex_);
-        watermark = watermark_;
-        window_size = window_size_;
+        const auto watermark_found = watermarks_.find(result.project_id);
+        if (watermark_found != watermarks_.end()) {
+            watermark = watermark_found->second;
+        }
+        const auto size_found = window_sizes_.find(result.project_id);
+        window_size = size_found == window_sizes_.end()
+            ? kDefaultWindowSizeMs
+            : size_found->second;
         sequences.reserve(query.sequence_ids.size());
         for (const auto& sequence_id : query.sequence_ids) {
-            const auto found = sequence_windows_.find(sequence_id);
+            const auto found = sequence_windows_.find(
+                scopedSequenceKey(result.project_id, sequence_id));
             if (found != sequence_windows_.end() && found->second) {
                 sequences.emplace_back(sequence_id, found->second);
             }
@@ -1074,6 +1178,11 @@ WindowQueryResult WindowService::queryWindowData(
     }
     result.operation = internal::ok(count, "window query completed");
     return result;
+}
+
+WindowQueryResult WindowService::queryWindowData(
+    const WindowQuery& query) const {
+    return queryWindowData(query.project_id, query);
 }
 
 }  // namespace sfkg::timeseries::core

@@ -27,8 +27,11 @@ TimeseriesValueKind valueKindForDataType(const std::string& data_type) {
 }  // namespace
 
 HistoryQueryResult HistoryQueryService::queryHistoryData(
+    const ProjectId& project_id,
     const HistoryQuery& query) const {
     HistoryQueryResult result;
+    result.project_id = project_id;
+    result.data.project_id = project_id;
     std::unordered_map<SequenceId, TimeseriesValueKind> value_kinds;
     if (query.sequence_ids.empty() || query.start_time > query.end_time) {
         result.operation = internal::invalidArgument(
@@ -41,7 +44,7 @@ HistoryQueryResult HistoryQueryService::queryHistoryData(
                 "sequence_id must not be empty");
             return result;
         }
-        const auto config = configs_.findInstance(sequence_id);
+        const auto config = configs_.findInstance(project_id, sequence_id);
         if (!config) {
             result.operation = internal::makeOperationResult(
                 OperationCode::NotFound, 0, 0,
@@ -52,6 +55,7 @@ HistoryQueryResult HistoryQueryService::queryHistoryData(
             sequence_id, valueKindForDataType(config->data_type));
     }
     result.operation = taos_client_.queryRaw(
+        project_id,
         query.sequence_ids,
         query.start_time,
         query.end_time,
@@ -61,9 +65,19 @@ HistoryQueryResult HistoryQueryService::queryHistoryData(
     return result;
 }
 
+HistoryQueryResult HistoryQueryService::queryHistoryData(
+    const HistoryQuery& query) const {
+    return queryHistoryData(
+        query.project_id.empty() ? ProjectId{"default"} : query.project_id,
+        query);
+}
+
 HistoryOverviewResult HistoryQueryService::queryHistoryOverview(
+    const ProjectId& project_id,
     const HistoryOverviewQuery& query) const {
     HistoryOverviewResult result;
+    result.project_id = project_id;
+    result.overview.project_id = project_id;
     if (query.start_time && query.end_time &&
         *query.start_time > *query.end_time) {
         result.operation = internal::invalidArgument(
@@ -76,7 +90,7 @@ HistoryOverviewResult HistoryQueryService::queryHistoryOverview(
                 "sequence_id must not be empty");
             return result;
         }
-        if (!configs_.findInstance(sequence_id)) {
+        if (!configs_.findInstance(project_id, sequence_id)) {
             result.operation = internal::makeOperationResult(
                 OperationCode::NotFound, 0, 0,
                 "sequence is not registered: " + sequence_id);
@@ -84,8 +98,16 @@ HistoryOverviewResult HistoryQueryService::queryHistoryOverview(
         }
     }
     result.operation = taos_client_.queryHistoryOverview(
+        project_id,
         query, &result.overview);
     return result;
+}
+
+HistoryOverviewResult HistoryQueryService::queryHistoryOverview(
+    const HistoryOverviewQuery& query) const {
+    return queryHistoryOverview(
+        query.project_id.empty() ? ProjectId{"default"} : query.project_id,
+        query);
 }
 
 }  // namespace sfkg::timeseries::core

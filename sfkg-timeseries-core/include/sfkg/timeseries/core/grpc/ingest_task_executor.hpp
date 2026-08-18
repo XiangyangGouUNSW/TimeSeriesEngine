@@ -64,7 +64,9 @@ private:
 
     void coldWorkerLoop(std::size_t worker_index);
     void hotWorkerLoop();
-    std::size_t writerForSequence(const SequenceId& sequence_id);
+    std::size_t writerForSequence(
+        const ProjectId& project_id,
+        const SequenceId& sequence_id);
     void completeCold(
         const std::shared_ptr<Task>& task,
         OperationResult result);
@@ -78,13 +80,13 @@ private:
     // This preserves same-sequence write serialization without relying on
     // the distribution quality of std::hash for a small sequence set.
     std::mutex routing_mutex_;
-    std::unordered_map<SequenceId, std::size_t> sequence_writers_;
+    std::unordered_map<std::string, std::size_t> sequence_writers_;
     std::size_t next_writer_index_{0};
     // The last accepted hot task for each sequence. A later task waits for
     // these futures before entering the hot pipeline, preserving submission
     // order for overlapping sequences while disjoint sequences still run on
     // different hot workers.
-    std::unordered_map<SequenceId, std::shared_future<void>>
+    std::unordered_map<std::string, std::shared_future<void>>
         sequence_hot_tails_;
     std::condition_variable queue_condition_;
     const std::size_t cold_worker_count_;

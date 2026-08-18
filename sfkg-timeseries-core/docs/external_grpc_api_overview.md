@@ -1,4 +1,8 @@
-# 派生序列对外接口说明
+# 派生序列对外接口说明（专题）
+
+> 完整的 Core 对外对接清单（所有 gRPC、Proto、C++ 函数、环境变量和生命周期）请参阅
+> [`external_integration_interface_catalog.md`](external_integration_interface_catalog.md)。
+> 本文只保留派生序列的专题解释和示例。
 
 本文只说明最近新增的派生序列功能。完整字段定义以
 [`proto/timeseries_core.proto`](../proto/timeseries_core.proto) 为准。

@@ -13,7 +13,12 @@ public:
         : configs_(configs), taos_client_(taos_client) {}
 
     HistoryQueryResult queryHistoryData(
+        const ProjectId& project_id,
         const HistoryQuery& query) const;
+    HistoryQueryResult queryHistoryData(const HistoryQuery& query) const;
+    HistoryOverviewResult queryHistoryOverview(
+        const ProjectId& project_id,
+        const HistoryOverviewQuery& query) const;
     HistoryOverviewResult queryHistoryOverview(
         const HistoryOverviewQuery& query) const;
 

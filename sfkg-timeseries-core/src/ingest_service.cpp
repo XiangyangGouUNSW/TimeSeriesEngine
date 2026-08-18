@@ -38,8 +38,11 @@ bool valueMatchesDataType(
 }  // namespace
 
 IngestResult IngestService::ingestAndResolveData(
+    const ProjectId& project_id,
     const std::vector<TimeseriesIngestData>& input) const {
     IngestResult result;
+    result.project_id = project_id;
+    result.resolved_data.project_id = project_id;
     if (input.empty()) {
         result.operation = internal::invalidArgument(
             "ingest points must not be empty");
@@ -60,8 +63,8 @@ IngestResult IngestService::ingestAndResolveData(
         if (point.sequence_id) {
             if (point.sequence_id->empty()) {
                 error = "sequence_id must not be empty";
-            } else if (!(instance_config = configs_.findInstance(
-                             *point.sequence_id))) {
+                    } else if (!(instance_config = configs_.findInstance(
+                             project_id, *point.sequence_id))) {
                 error = "sequence is not registered: " + *point.sequence_id;
                 error_code = OperationCode::NotFound;
             } else {
@@ -69,6 +72,7 @@ IngestResult IngestService::ingestAndResolveData(
                 if (!point.data_source_id.empty() &&
                     !point.external_sequence_id.empty()) {
                     const auto mapped = configs_.resolveSequenceId(
+                        project_id,
                         point.data_source_id, point.external_sequence_id);
                     if (!mapped || *mapped != *point.sequence_id) {
                         error =
@@ -84,6 +88,7 @@ IngestResult IngestService::ingestAndResolveData(
                     "sequence_id or both external identifiers are required";
             } else {
                 resolved_sequence_id = configs_.resolveSequenceId(
+                    project_id,
                     point.data_source_id, point.external_sequence_id);
                 if (!resolved_sequence_id) {
                     error = "sequence is not registered for external identifiers: " +
@@ -91,6 +96,7 @@ IngestResult IngestService::ingestAndResolveData(
                     error_code = OperationCode::NotFound;
                 } else {
                     instance_config = configs_.findInstance(
+                        project_id,
                         *resolved_sequence_id);
                 }
             }
@@ -119,7 +125,7 @@ IngestResult IngestService::ingestAndResolveData(
         }
 
         result.resolved_data.points.push_back({
-            point.time, *resolved_sequence_id, point.value});
+            point.time, *resolved_sequence_id, point.value, project_id});
     }
 
     const auto success_count = result.resolved_data.points.size();
@@ -140,6 +146,14 @@ IngestResult IngestService::ingestAndResolveData(
             success_count, "ingest points resolved");
     }
     return result;
+}
+
+IngestResult IngestService::ingestAndResolveData(
+    const std::vector<TimeseriesIngestData>& input) const {
+    const auto project_id = input.empty() || input.front().project_id.empty()
+        ? ProjectId{"default"}
+        : input.front().project_id;
+    return ingestAndResolveData(project_id, input);
 }
 
 }  // namespace sfkg::timeseries::core

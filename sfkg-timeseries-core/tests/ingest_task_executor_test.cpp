@@ -100,13 +100,15 @@ int main() {
     // deliberately sleeping; its sequence dependency must keep it waiting.
     setenv("SFKG_INGEST_HOT_WORKERS", "2", 1);
     setenv("SFKG_INGEST_QUEUE_CAPACITY", "8", 1);
+    // The executor must be destroyed before the window service it calls.
+    // Keep this declaration order in sync with that dependency.
+    core::WindowService ordered_window;
     grpc_core::IngestTaskExecutor ordered_executor;
     std::atomic<bool> first_hot_started{false};
     std::atomic<bool> first_hot_finished{false};
     std::atomic<bool> second_ran_before_first_finished{false};
     std::atomic<bool> first_incremental_safe{false};
     std::atomic<bool> second_incremental_safe{false};
-    core::WindowService ordered_window;
     assert(ordered_window.configureWindowSize(1'000).code ==
            core::OperationCode::Ok);
     const auto make_resolved = [](core::Timestamp time) {
