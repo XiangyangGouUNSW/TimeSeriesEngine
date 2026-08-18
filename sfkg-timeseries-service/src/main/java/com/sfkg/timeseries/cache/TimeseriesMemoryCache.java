@@ -45,7 +45,6 @@ public class TimeseriesMemoryCache {
     // ── Map indexes for fast lookup ───────────────────────────────────
     private final Map<String, TimeseriesInstanceConfig> instanceBySequenceId = new ConcurrentHashMap<>();
     private final Map<String, TimeseriesConstraint> constraintByConstraintId = new ConcurrentHashMap<>();
-    private final Map<String, List<TimeseriesConstraint>> constraintsByCategoryId = new ConcurrentHashMap<>();
     private final Map<String, TimeseriesRelation> relationByRelationId = new ConcurrentHashMap<>();
     private final Map<String, List<TimeseriesRelation>> relationsByTargetSequenceId = new ConcurrentHashMap<>();
     private final Map<String, List<TimeseriesRelation>> relationsBySourceSequenceId = new ConcurrentHashMap<>();
@@ -82,7 +81,7 @@ public class TimeseriesMemoryCache {
         switch (table) {
             case INSTANCE_CONFIG -> { instanceConfigs.clear(); instanceBySequenceId.clear(); }
             case CATEGORY -> categories.clear();
-            case CONSTRAINT -> { constraints.clear(); constraintByConstraintId.clear(); constraintsByCategoryId.clear(); }
+            case CONSTRAINT -> { constraints.clear(); constraintByConstraintId.clear(); }
             case RELATION -> { relations.clear(); relationByRelationId.clear(); relationsByTargetSequenceId.clear(); relationsBySourceSequenceId.clear(); }
             case EVENT -> { events.clear(); eventsByEventId.clear(); }
             case ANOMALY_TASK -> anomalyTasks.clear();
@@ -197,7 +196,6 @@ public class TimeseriesMemoryCache {
             if (result != null && result.getConstraintId() != null) {
                 upsert(constraints, item -> result.getConstraintId().equals(item.getConstraintId()), result);
                 constraintByConstraintId.put(result.getConstraintId(), result);
-                rebuildConstraintsByCategoryId();
                 markLoaded(CachedTable.CONSTRAINT);
             }
             return result;
@@ -209,7 +207,6 @@ public class TimeseriesMemoryCache {
             synchronized (constraintLock) {
                 upsert(constraints, item -> entity.getConstraintId().equals(item.getConstraintId()), entity);
                 constraintByConstraintId.put(entity.getConstraintId(), entity);
-                rebuildConstraintsByCategoryId();
                 markLoaded(CachedTable.CONSTRAINT);
             }
         }
@@ -512,12 +509,6 @@ public class TimeseriesMemoryCache {
         return sequenceId != null ? instanceBySequenceId.get(sequenceId) : null;
     }
 
-    public List<TimeseriesConstraint> listConstraintsByCategoryId(String categoryId) {
-        return categoryId != null && constraintsByCategoryId.containsKey(categoryId)
-                ? List.copyOf(constraintsByCategoryId.get(categoryId))
-                : List.of();
-    }
-
     public TimeseriesRelation getRelationByRelationId(String relationId) {
         return relationId != null ? relationByRelationId.get(relationId) : null;
     }
@@ -561,19 +552,8 @@ public class TimeseriesMemoryCache {
 
     private void rebuildConstraintIndexes() {
         constraintByConstraintId.clear();
-        constraintsByCategoryId.clear();
         constraints.forEach(c -> {
             if (c.getConstraintId() != null) constraintByConstraintId.put(c.getConstraintId(), c);
-        });
-        rebuildConstraintsByCategoryId();
-    }
-
-    private void rebuildConstraintsByCategoryId() {
-        constraintsByCategoryId.clear();
-        constraints.forEach(c -> {
-            if (c.getCategoryId() != null) {
-                constraintsByCategoryId.computeIfAbsent(c.getCategoryId(), k -> new CopyOnWriteArrayList<>()).add(c);
-            }
         });
     }
 

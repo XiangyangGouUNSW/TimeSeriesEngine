@@ -68,7 +68,6 @@ public class TimeseriesConstraintFileMapper implements TimeseriesConstraintMappe
         }
         return equalsIfPresent(request.getConstraintId(), entity.getConstraintId())
                 && containsIfPresent(request.getConstraintName(), entity.getConstraintName())
-                && equalsIfPresent(request.getCategoryId(), entity.getCategoryId())
                 && equalsTextIfPresent(request.getEffectiveStatus(), entity.getEffectiveStatus())
                 && equalsTextIfPresent(request.getConfirmStatus(), entity.getConfirmStatus())
                 && matchesKeyword(request.getKeyword(), entity);

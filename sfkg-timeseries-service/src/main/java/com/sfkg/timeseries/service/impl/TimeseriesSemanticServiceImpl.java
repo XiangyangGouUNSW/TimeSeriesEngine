@@ -532,7 +532,6 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         }
         return equalsIfPresent(request.getConstraintId(), entity.getConstraintId())
                 && containsIfPresent(request.getConstraintName(), entity.getConstraintName())
-                && equalsIfPresent(request.getCategoryId(), entity.getCategoryId())
                 && equalsTextIfPresent(request.getEffectiveStatus(), entity.getEffectiveStatus())
                 && equalsTextIfPresent(request.getConfirmStatus(), entity.getConfirmStatus())
                 && matchesConstraintKeyword(request.getKeyword(), entity);

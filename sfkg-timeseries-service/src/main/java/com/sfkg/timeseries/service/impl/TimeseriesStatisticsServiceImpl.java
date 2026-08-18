@@ -59,15 +59,9 @@ public class TimeseriesStatisticsServiceImpl implements TimeseriesStatisticsServ
 
         List<String> relationIds = resolveRelationIds(request, sequenceIds);
 
-        AlignedWindowData aligned = coreGrpcClient.alignWindowData(
+        ComputeStatisticsResponse response = alignAndCompute(
                 sequenceIds, request.getDependentSequenceId(), relationIds,
                 request.getStartTime(), request.getEndTime());
-        if (aligned == null || aligned.getSamplesCount() == 0) {
-            throw new BusinessException("statistics: alignWindowData returned empty data");
-        }
-
-        ComputeStatisticsResponse response = computeStatistics(
-                aligned, sequenceIds, request.getDependentSequenceId(), relationIds);
         if (response == null) {
             throw new BusinessException("statistics: computeBasicStatistics failed");
         }
@@ -106,19 +100,38 @@ public class TimeseriesStatisticsServiceImpl implements TimeseriesStatisticsServ
         return new ArrayList<>(new java.util.LinkedHashSet<>(expanded));
     }
 
-    private ComputeStatisticsResponse computeStatistics(
-            AlignedWindowData aligned, List<String> sequenceIds,
-            String dependentSequenceId, List<String> relationIds) {
+    /**
+     * Align the window and compute statistics. Core requires a unique target
+     * sequence per {@code alignWindowData} call, so when multiple relations
+     * share the same dependent (target) we align and compute one relation at a
+     * time and merge the resulting correlation vectors.
+     */
+    private ComputeStatisticsResponse alignAndCompute(
+            List<String> sequenceIds, String dependentSequenceId, List<String> relationIds,
+            LocalDateTime startTime, LocalDateTime endTime) {
         if (relationIds == null || relationIds.isEmpty()) {
             // Metrics only; Core computes no correlation vector without a relation.
+            AlignedWindowData aligned = coreGrpcClient.alignWindowData(
+                    sequenceIds, dependentSequenceId, List.of(), startTime, endTime);
+            if (aligned == null || aligned.getSamplesCount() == 0) {
+                throw new BusinessException("statistics: alignWindowData returned empty data");
+            }
             return coreGrpcClient.computeBasicStatistics(
                     aligned, sequenceIds, dependentSequenceId, null);
         }
+
         ComputeStatisticsResponse merged = null;
         for (String relationId : relationIds) {
+            AlignedWindowData aligned = coreGrpcClient.alignWindowData(
+                    sequenceIds, dependentSequenceId, List.of(relationId), startTime, endTime);
+            if (aligned == null || aligned.getSamplesCount() == 0) {
+                LOG.warn("[statistics] alignWindowData returned empty data for relation={}, skip", relationId);
+                continue;
+            }
             ComputeStatisticsResponse response = coreGrpcClient.computeBasicStatistics(
                     aligned, sequenceIds, dependentSequenceId, relationId);
             if (response == null) {
+                LOG.warn("[statistics] computeBasicStatistics failed for relation={}, skip", relationId);
                 continue;
             }
             if (merged == null) {

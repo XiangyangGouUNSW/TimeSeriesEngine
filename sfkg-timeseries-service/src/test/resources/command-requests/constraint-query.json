@@ -1,7 +1,6 @@
 {
   "constraintId": "5001",
   "constraintName": "temperature upper limit",
-  "categoryId": "2001",
   "effectiveStatus": "ENABLE",
   "confirmStatus": "CONFIRMED",
   "keyword": "temperature"

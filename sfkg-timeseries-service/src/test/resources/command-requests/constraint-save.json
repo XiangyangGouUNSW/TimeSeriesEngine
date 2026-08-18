@@ -1,7 +1,6 @@
 {
   "constraintId": "constraint-5001",
   "constraintName": "temperature upper limit",
-  "categoryId": "temperature",
   "variableMapping": {
     "x": "temperature-1"
   },

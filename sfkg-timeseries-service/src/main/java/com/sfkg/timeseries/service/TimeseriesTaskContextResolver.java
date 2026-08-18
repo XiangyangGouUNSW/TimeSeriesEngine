@@ -22,9 +22,13 @@ import com.sfkg.timeseries.grpc.SequenceRelation;
 public class TimeseriesTaskContextResolver {
 
     private final TimeseriesMemoryCache memoryCache;
+    private final TimeseriesConstraintExpansionResolver constraintExpansionResolver;
 
-    public TimeseriesTaskContextResolver(TimeseriesMemoryCache memoryCache) {
+    public TimeseriesTaskContextResolver(
+            TimeseriesMemoryCache memoryCache,
+            TimeseriesConstraintExpansionResolver constraintExpansionResolver) {
         this.memoryCache = memoryCache;
+        this.constraintExpansionResolver = constraintExpansionResolver;
     }
 
     public Set<String> resolveForecastFeatureIds(TimeseriesForecastTask task) {
@@ -61,12 +65,19 @@ public class TimeseriesTaskContextResolver {
         // relations — discovered by sequenceId AND categoryId, expanded to concrete pairs
         ctx.addAllRelations(collectExpandedRelations(new HashSet<>(seqIds)));
 
-        // constraint ids — 前端传入 + auto-discovered
-        Set<String> constraintIds = collectConstraintIds(seqIds, task.getConstraintIds());
+        // feature sequences from relations (category-level also expanded)
+        List<TimeseriesInstanceConfig> featureInstances = expandFeatureSequences(seqIds);
+        Set<String> contextSeqIds = new HashSet<>(seqIds);
+        featureInstances.stream()
+                .map(TimeseriesInstanceConfig::getSequenceId)
+                .filter(id -> id != null && !id.isBlank())
+                .forEach(contextSeqIds::add);
+
+        // constraint ids — expanded to the exact Core-side constraint_id values
+        Set<String> constraintIds = collectConstraintIds(seqIds, contextSeqIds, task.getConstraintIds());
         ctx.addAllConstraintIds(constraintIds);
 
-        // feature sequences from relations (category-level also expanded)
-        for (TimeseriesInstanceConfig srcInst : expandFeatureSequences(seqIds)) {
+        for (TimeseriesInstanceConfig srcInst : featureInstances) {
             ctx.addSequences(toSequenceMetadata(srcInst, "FEATURE"));
         }
 
@@ -108,8 +119,11 @@ public class TimeseriesTaskContextResolver {
         candidateIds.addAll(autoFeatures);
         ctx.addAllRelations(collectExpandedRelations(candidateIds));
 
-        // constraint ids
-        Set<String> constraintIds = collectConstraintIds(targetIds, task.getConstraintIds());
+        Set<String> contextSeqIds = new HashSet<>(targetIds);
+        contextSeqIds.addAll(autoFeatures);
+
+        // constraint ids — expanded to the exact Core-side constraint_id values
+        Set<String> constraintIds = collectConstraintIds(targetIds, contextSeqIds, task.getConstraintIds());
         ctx.addAllConstraintIds(constraintIds);
 
         ctx.setKnowledgeVersion(String.valueOf(System.currentTimeMillis()));
@@ -271,47 +285,44 @@ public class TimeseriesTaskContextResolver {
 
     /**
      * Collect constraint IDs matching the task's sequences.
-     * 1. Explicitly specified by the caller
-     * 2. Discovered via categoryId lookup
-     * 3. Discovered via variableMapping value match (cross-category constraints)
+     * The returned IDs are the expanded Core-side constraint_id values, so P can
+     * call Core constraint checking with exact IDs.
      */
-    private Set<String> collectConstraintIds(List<String> seqIds, java.util.Collection<String> explicitIds) {
+    private Set<String> collectConstraintIds(
+            List<String> targetSeqIds,
+            Collection<String> contextSeqIds,
+            Collection<String> explicitIds) {
+
         Set<String> result = new HashSet<>();
+        Set<String> explicitOriginalIds = explicitIds != null ? new HashSet<>(explicitIds) : Set.of();
+
         if (explicitIds != null) {
-            result.addAll(explicitIds);
+            for (String constraintId : explicitIds) {
+                TimeseriesConstraint constraint = memoryCache.getConstraint(constraintId).orElse(null);
+                if (isConstraintActive(constraint)) {
+                    result.addAll(constraintExpansionResolver.expandConstraintIdsForContext(
+                            constraint, targetSeqIds, contextSeqIds, true));
+                }
+            }
         }
 
-        Set<String> seqIdSet = new HashSet<>(seqIds);
         for (TimeseriesConstraint c : memoryCache.listConstraints()) {
-            if (!"ENABLE".equalsIgnoreCase(c.getEffectiveStatus())
-                    || !"CONFIRMED".equalsIgnoreCase(c.getConfirmStatus())
-                    || c.getConstraintId() == null) {
+            if (!isConstraintActive(c) || explicitOriginalIds.contains(c.getConstraintId())) {
                 continue;
             }
-            // match by categoryId
-            boolean matched = false;
-            for (String seqId : seqIds) {
-                TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(seqId);
-                if (inst != null && c.getCategoryId() != null
-                        && c.getCategoryId().equals(inst.getCategoryId())) {
-                    matched = true;
-                    break;
-                }
-            }
-            // match by variableMapping values (cross-category)
-            if (!matched && c.getVariableMapping() != null) {
-                for (String mappedSeqId : c.getVariableMapping().values()) {
-                    if (seqIdSet.contains(mappedSeqId)) {
-                        matched = true;
-                        break;
-                    }
-                }
-            }
-            if (matched) {
-                result.add(c.getConstraintId());
-            }
+            result.addAll(constraintExpansionResolver.expandConstraintIdsForContext(
+                    c, targetSeqIds, contextSeqIds, false));
         }
         return result;
+    }
+
+    private boolean isConstraintActive(TimeseriesConstraint constraint) {
+        if (constraint == null || constraint.getConstraintId() == null) {
+            return false;
+        }
+        return ("ENABLE".equalsIgnoreCase(constraint.getEffectiveStatus())
+                || "ENABLED".equalsIgnoreCase(constraint.getEffectiveStatus()))
+                && "CONFIRMED".equalsIgnoreCase(constraint.getConfirmStatus());
     }
 
     private boolean isRelationEnabled(TimeseriesRelation rel) {

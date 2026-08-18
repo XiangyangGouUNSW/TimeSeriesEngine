@@ -175,8 +175,7 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
                 if (constraint == null) {
                     throw new BusinessException("constraint not found: " + constraintId);
                 }
-                if (!"ENABLE".equalsIgnoreCase(constraint.getEffectiveStatus())
-                        || !"CONFIRMED".equalsIgnoreCase(constraint.getConfirmStatus())) {
+                if (!isConstraintActive(constraint)) {
                     throw new BusinessException("constraint not active: " + constraintId);
                 }
             }
@@ -210,6 +209,15 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
             throw new BusinessException("forecastHorizon exceeds maximum allowed: " + horizon
                     + " (max " + MAX_FORECAST_HORIZON + ")");
         }
+    }
+
+    private boolean isConstraintActive(TimeseriesConstraint constraint) {
+        if (constraint == null) {
+            return false;
+        }
+        return ("ENABLE".equalsIgnoreCase(constraint.getEffectiveStatus())
+                || "ENABLED".equalsIgnoreCase(constraint.getEffectiveStatus()))
+                && "CONFIRMED".equalsIgnoreCase(constraint.getConfirmStatus());
     }
 
     @Override

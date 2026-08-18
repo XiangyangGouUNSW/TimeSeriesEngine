@@ -1,16 +1,17 @@
 package com.sfkg.timeseries.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import lombok.Data;
 
 @Data
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class TimeseriesConstraint {
 
     private String constraintId;
     private String constraintName;
-    private String categoryId;
     private Map<String, String> variableMapping;
     private String constraintDescription;
     private String constraintExpression;

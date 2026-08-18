@@ -166,8 +166,7 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
                 if (constraint == null) {
                     throw new BusinessException("constraint not found: " + constraintId);
                 }
-                if (!"ENABLE".equalsIgnoreCase(constraint.getEffectiveStatus())
-                        || !"CONFIRMED".equalsIgnoreCase(constraint.getConfirmStatus())) {
+                if (!isConstraintActive(constraint)) {
                     throw new BusinessException("constraint not active: " + constraintId
                             + " effective=" + constraint.getEffectiveStatus()
                             + " confirmed=" + constraint.getConfirmStatus());
@@ -204,6 +203,15 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
                         + ". Supported: " + VALID_DETECT_METHODS);
             }
         }
+    }
+
+    private boolean isConstraintActive(TimeseriesConstraint constraint) {
+        if (constraint == null) {
+            return false;
+        }
+        return ("ENABLE".equalsIgnoreCase(constraint.getEffectiveStatus())
+                || "ENABLED".equalsIgnoreCase(constraint.getEffectiveStatus()))
+                && "CONFIRMED".equalsIgnoreCase(constraint.getConfirmStatus());
     }
 
     @Override

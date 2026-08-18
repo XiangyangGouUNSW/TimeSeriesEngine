@@ -117,7 +117,6 @@ class CommandApiSuccessTests {
             {
               "constraintId": 5001,
               "constraintName": "temperature upper limit",
-              "categoryId": 2001,
               "variableMapping": {"x": 1001},
               "constraintDescription": "temperature should be lower than threshold",
               "constraintExpression": "x < 100",
@@ -131,7 +130,6 @@ class CommandApiSuccessTests {
             {
               "constraintId": 5001,
               "constraintName": "temperature upper limit",
-              "categoryId": 2001,
               "effectiveStatus": "ENABLE",
               "confirmStatus": "CONFIRMED",
               "keyword": "temperature"
