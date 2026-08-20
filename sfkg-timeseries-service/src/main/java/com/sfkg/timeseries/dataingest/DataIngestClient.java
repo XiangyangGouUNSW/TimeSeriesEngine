@@ -1,7 +1,9 @@
 package com.sfkg.timeseries.dataingest;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sfkg.timeseries.common.BusinessException;
 import com.sfkg.timeseries.config.DataIngestProperties;
 import java.io.IOException;
@@ -42,6 +44,18 @@ public class DataIngestClient {
         return parseInsertResponse(sendRaw(request));
     }
 
+    public DataIngestRecordsResponse queryRecords(String databaseName, String tableName) {
+        ObjectNode payload = objectMapper.createObjectNode();
+        payload.put("db_name", databaseName);
+        payload.put("table_name", tableName);
+        HttpRequest request = HttpRequest.newBuilder(recordsUri())
+                .timeout(Duration.ofSeconds(Math.max(1, properties.getTimeoutSeconds())))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(payload.toString(), StandardCharsets.UTF_8))
+                .build();
+        return parseRecordsResponse(sendRaw(request));
+    }
+
     public String health() {
         HttpRequest request = HttpRequest.newBuilder(healthUri())
                 .timeout(Duration.ofSeconds(Math.max(1, properties.getTimeoutSeconds())))
@@ -80,6 +94,10 @@ public class DataIngestClient {
         return URI.create(trimEndpoint() + "/health");
     }
 
+    private URI recordsUri() {
+        return URI.create(trimEndpoint() + "/records");
+    }
+
     private String trimEndpoint() {
         String endpoint = properties.getEndpoint();
         if (endpoint == null || endpoint.isBlank()) {
@@ -115,6 +133,22 @@ public class DataIngestClient {
                     + httpResponse.statusCode()
                     + ", body="
                     + body);
+        }
+    }
+
+    private DataIngestRecordsResponse parseRecordsResponse(HttpResponse<String> httpResponse) {
+        String body = httpResponse.body();
+        try {
+            JsonNode root = objectMapper.readTree(body);
+            if (httpResponse.statusCode() >= 400 || !root.path("success").asBoolean(false)) {
+                String error = root.path("error").asText("unknown DataIngest records error");
+                throw new BusinessException("DataIngest records query failed: status="
+                        + httpResponse.statusCode() + ", " + error);
+            }
+            return objectMapper.treeToValue(root, DataIngestRecordsResponse.class);
+        } catch (JsonProcessingException exception) {
+            throw new BusinessException("parse DataIngest records response failed: status="
+                    + httpResponse.statusCode() + ", body=" + body);
         }
     }
 }

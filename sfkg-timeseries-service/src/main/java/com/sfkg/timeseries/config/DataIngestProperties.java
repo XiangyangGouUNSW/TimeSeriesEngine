@@ -8,8 +8,11 @@ import org.springframework.stereotype.Component;
 public class DataIngestProperties {
 
     private boolean enabled = false;
+    private boolean readFromGstore = false;
+    private boolean fallbackToLocal = true;
     private String endpoint = "http://127.0.0.1:8006";
-    private String database = "ship_power_system";
+    private String database = "ett_system";
+    private String namespace = "http://gbuilder.org/knowledge/";
     private int timeoutSeconds = 5;
 
     public boolean isEnabled() {
@@ -18,6 +21,22 @@ public class DataIngestProperties {
 
     public void setEnabled(boolean enabled) {
         this.enabled = enabled;
+    }
+
+    public boolean isReadFromGstore() {
+        return readFromGstore;
+    }
+
+    public void setReadFromGstore(boolean readFromGstore) {
+        this.readFromGstore = readFromGstore;
+    }
+
+    public boolean isFallbackToLocal() {
+        return fallbackToLocal;
+    }
+
+    public void setFallbackToLocal(boolean fallbackToLocal) {
+        this.fallbackToLocal = fallbackToLocal;
     }
 
     public String getEndpoint() {
@@ -34,6 +53,14 @@ public class DataIngestProperties {
 
     public void setDatabase(String database) {
         this.database = database;
+    }
+
+    public String getNamespace() {
+        return namespace;
+    }
+
+    public void setNamespace(String namespace) {
+        this.namespace = namespace;
     }
 
     /**

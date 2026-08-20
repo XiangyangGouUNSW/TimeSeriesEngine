@@ -10,7 +10,9 @@ import com.sfkg.timeseries.entity.TimeseriesForecastResult;
 import com.sfkg.timeseries.entity.TimeseriesForecastTask;
 import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.entity.TimeseriesRelation;
+import com.sfkg.timeseries.entity.TimeseriesProject;
 import com.sfkg.timeseries.entity.TimeseriesSyncLog;
+import com.sfkg.timeseries.dataingest.DataIngestRecordLoader;
 import com.sfkg.timeseries.mapper.TimeseriesAnomalyResultMapper;
 import com.sfkg.timeseries.mapper.TimeseriesAnomalyTaskMapper;
 import com.sfkg.timeseries.mapper.TimeseriesCategoryMapper;
@@ -21,6 +23,7 @@ import com.sfkg.timeseries.mapper.TimeseriesForecastResultMapper;
 import com.sfkg.timeseries.mapper.TimeseriesForecastTaskMapper;
 import com.sfkg.timeseries.mapper.TimeseriesInstanceConfigMapper;
 import com.sfkg.timeseries.mapper.TimeseriesRelationMapper;
+import com.sfkg.timeseries.mapper.TimeseriesProjectMapper;
 import com.sfkg.timeseries.mapper.TimeseriesSyncLogMapper;
 import java.util.List;
 import org.springframework.beans.factory.ObjectProvider;
@@ -40,6 +43,8 @@ public class TimeseriesCacheLoader {
     private final ObjectProvider<TimeseriesForecastTaskMapper> forecastTaskMapper;
     private final ObjectProvider<TimeseriesSyncLogMapper> syncLogMapper;
     private final ObjectProvider<TimeseriesDataFileMapper> dataFileMapper;
+    private final ObjectProvider<TimeseriesProjectMapper> projectMapper;
+    private final DataIngestRecordLoader dataIngestRecordLoader;
 
     public TimeseriesCacheLoader(
             ObjectProvider<TimeseriesInstanceConfigMapper> instanceConfigMapper,
@@ -52,7 +57,9 @@ public class TimeseriesCacheLoader {
             ObjectProvider<TimeseriesForecastResultMapper> forecastResultMapper,
             ObjectProvider<TimeseriesForecastTaskMapper> forecastTaskMapper,
             ObjectProvider<TimeseriesSyncLogMapper> syncLogMapper,
-            ObjectProvider<TimeseriesDataFileMapper> dataFileMapper) {
+            ObjectProvider<TimeseriesDataFileMapper> dataFileMapper,
+            ObjectProvider<TimeseriesProjectMapper> projectMapper,
+            DataIngestRecordLoader dataIngestRecordLoader) {
         this.instanceConfigMapper = instanceConfigMapper;
         this.categoryMapper = categoryMapper;
         this.constraintMapper = constraintMapper;
@@ -64,6 +71,8 @@ public class TimeseriesCacheLoader {
         this.forecastTaskMapper = forecastTaskMapper;
         this.syncLogMapper = syncLogMapper;
         this.dataFileMapper = dataFileMapper;
+        this.projectMapper = projectMapper;
+        this.dataIngestRecordLoader = dataIngestRecordLoader;
     }
 
     public List<TimeseriesInstanceConfig> loadInstanceConfigs() {
@@ -119,6 +128,37 @@ public class TimeseriesCacheLoader {
     public List<TimeseriesDataPoint> loadTimeseriesDataPoints() {
         TimeseriesDataFileMapper mapper = dataFileMapper.getIfAvailable();
         return mapper == null ? List.of() : emptyIfNull(mapper.selectByCondition(null));
+    }
+
+    public List<TimeseriesProject> loadActiveProjects() {
+        TimeseriesProjectMapper mapper = projectMapper.getIfAvailable();
+        return mapper == null ? List.of() : emptyIfNull(mapper.selectActiveProjects());
+    }
+
+    public List<TimeseriesInstanceConfig> loadInstanceConfigsFromGStore(
+            String projectId, String databaseName) {
+        return dataIngestRecordLoader.load(
+                projectId, databaseName, CachedTable.INSTANCE_CONFIG.getTableName(), TimeseriesInstanceConfig.class);
+    }
+
+    public List<TimeseriesCategory> loadCategoriesFromGStore(String projectId, String databaseName) {
+        return dataIngestRecordLoader.load(
+                projectId, databaseName, CachedTable.CATEGORY.getTableName(), TimeseriesCategory.class);
+    }
+
+    public List<TimeseriesConstraint> loadConstraintsFromGStore(String projectId, String databaseName) {
+        return dataIngestRecordLoader.load(
+                projectId, databaseName, CachedTable.CONSTRAINT.getTableName(), TimeseriesConstraint.class);
+    }
+
+    public List<TimeseriesRelation> loadRelationsFromGStore(String projectId, String databaseName) {
+        return dataIngestRecordLoader.load(
+                projectId, databaseName, CachedTable.RELATION.getTableName(), TimeseriesRelation.class);
+    }
+
+    public List<TimeseriesEvent> loadEventsFromGStore(String projectId, String databaseName) {
+        return dataIngestRecordLoader.load(
+                projectId, databaseName, CachedTable.EVENT.getTableName(), TimeseriesEvent.class);
     }
 
     private <T> List<T> emptyIfNull(List<T> records) {

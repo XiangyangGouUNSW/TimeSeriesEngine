@@ -1,7 +1,9 @@
 package com.sfkg.timeseries.cache;
 
 import java.util.Set;
+import java.util.Collection;
 import java.util.concurrent.ConcurrentHashMap;
+import com.sfkg.timeseries.entity.TimeseriesProject;
 import org.springframework.stereotype.Component;
 
 /**
@@ -37,5 +39,11 @@ public class TimeseriesProjectRegistry {
         cache.listForecastResults().forEach(item -> register(item.getProjectId()));
         cache.listSyncLogs().forEach(item -> register(item.getProjectId()));
         cache.listTimeseriesDataPoints(null).forEach(item -> register(item.getProjectId()));
+    }
+
+    public void registerProjects(Collection<TimeseriesProject> projects) {
+        if (projects != null) {
+            projects.forEach(project -> register(project.getProjectId()));
+        }
     }
 }

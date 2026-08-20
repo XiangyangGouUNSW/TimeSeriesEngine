@@ -22,9 +22,12 @@ timeseries:
   local-data-file: ${TIMESERIES_LOCAL_DATA_FILE:data/timeseries-data.jsonl}
   data-ingest:
     enabled: ${TIMESERIES_DATA_INGEST_ENABLED:true}
+    read-from-gstore: ${TIMESERIES_READ_FROM_GSTORE:false}
+    fallback-to-local: ${TIMESERIES_GSTORE_FALLBACK_TO_LOCAL:true}
     endpoint: ${TIMESERIES_DATA_INGEST_ENDPOINT:http://127.0.0.1:8006}
     database: ${TIMESERIES_DATA_INGEST_DATABASE:ett_system}
     timeout-seconds: ${TIMESERIES_DATA_INGEST_TIMEOUT_SECONDS:5}
+  project-catalog-file: ${TIMESERIES_PROJECT_CATALOG_FILE:data/timeseries-projects.json}
   grpc:
     server-port: ${TIMESERIES_GRPC_SERVER_PORT:9105}
     analysis-receiver-port: ${TIMESERIES_GRPC_ANALYSIS_RECEIVER_PORT:9106}

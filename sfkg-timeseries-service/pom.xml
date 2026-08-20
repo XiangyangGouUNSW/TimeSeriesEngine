@@ -117,8 +117,9 @@
                         <goals>
                             <goal>compile</goal>
                         </goals>
-                        <configuration>
-                            <annotationProcessorPaths>
+                <configuration>
+                    <useIncrementalCompilation>false</useIncrementalCompilation>
+                    <annotationProcessorPaths>
                                 <path>
                                     <groupId>org.projectlombok</groupId>
                                     <artifactId>lombok</artifactId>

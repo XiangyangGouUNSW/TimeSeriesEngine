@@ -28,7 +28,11 @@ class LocalJsonTableStore<T> {
     private final Class<T> recordType;
 
     LocalJsonTableStore(String storeDir, String fileName, Class<T> recordType) {
-        this.tableFile = Paths.get(storeDir, fileName).toAbsolutePath().normalize();
+        this(Paths.get(storeDir, fileName), recordType);
+    }
+
+    LocalJsonTableStore(Path tableFile, Class<T> recordType) {
+        this.tableFile = tableFile.toAbsolutePath().normalize();
         this.recordType = recordType;
     }
 
