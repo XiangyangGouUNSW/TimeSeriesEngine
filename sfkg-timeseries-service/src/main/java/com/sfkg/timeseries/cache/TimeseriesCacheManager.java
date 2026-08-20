@@ -69,16 +69,31 @@ public class TimeseriesCacheManager {
 
     private List<TimeseriesProject> warmUpFromGStore() {
         List<TimeseriesProject> projects = cacheLoader.loadActiveProjects();
-        memoryCache.replaceInstanceConfigs(loadForProjects(
-                projects, cacheLoader::loadInstanceConfigsFromGStore));
-        memoryCache.replaceCategories(loadForProjects(
-                projects, cacheLoader::loadCategoriesFromGStore));
-        memoryCache.replaceConstraints(loadForProjects(
-                projects, cacheLoader::loadConstraintsFromGStore));
-        memoryCache.replaceRelations(loadForProjects(
-                projects, cacheLoader::loadRelationsFromGStore));
-        memoryCache.replaceEvents(loadForProjects(
-                projects, cacheLoader::loadEventsFromGStore));
+        if (projects.isEmpty()) {
+            LOG.warn("No active projects found in the local project catalog; gStore data cannot be restored");
+        }
+        List<TimeseriesInstanceConfig> instanceConfigs = loadForProjects(
+                projects, cacheLoader::loadInstanceConfigsFromGStore);
+        List<TimeseriesCategory> categories = loadForProjects(
+                projects, cacheLoader::loadCategoriesFromGStore);
+        List<TimeseriesConstraint> constraints = loadForProjects(
+                projects, cacheLoader::loadConstraintsFromGStore);
+        List<TimeseriesRelation> relations = loadForProjects(
+                projects, cacheLoader::loadRelationsFromGStore);
+        List<TimeseriesEvent> events = loadForProjects(
+                projects, cacheLoader::loadEventsFromGStore);
+
+        cacheLoader.persistLocalInstanceConfigs(instanceConfigs);
+        cacheLoader.persistLocalCategories(categories);
+        cacheLoader.persistLocalConstraints(constraints);
+        cacheLoader.persistLocalRelations(relations);
+        cacheLoader.persistLocalEvents(events);
+
+        memoryCache.replaceInstanceConfigs(instanceConfigs);
+        memoryCache.replaceCategories(categories);
+        memoryCache.replaceConstraints(constraints);
+        memoryCache.replaceRelations(relations);
+        memoryCache.replaceEvents(events);
 
         // Tasks, results, sync logs and raw points are not currently written to gStore.
         memoryCache.replaceAnomalyTasks(cacheLoader.loadAnomalyTasks());
@@ -94,7 +109,10 @@ public class TimeseriesCacheManager {
             List<TimeseriesProject> projects,
             BiFunction<String, String, List<T>> loader) {
         return projects.stream()
-                .filter(project -> project.getProjectId() != null && project.getDatabaseName() != null)
+                .filter(project -> project.getProjectId() != null
+                        && !project.getProjectId().isBlank()
+                        && project.getDatabaseName() != null
+                        && !project.getDatabaseName().isBlank())
                 .flatMap(project -> loader.apply(project.getProjectId(), project.getDatabaseName()).stream())
                 .toList();
     }
@@ -132,16 +150,36 @@ public class TimeseriesCacheManager {
     private void refreshGStoreTable(CachedTable table) {
         List<TimeseriesProject> projects = cacheLoader.loadActiveProjects();
         switch (table) {
-            case INSTANCE_CONFIG -> memoryCache.replaceInstanceConfigs(loadForProjects(
-                    projects, cacheLoader::loadInstanceConfigsFromGStore));
-            case CATEGORY -> memoryCache.replaceCategories(loadForProjects(
-                    projects, cacheLoader::loadCategoriesFromGStore));
-            case CONSTRAINT -> memoryCache.replaceConstraints(loadForProjects(
-                    projects, cacheLoader::loadConstraintsFromGStore));
-            case RELATION -> memoryCache.replaceRelations(loadForProjects(
-                    projects, cacheLoader::loadRelationsFromGStore));
-            case EVENT -> memoryCache.replaceEvents(loadForProjects(
-                    projects, cacheLoader::loadEventsFromGStore));
+            case INSTANCE_CONFIG -> {
+                List<TimeseriesInstanceConfig> entities = loadForProjects(
+                        projects, cacheLoader::loadInstanceConfigsFromGStore);
+                cacheLoader.persistLocalInstanceConfigs(entities);
+                memoryCache.replaceInstanceConfigs(entities);
+            }
+            case CATEGORY -> {
+                List<TimeseriesCategory> entities = loadForProjects(
+                        projects, cacheLoader::loadCategoriesFromGStore);
+                cacheLoader.persistLocalCategories(entities);
+                memoryCache.replaceCategories(entities);
+            }
+            case CONSTRAINT -> {
+                List<TimeseriesConstraint> entities = loadForProjects(
+                        projects, cacheLoader::loadConstraintsFromGStore);
+                cacheLoader.persistLocalConstraints(entities);
+                memoryCache.replaceConstraints(entities);
+            }
+            case RELATION -> {
+                List<TimeseriesRelation> entities = loadForProjects(
+                        projects, cacheLoader::loadRelationsFromGStore);
+                cacheLoader.persistLocalRelations(entities);
+                memoryCache.replaceRelations(entities);
+            }
+            case EVENT -> {
+                List<TimeseriesEvent> entities = loadForProjects(
+                        projects, cacheLoader::loadEventsFromGStore);
+                cacheLoader.persistLocalEvents(entities);
+                memoryCache.replaceEvents(entities);
+            }
             default -> throw new IllegalArgumentException("table is not stored in gStore: " + table);
         }
         projectRegistry.registerProjects(projects);

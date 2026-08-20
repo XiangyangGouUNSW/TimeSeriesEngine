@@ -7,6 +7,8 @@ public interface TimeseriesRelationMapper {
 
     void insert(TimeseriesRelation entity);
 
+    void replaceLocal(List<TimeseriesRelation> entities);
+
     void updateById(TimeseriesRelation entity);
 
     TimeseriesRelation selectById(String relationId);

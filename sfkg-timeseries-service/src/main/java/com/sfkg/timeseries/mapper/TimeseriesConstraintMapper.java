@@ -7,6 +7,8 @@ public interface TimeseriesConstraintMapper {
 
     void insert(TimeseriesConstraint entity);
 
+    void replaceLocal(List<TimeseriesConstraint> entities);
+
     void updateById(TimeseriesConstraint entity);
 
     TimeseriesConstraint selectById(String constraintId);

@@ -269,9 +269,11 @@ def records():
     """Read service records written by ``/insert``.
 
     The endpoint hides the gStore-specific SPARQL binding format and returns
-    the JSON stored in the ``field_recordJson`` property.  ``projectId`` is
-    intentionally not reconstructed here because the database name is the
-    project boundary and the Java service owns that mapping.
+    the JSON stored in the ``recordJson`` property.  Older clients may have
+    written the metadata using ``field_recordJson``; both formats are read so
+    records written before the contract was aligned remain available.
+    ``projectId`` is intentionally not reconstructed here because the database
+    name is the project boundary and the Java service owns that mapping.
     """
     body = request.get_json(silent=True) or {}
     db_name = (body.get("db_name") or "").strip()
@@ -284,10 +286,21 @@ def records():
 
     namespace = _writer.namespace.rstrip("/") + "/"
     table_literal = escape_sparql_string(table_name)
+    # Java's DataIngestPersistenceService writes the three routing fields as
+    # tableName/businessKey/recordJson. Keep the field_* branch for records
+    # written by the earlier standalone Python test format.
     sparql = f'''SELECT DISTINCT ?businessKey ?recordJson WHERE {{
-  ?entity <{namespace}prop/field_tableName> "{table_literal}" .
-  ?entity <{namespace}prop/field_businessKey> ?businessKey .
-  ?entity <{namespace}prop/field_recordJson> ?recordJson .
+  {{
+    ?entity <{namespace}prop/tableName> "{table_literal}" .
+    ?entity <{namespace}prop/businessKey> ?businessKey .
+    ?entity <{namespace}prop/recordJson> ?recordJson .
+  }}
+  UNION
+  {{
+    ?entity <{namespace}prop/field_tableName> "{table_literal}" .
+    ?entity <{namespace}prop/field_businessKey> ?businessKey .
+    ?entity <{namespace}prop/field_recordJson> ?recordJson .
+  }}
 }}'''
     result = _writer.query(sparql, db_name)
     if isinstance(result, dict) and result.get("StatusCode") not in (None, 0):

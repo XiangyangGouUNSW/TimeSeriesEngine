@@ -34,6 +34,13 @@ public class TimeseriesInstanceConfigFileMapper implements TimeseriesInstanceCon
     }
 
     @Override
+    public void replaceLocal(List<TimeseriesInstanceConfig> entities) {
+        if (entities != null && !entities.isEmpty()) {
+            store.writeAll(entities);
+        }
+    }
+
+    @Override
     public TimeseriesInstanceConfig selectBySequenceId(String sequenceId) {
         return store.readAll().stream()
                 .filter(entity -> Objects.equals(sequenceId, entity.getSequenceId()))

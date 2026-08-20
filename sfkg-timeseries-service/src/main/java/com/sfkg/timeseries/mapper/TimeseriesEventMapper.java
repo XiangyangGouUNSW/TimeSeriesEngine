@@ -7,6 +7,8 @@ public interface TimeseriesEventMapper {
 
     void insert(TimeseriesEvent entity);
 
+    void replaceLocal(List<TimeseriesEvent> entities);
+
     void updateById(TimeseriesEvent entity);
 
     TimeseriesEvent selectById(String eventId);

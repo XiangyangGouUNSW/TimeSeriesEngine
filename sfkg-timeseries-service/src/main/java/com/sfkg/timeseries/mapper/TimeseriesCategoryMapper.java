@@ -7,6 +7,8 @@ public interface TimeseriesCategoryMapper {
 
     void insert(TimeseriesCategory entity);
 
+    void replaceLocal(List<TimeseriesCategory> entities);
+
     void updateById(TimeseriesCategory entity);
 
     TimeseriesCategory selectById(String categoryId);

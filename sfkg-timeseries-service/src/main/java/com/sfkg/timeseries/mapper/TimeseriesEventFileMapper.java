@@ -35,6 +35,13 @@ public class TimeseriesEventFileMapper implements TimeseriesEventMapper {
     }
 
     @Override
+    public void replaceLocal(List<TimeseriesEvent> entities) {
+        if (entities != null && !entities.isEmpty()) {
+            store.writeAll(entities);
+        }
+    }
+
+    @Override
     public void updateById(TimeseriesEvent entity) {
         insert(entity);
     }

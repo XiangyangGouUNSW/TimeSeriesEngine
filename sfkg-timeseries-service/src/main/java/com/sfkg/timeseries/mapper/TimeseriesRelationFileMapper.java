@@ -34,6 +34,13 @@ public class TimeseriesRelationFileMapper implements TimeseriesRelationMapper {
     }
 
     @Override
+    public void replaceLocal(List<TimeseriesRelation> entities) {
+        if (entities != null && !entities.isEmpty()) {
+            store.writeAll(entities);
+        }
+    }
+
+    @Override
     public void updateById(TimeseriesRelation entity) {
         insert(entity);
     }

@@ -165,6 +165,9 @@ gStore 的 SPARQL 绑定结果转换为 JSON 记录，调用方不需要自己�
 ```
 
 `record` 中不包含顶层 `projectId`。时序服务根据当前查询的项目目录记录，在恢复内存时补回该字段。
+Java 时序服务写入的元字段名是 `tableName`、`businessKey`、`recordJson`；
+为了兼容早期 Python 测试数据，接口也支持读取 `field_tableName`、
+`field_businessKey`、`field_recordJson`。
 
 ## 六、写入后的数据长什么样（约定）
 

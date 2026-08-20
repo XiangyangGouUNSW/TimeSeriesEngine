@@ -141,9 +141,23 @@ public class TimeseriesCacheLoader {
                 projectId, databaseName, CachedTable.INSTANCE_CONFIG.getTableName(), TimeseriesInstanceConfig.class);
     }
 
+    public void persistLocalInstanceConfigs(List<TimeseriesInstanceConfig> entities) {
+        TimeseriesInstanceConfigMapper mapper = instanceConfigMapper.getIfAvailable();
+        if (mapper != null) {
+            mapper.replaceLocal(entities);
+        }
+    }
+
     public List<TimeseriesCategory> loadCategoriesFromGStore(String projectId, String databaseName) {
         return dataIngestRecordLoader.load(
                 projectId, databaseName, CachedTable.CATEGORY.getTableName(), TimeseriesCategory.class);
+    }
+
+    public void persistLocalCategories(List<TimeseriesCategory> entities) {
+        TimeseriesCategoryMapper mapper = categoryMapper.getIfAvailable();
+        if (mapper != null) {
+            mapper.replaceLocal(entities);
+        }
     }
 
     public List<TimeseriesConstraint> loadConstraintsFromGStore(String projectId, String databaseName) {
@@ -151,14 +165,35 @@ public class TimeseriesCacheLoader {
                 projectId, databaseName, CachedTable.CONSTRAINT.getTableName(), TimeseriesConstraint.class);
     }
 
+    public void persistLocalConstraints(List<TimeseriesConstraint> entities) {
+        TimeseriesConstraintMapper mapper = constraintMapper.getIfAvailable();
+        if (mapper != null) {
+            mapper.replaceLocal(entities);
+        }
+    }
+
     public List<TimeseriesRelation> loadRelationsFromGStore(String projectId, String databaseName) {
         return dataIngestRecordLoader.load(
                 projectId, databaseName, CachedTable.RELATION.getTableName(), TimeseriesRelation.class);
     }
 
+    public void persistLocalRelations(List<TimeseriesRelation> entities) {
+        TimeseriesRelationMapper mapper = relationMapper.getIfAvailable();
+        if (mapper != null) {
+            mapper.replaceLocal(entities);
+        }
+    }
+
     public List<TimeseriesEvent> loadEventsFromGStore(String projectId, String databaseName) {
         return dataIngestRecordLoader.load(
                 projectId, databaseName, CachedTable.EVENT.getTableName(), TimeseriesEvent.class);
+    }
+
+    public void persistLocalEvents(List<TimeseriesEvent> entities) {
+        TimeseriesEventMapper mapper = eventMapper.getIfAvailable();
+        if (mapper != null) {
+            mapper.replaceLocal(entities);
+        }
     }
 
     private <T> List<T> emptyIfNull(List<T> records) {

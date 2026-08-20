@@ -34,6 +34,13 @@ public class TimeseriesCategoryFileMapper implements TimeseriesCategoryMapper {
     }
 
     @Override
+    public void replaceLocal(List<TimeseriesCategory> entities) {
+        if (entities != null && !entities.isEmpty()) {
+            store.writeAll(entities);
+        }
+    }
+
+    @Override
     public void updateById(TimeseriesCategory entity) {
         insert(entity);
     }

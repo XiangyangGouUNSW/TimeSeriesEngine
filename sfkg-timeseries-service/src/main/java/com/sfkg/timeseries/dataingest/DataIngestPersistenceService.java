@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sfkg.timeseries.config.DataIngestProperties;
+import com.sfkg.timeseries.entity.TimeseriesProject;
+import com.sfkg.timeseries.mapper.TimeseriesProjectMapper;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -21,14 +23,17 @@ public class DataIngestPersistenceService {
     private final DataIngestClient dataIngestClient;
     private final DataIngestProperties properties;
     private final ObjectMapper objectMapper;
+    private final TimeseriesProjectMapper projectMapper;
 
     public DataIngestPersistenceService(
             DataIngestClient dataIngestClient,
             DataIngestProperties properties,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            TimeseriesProjectMapper projectMapper) {
         this.dataIngestClient = dataIngestClient;
         this.properties = properties;
         this.objectMapper = objectMapper;
+        this.projectMapper = projectMapper;
     }
 
     public void submitRecord(String tableName, String businessKey, Object entity) {
@@ -51,10 +56,26 @@ public class DataIngestPersistenceService {
                     response.getRelations(),
                     response.getTriples(),
                     response.getMessage());
+            registerProject(projectId);
         } catch (RuntimeException exception) {
             LOG.warn("DataIngest dual-write failed: table={} key={} reason={}",
                     tableName, businessKey, exception.getMessage());
         }
+    }
+
+    private void registerProject(String projectId) {
+        if (projectId == null || projectId.isBlank()) {
+            return;
+        }
+        TimeseriesProject project = new TimeseriesProject();
+        project.setProjectId(projectId);
+        project.setDatabaseName(properties.databaseForProject(projectId));
+        project.setStatus("ACTIVE");
+        project.setUpdatedAt(LocalDateTime.now());
+        if (projectMapper.selectByProjectId(projectId) == null) {
+            project.setCreatedAt(project.getUpdatedAt());
+        }
+        projectMapper.upsert(project);
     }
 
     private DataIngestInsertPayload newInsertPayload() {

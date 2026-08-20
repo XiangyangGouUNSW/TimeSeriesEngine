@@ -34,6 +34,13 @@ public class TimeseriesConstraintFileMapper implements TimeseriesConstraintMappe
     }
 
     @Override
+    public void replaceLocal(List<TimeseriesConstraint> entities) {
+        if (entities != null && !entities.isEmpty()) {
+            store.writeAll(entities);
+        }
+    }
+
+    @Override
     public void updateById(TimeseriesConstraint entity) {
         insert(entity);
     }
