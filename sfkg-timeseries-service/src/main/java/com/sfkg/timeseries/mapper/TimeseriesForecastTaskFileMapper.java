@@ -56,6 +56,7 @@ public class TimeseriesForecastTaskFileMapper implements TimeseriesForecastTaskM
     private boolean sameBusinessKey(TimeseriesForecastTask incoming, TimeseriesForecastTask stored) {
         return incoming != null
                 && stored != null
+                && Objects.equals(incoming.getProjectId(), stored.getProjectId())
                 && Objects.equals(incoming.getTaskId(), stored.getTaskId());
     }
 

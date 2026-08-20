@@ -1,4 +1,5 @@
 {
+  "projectId": "project-ett",
   "taskId": "ett-anomaly-001",
   "taskName": "ETTh1 OT anomaly detection",
   "sequenceIds": [

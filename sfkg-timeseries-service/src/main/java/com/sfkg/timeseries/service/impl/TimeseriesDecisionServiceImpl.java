@@ -42,29 +42,41 @@ public class TimeseriesDecisionServiceImpl implements TimeseriesDecisionService 
 
     @Override
     public DiagnosisResultVO getDiagnosisResult(String eventId) {
+        return getDiagnosisResult(null, eventId);
+    }
+
+    @Override
+    public DiagnosisResultVO getDiagnosisResult(String projectId, String eventId) {
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
-        DecisionContext context = buildDecisionContext(eventId);
+        DecisionContext context = buildDecisionContext(projectId, eventId);
         DiagnosisResultVO vo = decisionGrpcClient.generateDiagnosisResult(context);
-        if (vo.getDiagnosisResult() == null) {
+        if (vo != null && vo.getDiagnosisResult() == null) {
             // fallback to event cache
-            memoryCache.getEvent(eventId).ifPresent(event -> {
+            memoryCache.getEvent(projectId, eventId).ifPresent(event -> {
                 vo.setEventId(event.getEventId());
+                vo.setProjectId(event.getProjectId());
                 vo.setDiagnosisResult(event.getDiagnosisResult());
                 vo.setDiagnosisBasis(event.getDiagnosisBasis());
             });
         }
-        return vo;
+        return vo != null ? vo : new DiagnosisResultVO();
     }
 
     @Override
     public DecisionSuggestionVO getDecisionSuggestion(String eventId) {
+        return getDecisionSuggestion(null, eventId);
+    }
+
+    @Override
+    public DecisionSuggestionVO getDecisionSuggestion(String projectId, String eventId) {
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
-        DecisionContext context = buildDecisionContext(eventId);
+        DecisionContext context = buildDecisionContext(projectId, eventId);
         DecisionSuggestionVO vo = decisionGrpcClient.generateDecisionSuggestion(context);
-        if (vo.getSuggestion() == null) {
+        if (vo != null && vo.getSuggestion() == null) {
             // fallback to event cache
             vo.setEventId(eventId);
-            memoryCache.getEvent(eventId).ifPresent(event -> {
+            memoryCache.getEvent(projectId, eventId).ifPresent(event -> {
+                vo.setProjectId(event.getProjectId());
                 if (event.getDisposalResult() != null) {
                     vo.setSuggestion(event.getDisposalResult());
                 } else {
@@ -72,7 +84,7 @@ public class TimeseriesDecisionServiceImpl implements TimeseriesDecisionService 
                 }
             });
         }
-        return vo;
+        return vo != null ? vo : new DecisionSuggestionVO();
     }
 
     @Override
@@ -81,9 +93,12 @@ public class TimeseriesDecisionServiceImpl implements TimeseriesDecisionService 
             return;
         }
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
-        TimeseriesEvent entity = memoryCache.computeEvent(request.getEventId(), existing -> {
+        TimeseriesEvent entity = memoryCache.computeEvent(request.getProjectId(), request.getEventId(), existing -> {
             TimeseriesEvent e = existing != null ? existing : new TimeseriesEvent();
             e.setEventId(request.getEventId());
+            e.setProjectId(request.getProjectId() != null
+                    ? request.getProjectId()
+                    : (existing != null ? existing.getProjectId() : null));
             if (request.getDisposalResult() != null) {
                 e.setDisposalResult(request.getDisposalResult());
             }
@@ -98,10 +113,17 @@ public class TimeseriesDecisionServiceImpl implements TimeseriesDecisionService 
 
     @Override
     public DecisionContext buildDecisionContext(String eventId) {
+        return buildDecisionContext(null, eventId);
+    }
+
+    @Override
+    public DecisionContext buildDecisionContext(String projectId, String eventId) {
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
         DecisionContext context = new DecisionContext();
+        context.setProjectId(projectId);
         context.setEventId(eventId);
-        memoryCache.getEvent(eventId).ifPresent(event -> {
+        memoryCache.getEvent(projectId, eventId).ifPresent(event -> {
+            context.setProjectId(event.getProjectId());
             context.setEventInfo(toEventInfo(event));
             context.setSemanticContext(toSemanticContext(event));
             context.setStatisticsContext(Map.of());

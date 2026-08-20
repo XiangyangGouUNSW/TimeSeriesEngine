@@ -57,7 +57,8 @@ public class TimeseriesInstanceConfigFileMapper implements TimeseriesInstanceCon
         if (incoming == null || stored == null) {
             return false;
         }
-        return Objects.equals(incoming.getSequenceId(), stored.getSequenceId());
+        return Objects.equals(incoming.getProjectId(), stored.getProjectId())
+                && Objects.equals(incoming.getSequenceId(), stored.getSequenceId());
     }
 
     private boolean matches(Object condition, TimeseriesInstanceConfig entity) {

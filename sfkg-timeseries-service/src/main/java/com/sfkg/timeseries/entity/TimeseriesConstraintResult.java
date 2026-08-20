@@ -7,6 +7,7 @@ import lombok.Data;
 @Data
 public class TimeseriesConstraintResult {
 
+    private String projectId;
     private String resultId;
     private LocalDateTime checkTime;
     private List<String> violatedConstraintIds;

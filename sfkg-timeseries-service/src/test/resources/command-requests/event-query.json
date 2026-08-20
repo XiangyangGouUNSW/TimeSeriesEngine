@@ -1,4 +1,5 @@
 {
+  "projectId": "project-a",
   "eventType": "ANOMALY",
   "eventSource": "ANOMALY_DETECTION",
   "eventLevel": "WARNING",

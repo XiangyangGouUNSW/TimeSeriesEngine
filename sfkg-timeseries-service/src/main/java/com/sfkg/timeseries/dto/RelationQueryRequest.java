@@ -4,6 +4,7 @@ import lombok.Data;
 
 @Data
 public class RelationQueryRequest {
+    private String projectId;
 
     private String relationId;
     private String relationName;

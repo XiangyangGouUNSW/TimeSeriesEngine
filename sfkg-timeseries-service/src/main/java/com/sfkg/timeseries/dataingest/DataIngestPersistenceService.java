@@ -36,8 +36,12 @@ public class DataIngestPersistenceService {
             return;
         }
         try {
+            Map<String, Object> rawFields = toRawFields(entity);
+            String projectId = rawFields.get("projectId") == null
+                    ? null : String.valueOf(rawFields.get("projectId"));
             DataIngestInsertPayload payload = newInsertPayload();
-            payload.getEntities().add(toEntityPayload(tableName, businessKey, entity));
+            payload.setDbName(properties.databaseForProject(projectId));
+            payload.getEntities().add(toEntityPayload(tableName, businessKey, rawFields));
             DataIngestInsertResponse response = dataIngestClient.insert(payload);
             LOG.info("DataIngest write success: table={} key={} db={} entities={} relations={} triples={} message={}",
                     tableName,
@@ -59,10 +63,11 @@ public class DataIngestPersistenceService {
         return payload;
     }
 
-    private DataIngestEntityPayload toEntityPayload(String tableName, String businessKey, Object entity) {
+    private DataIngestEntityPayload toEntityPayload(String tableName, String businessKey,
+            Map<String, Object> rawFields) {
         try {
-            String json = objectMapper.writeValueAsString(entity);
-            Map<String, Object> rawFields = objectMapper.readValue(json, MAP_TYPE);
+            rawFields.remove("projectId");
+            String json = objectMapper.writeValueAsString(rawFields);
             Map<String, Object> entityProperties = new LinkedHashMap<>();
             entityProperties.put("tableName", tableName);
             entityProperties.put("businessKey", businessKey);
@@ -78,6 +83,15 @@ public class DataIngestPersistenceService {
                     tableName,
                     "timeseries persistent record",
                     entityProperties);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalArgumentException("serialize DataIngest record failed", exception);
+        }
+    }
+
+    private Map<String, Object> toRawFields(Object entity) {
+        try {
+            String json = objectMapper.writeValueAsString(entity);
+            return objectMapper.readValue(json, MAP_TYPE);
         } catch (JsonProcessingException exception) {
             throw new IllegalArgumentException("serialize DataIngest record failed", exception);
         }

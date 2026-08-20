@@ -65,6 +65,7 @@ public class TimeseriesSyncLogFileMapper implements TimeseriesSyncLogMapper {
     private boolean sameBusinessKey(TimeseriesSyncLog incoming, TimeseriesSyncLog stored) {
         return incoming != null
                 && stored != null
+                && Objects.equals(incoming.getProjectId(), stored.getProjectId())
                 && Objects.equals(incoming.getId(), stored.getId());
     }
 }

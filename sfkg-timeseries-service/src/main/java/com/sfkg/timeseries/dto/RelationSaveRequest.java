@@ -5,6 +5,7 @@ import lombok.Data;
 
 @Data
 public class RelationSaveRequest {
+    private String projectId;
 
     private String relationId;
     private String relationName;

@@ -57,7 +57,8 @@ public class AnomalyGrpcClient {
         AnomalyTaskConfig.Builder configBuilder = AnomalyTaskConfig.newBuilder()
                 .setTaskId(nullToEmpty(task.getTaskId()))
                 .setTaskName(nullToEmpty(task.getTaskName()))
-                .setWarningRule(nullToEmpty(task.getWarningRule()));
+                .setWarningRule(nullToEmpty(task.getWarningRule()))
+                .setProjectId(nullToEmpty(task.getProjectId()));
         if (task.getSequenceIds() != null) {
             configBuilder.addAllSequenceIds(task.getSequenceIds());
         }
@@ -76,7 +77,7 @@ public class AnomalyGrpcClient {
         configBuilder.setSemanticContext(contextResolver.resolveAnomalyContext(task));
 
         AnalysisSyncAnomalyTaskRequest req = AnalysisSyncAnomalyTaskRequest.newBuilder()
-                .setMeta(newMeta())
+                .setMeta(newMeta(task.getProjectId()))
                 .setConfigVersion(System.currentTimeMillis())
                 .setTask(configBuilder.build())
                 .build();
@@ -86,6 +87,10 @@ public class AnomalyGrpcClient {
     }
 
     public SyncResult updateAnomalyTaskStatus(String taskId, String status) {
+        return updateAnomalyTaskStatus(null, taskId, status);
+    }
+
+    public SyncResult updateAnomalyTaskStatus(String projectId, String taskId, String status) {
         String address = grpcClientProperties.getAnomalyAddress();
         if (isBlank(address)) {
             return notConfigured("UpdateTaskStatus");
@@ -93,9 +98,10 @@ public class AnomalyGrpcClient {
 
         AnalysisTaskStatus protoStatus = mapTaskStatus(status);
         AnalysisUpdateTaskStatusRequest req = AnalysisUpdateTaskStatusRequest.newBuilder()
-                .setMeta(newMeta())
+                .setMeta(newMeta(projectId))
                 .setTaskId(nullToEmpty(taskId))
                 .setStatus(protoStatus)
+                .setProjectId(nullToEmpty(projectId))
                 .build();
 
         LOG.info("[{}] -> UpdateTaskStatus taskId={} status={} at {}", SERVICE_NAME, taskId, status, address);
@@ -126,7 +132,8 @@ public class AnomalyGrpcClient {
                 .setMeta(newMeta())
                 .setTaskId(nullToEmpty(request.getTaskId()))
                 .setLatestOnly(true)
-                .setLimit(10);
+                .setLimit(10)
+                .setProjectId(nullToEmpty(request.getProjectId()));
 
         QueryAnomalyResultsRequest req = QueryAnomalyResultsRequest.newBuilder()
                 .setQuery(queryBuilder.build())
@@ -175,9 +182,14 @@ public class AnomalyGrpcClient {
     }
 
     private RequestMeta newMeta() {
+        return newMeta(null);
+    }
+
+    private RequestMeta newMeta(String projectId) {
         return RequestMeta.newBuilder()
                 .setRequestId(UUID.randomUUID().toString())
                 .setSentAtMs(System.currentTimeMillis())
+                .setProjectId(nullToEmpty(projectId))
                 .build();
     }
 

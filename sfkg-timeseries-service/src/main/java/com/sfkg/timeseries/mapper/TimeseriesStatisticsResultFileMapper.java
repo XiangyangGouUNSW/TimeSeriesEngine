@@ -23,7 +23,8 @@ public class TimeseriesStatisticsResultFileMapper implements TimeseriesStatistic
     public void insert(TimeseriesStatisticsResult entity) {
         store.upsert(
                 item -> entity.getResultId() != null
-                        && entity.getResultId().equals(item.getResultId()),
+                        && entity.getResultId().equals(item.getResultId())
+                        && Objects.equals(entity.getProjectId(), item.getProjectId()),
                 entity);
     }
 

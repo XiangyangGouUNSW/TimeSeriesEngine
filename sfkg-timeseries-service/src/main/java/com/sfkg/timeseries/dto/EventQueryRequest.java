@@ -6,6 +6,7 @@ import lombok.Data;
 
 @Data
 public class EventQueryRequest {
+    private String projectId;
 
     private String eventType;
     private String eventSource;

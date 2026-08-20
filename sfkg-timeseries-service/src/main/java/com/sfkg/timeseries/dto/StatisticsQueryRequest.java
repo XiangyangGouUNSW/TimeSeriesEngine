@@ -6,6 +6,7 @@ import lombok.Data;
 
 @Data
 public class StatisticsQueryRequest {
+    private String projectId;
 
     private List<String> sequenceIds;
     private String dependentSequenceId;

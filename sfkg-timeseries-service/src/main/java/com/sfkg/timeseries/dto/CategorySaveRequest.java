@@ -4,6 +4,7 @@ import lombok.Data;
 
 @Data
 public class CategorySaveRequest {
+    private String projectId;
 
     private String categoryId;
     private String categoryName;

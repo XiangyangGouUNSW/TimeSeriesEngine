@@ -2,6 +2,7 @@ package com.sfkg.timeseries.client;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -80,10 +81,14 @@ public class IngestBufferPool {
      * Map a sequence ID to a partition index (0 .. senderThreads-1).
      */
     public int partition(String seqId) {
+        return partition(null, seqId);
+    }
+
+    public int partition(String projectId, String seqId) {
         if (seqId == null) {
             return 0;
         }
-        int h = seqId.hashCode();
+        int h = (String.valueOf(projectId) + "::" + seqId).hashCode();
         return Math.abs(h ^ (h >>> 16)) % props.getSenderThreads();
     }
 
@@ -176,19 +181,26 @@ public class IngestBufferPool {
         }
 
         private void sendBatch(List<TimeseriesDataSaveRequest.IngestPointDTO> batch) {
-            TimeseriesDataSaveRequest request = new TimeseriesDataSaveRequest();
-            request.setPoints(batch);
+            Map<String, List<TimeseriesDataSaveRequest.IngestPointDTO>> byProject =
+                    batch.stream().collect(java.util.stream.Collectors.groupingBy(
+                            point -> String.valueOf(point.getProjectId())));
+            for (Map.Entry<String, List<TimeseriesDataSaveRequest.IngestPointDTO>> entry : byProject.entrySet()) {
+                TimeseriesDataSaveRequest request = new TimeseriesDataSaveRequest();
+                String projectId = "null".equals(entry.getKey()) ? null : entry.getKey();
+                request.setProjectId(projectId);
+                request.setPoints(entry.getValue());
 
-            int batchSize = batch.size();
-            LOG.debug("Ingest sender-{} sending batch size={}", index, batchSize);
-            SyncResult result = coreGrpcClient.ingestData(request);
-            if (!result.isSuccess()) {
-                LOG.warn("Ingest sender-{} batch failed ({} points): {}",
-                        index, batchSize, result.getMessage());
-                throughputMonitor.recordError(batchSize);
-            } else {
-                LOG.debug("Ingest sender-{} batch ok ({} points)", index, batchSize);
-                throughputMonitor.recordSent(batchSize);
+                int batchSize = entry.getValue().size();
+                LOG.debug("Ingest sender-{} sending project={} batch size={}", index, projectId, batchSize);
+                SyncResult result = coreGrpcClient.ingestData(request);
+                if (!result.isSuccess()) {
+                    LOG.warn("Ingest sender-{} project={} batch failed ({} points): {}",
+                            index, projectId, batchSize, result.getMessage());
+                    throughputMonitor.recordError(batchSize);
+                } else {
+                    LOG.debug("Ingest sender-{} project={} batch ok ({} points)", index, projectId, batchSize);
+                    throughputMonitor.recordSent(batchSize);
+                }
             }
         }
 

@@ -36,6 +36,18 @@ public class DataIngestProperties {
         this.database = database;
     }
 
+    /**
+     * Resolve the gStore database dedicated to a project. The project id is
+     * used only for routing; it is not part of the entity payload.
+     */
+    public String databaseForProject(String projectId) {
+        if (projectId == null || projectId.isBlank()) {
+            return database;
+        }
+        String normalized = projectId.trim().replaceAll("[^A-Za-z0-9_-]", "_");
+        return database + "_" + normalized;
+    }
+
     public int getTimeoutSeconds() {
         return timeoutSeconds;
     }

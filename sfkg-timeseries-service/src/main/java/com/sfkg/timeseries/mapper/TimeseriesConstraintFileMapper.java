@@ -67,6 +67,7 @@ public class TimeseriesConstraintFileMapper implements TimeseriesConstraintMappe
     private boolean sameBusinessKey(TimeseriesConstraint incoming, TimeseriesConstraint stored) {
         return incoming != null
                 && stored != null
+                && Objects.equals(incoming.getProjectId(), stored.getProjectId())
                 && Objects.equals(incoming.getConstraintId(), stored.getConstraintId());
     }
 

@@ -28,7 +28,7 @@ public class TimeseriesConstraintExpansionResolver {
         Map<String, String> rawMapping = constraint.getVariableMapping() != null
                 ? constraint.getVariableMapping()
                 : Map.of();
-        return expandConstraintRules(constraint.getConstraintId(), rawMapping);
+        return expandConstraintRules(constraint.getProjectId(), constraint.getConstraintId(), rawMapping);
     }
 
     public List<String> expandConstraintIdsForContext(
@@ -73,11 +73,11 @@ public class TimeseriesConstraintExpansionResolver {
     }
 
     private List<ExpandedConstraintRule> expandConstraintRules(
-            String constraintId, Map<String, String> rawMapping) {
+            String projectId, String constraintId, Map<String, String> rawMapping) {
 
         Map<String, List<String>> expandedByVar = new LinkedHashMap<>();
         for (Map.Entry<String, String> entry : rawMapping.entrySet()) {
-            List<String> seqIds = resolveToSequences(
+            List<String> seqIds = resolveToSequences(projectId,
                     entry.getValue() != null ? List.of(entry.getValue()) : List.of());
             expandedByVar.put(entry.getKey(), seqIds);
         }
@@ -87,7 +87,7 @@ public class TimeseriesConstraintExpansionResolver {
 
         if (firstVar != null && !expandedByVar.get(firstVar).isEmpty()) {
             for (String seqId : expandedByVar.get(firstVar)) {
-                TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(seqId);
+                TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(projectId, seqId);
                 String deviceId = inst != null && inst.getDeviceInstanceId() != null
                         ? inst.getDeviceInstanceId()
                         : "_default";
@@ -102,7 +102,7 @@ public class TimeseriesConstraintExpansionResolver {
                     }
                     String match = varEntry.getValue().stream()
                             .filter(candidate -> {
-                                TimeseriesInstanceConfig candidateInst = memoryCache.getInstanceBySequenceId(candidate);
+                                TimeseriesInstanceConfig candidateInst = memoryCache.getInstanceBySequenceId(projectId, candidate);
                                 return candidateInst != null && deviceId.equals(candidateInst.getDeviceInstanceId());
                             })
                             .findFirst()
@@ -131,7 +131,7 @@ public class TimeseriesConstraintExpansionResolver {
         return result;
     }
 
-    private List<String> resolveToSequences(Collection<String> ids) {
+    private List<String> resolveToSequences(String projectId, Collection<String> ids) {
         if (ids == null || ids.isEmpty()) {
             return List.of();
         }
@@ -140,9 +140,10 @@ public class TimeseriesConstraintExpansionResolver {
             if (id == null || id.isBlank()) {
                 continue;
             }
-            if (memoryCache.getCategory(id).isPresent()) {
+            if (memoryCache.getCategory(projectId, id).isPresent()) {
                 for (TimeseriesInstanceConfig inst : memoryCache.listInstanceConfigs()) {
-                    if (id.equals(inst.getCategoryId()) && inst.getSequenceId() != null) {
+                    if (java.util.Objects.equals(projectId, inst.getProjectId())
+                            && id.equals(inst.getCategoryId()) && inst.getSequenceId() != null) {
                         result.add(inst.getSequenceId());
                     }
                 }

@@ -10,6 +10,7 @@ import lombok.Data;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class TimeseriesConstraint {
 
+    private String projectId;
     private String constraintId;
     private String constraintName;
     private Map<String, String> variableMapping;

@@ -6,6 +6,7 @@ import lombok.Data;
 @Data
 public class TimeseriesInstanceConfig {
 
+    private String projectId;
     private String sequenceId;
     private String instanceName;
     private String externalSequenceId;

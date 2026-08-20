@@ -5,6 +5,7 @@ import lombok.Data;
 @Data
 public class EventListVO {
 
+    private String projectId;
     private String eventId;
     private String eventName;
     private String eventType;

@@ -67,6 +67,7 @@ public class TimeseriesRelationFileMapper implements TimeseriesRelationMapper {
     private boolean sameBusinessKey(TimeseriesRelation incoming, TimeseriesRelation stored) {
         return incoming != null
                 && stored != null
+                && Objects.equals(incoming.getProjectId(), stored.getProjectId())
                 && Objects.equals(incoming.getRelationId(), stored.getRelationId());
     }
 

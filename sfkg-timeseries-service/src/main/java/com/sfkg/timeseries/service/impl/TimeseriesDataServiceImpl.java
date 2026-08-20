@@ -61,7 +61,10 @@ public class TimeseriesDataServiceImpl implements TimeseriesDataService {
         // Route each point through the hash-partitioned buffer pool
         int pointCount = request.getPoints().size();
         for (TimeseriesDataSaveRequest.IngestPointDTO point : request.getPoints()) {
-            int partition = ingestBufferPool.partition(point.getSequenceId());
+            if (point.getProjectId() == null) {
+                point.setProjectId(request.getProjectId());
+            }
+            int partition = ingestBufferPool.partition(point.getProjectId(), point.getSequenceId());
             ingestBufferPool.offer(point, partition);
         }
         throughputMonitor.recordReceived(pointCount);
@@ -99,6 +102,7 @@ public class TimeseriesDataServiceImpl implements TimeseriesDataService {
         List<TimeseriesDataPoint> points = new ArrayList<>();
         for (TimeseriesDataSaveRequest.IngestPointDTO p : request.getPoints()) {
             TimeseriesDataPoint dp = new TimeseriesDataPoint();
+            dp.setProjectId(request.getProjectId());
             dp.setSequenceId(p.getSequenceId());
             if (p.getTime() != null) {
                 dp.setTimestamp(LocalDateTime.ofInstant(

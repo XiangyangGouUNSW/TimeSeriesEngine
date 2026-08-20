@@ -6,6 +6,7 @@ import lombok.Data;
 @Data
 public class TimeseriesSyncLog {
 
+    private String projectId;
     private String id;
     private String syncType;
     private String businessId;

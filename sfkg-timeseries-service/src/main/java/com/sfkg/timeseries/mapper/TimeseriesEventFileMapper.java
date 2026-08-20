@@ -88,6 +88,7 @@ public class TimeseriesEventFileMapper implements TimeseriesEventMapper {
     private boolean sameBusinessKey(TimeseriesEvent incoming, TimeseriesEvent stored) {
         return incoming != null
                 && stored != null
+                && Objects.equals(incoming.getProjectId(), stored.getProjectId())
                 && Objects.equals(incoming.getEventId(), stored.getEventId());
     }
 

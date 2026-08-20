@@ -7,6 +7,7 @@ import lombok.Data;
 @Data
 public class TimeseriesDataPoint {
 
+    private String projectId;
     private String sequenceId;
     private LocalDateTime timestamp;
     private BigDecimal value;

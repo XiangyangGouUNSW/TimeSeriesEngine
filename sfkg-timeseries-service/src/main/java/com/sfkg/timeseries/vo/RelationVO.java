@@ -8,6 +8,7 @@ import lombok.Data;
 @Data
 public class RelationVO {
 
+    private String projectId;
     private String relationId;
     private String relationName;
     private List<String> sourceSequences;

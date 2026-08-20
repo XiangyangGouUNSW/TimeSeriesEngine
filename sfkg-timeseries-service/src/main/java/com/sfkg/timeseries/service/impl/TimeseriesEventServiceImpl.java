@@ -61,12 +61,14 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
                 ? generateEventId()
                 : request.getEventId();
 
-        TimeseriesEvent entity = memoryCache.computeEvent(eventId, existing -> {
+        TimeseriesEvent entity = memoryCache.computeEvent(
+                request != null ? request.getProjectId() : null, eventId, existing -> {
             TimeseriesEvent e = existing != null ? existing : new TimeseriesEvent();
             if (request != null) {
                 BeanUtils.copyProperties(request, e);
             }
             e.setEventId(eventId);
+            e.setProjectId(request != null ? request.getProjectId() : (existing != null ? existing.getProjectId() : null));
             if (e.getEventTime() == null) {
                 e.setEventTime(LocalDateTime.now());
             }
@@ -99,7 +101,7 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
                 ? entity.getEventId()
                 : generateEventId();
 
-        TimeseriesEvent merged = memoryCache.computeEvent(eventId, existing -> {
+        TimeseriesEvent merged = memoryCache.computeEvent(entity.getProjectId(), eventId, existing -> {
             TimeseriesEvent e = existing != null ? existing : new TimeseriesEvent();
             BeanUtils.copyProperties(entity, e);
             e.setEventId(eventId);
@@ -177,6 +179,7 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
             return true;
         }
         return equalsTextIfPresent(request.getEventType(), entity.getEventType())
+                && equalsTextIfPresent(request.getProjectId(), entity.getProjectId())
                 && equalsTextIfPresent(request.getEventSource(), entity.getEventSource())
                 && equalsTextIfPresent(request.getEventLevel(), entity.getEventLevel())
                 && equalsTextIfPresent(request.getConfirmStatus(), entity.getConfirmStatus())

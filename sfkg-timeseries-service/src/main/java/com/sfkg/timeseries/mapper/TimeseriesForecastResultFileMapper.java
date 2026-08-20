@@ -31,6 +31,7 @@ public class TimeseriesForecastResultFileMapper implements TimeseriesForecastRes
     private boolean sameBusinessKey(TimeseriesForecastResult incoming, TimeseriesForecastResult stored) {
         return incoming != null
                 && stored != null
+                && Objects.equals(incoming.getProjectId(), stored.getProjectId())
                 && Objects.equals(incoming.getResultId(), stored.getResultId());
     }
 }

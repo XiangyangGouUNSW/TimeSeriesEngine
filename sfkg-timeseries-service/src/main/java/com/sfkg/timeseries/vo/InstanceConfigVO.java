@@ -5,6 +5,7 @@ import lombok.Data;
 @Data
 public class InstanceConfigVO {
 
+    private String projectId;
     private String sequenceId;
     private String instanceName;
     private String categoryName;

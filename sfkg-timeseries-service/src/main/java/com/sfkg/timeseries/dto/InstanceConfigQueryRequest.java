@@ -4,6 +4,7 @@ import lombok.Data;
 
 @Data
 public class InstanceConfigQueryRequest {
+    private String projectId;
 
     private String sequenceId;
     private String categoryId;

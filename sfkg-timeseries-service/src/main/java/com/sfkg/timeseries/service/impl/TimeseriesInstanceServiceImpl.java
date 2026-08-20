@@ -53,7 +53,8 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
         // check duplicate by instanceName if provided
         if (request != null && request.getInstanceName() != null && !request.getInstanceName().isBlank()) {
             boolean dup = memoryCache.listInstanceConfigs().stream()
-                    .anyMatch(e -> request.getInstanceName().equals(e.getInstanceName()));
+                    .anyMatch(e -> Objects.equals(request.getProjectId(), e.getProjectId())
+                            && request.getInstanceName().equals(e.getInstanceName()));
             if (dup) {
                 throw new BusinessException("instance already exists: " + request.getInstanceName());
             }
@@ -68,7 +69,7 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
                 throw new BusinessException("sequenceId must not be blank");
             }
             if (request.getCategoryId() != null) {
-                validateCategory(request.getCategoryId());
+                validateCategory(request.getProjectId(), request.getCategoryId());
             }
         }
         cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
@@ -76,13 +77,15 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
                 ? generateSequenceId()
                 : request.getSequenceId();
 
-        TimeseriesInstanceConfig entity = memoryCache.computeInstanceConfig(sequenceId, existing -> {
+        TimeseriesInstanceConfig entity = memoryCache.computeInstanceConfig(
+                request != null ? request.getProjectId() : null, sequenceId, existing -> {
             TimeseriesInstanceConfig e = existing != null ? existing : new TimeseriesInstanceConfig();
             if (request != null) {
                 BeanUtils.copyProperties(request, e);
             }
             e.setSequenceId(sequenceId);
-            e.setCategoryName(resolveCategoryName(e.getCategoryId()));
+            e.setProjectId(request != null ? request.getProjectId() : (existing != null ? existing.getProjectId() : null));
+            e.setCategoryName(resolveCategoryName(e.getProjectId(), e.getCategoryId()));
             e.setDeviceInstanceName(resolveDeviceInstanceName(e.getDeviceInstanceId()));
             // audit fields
             LocalDateTime now = LocalDateTime.now();
@@ -105,7 +108,8 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
         // Re-sync relations that reference this instance's category (for category-level expansion)
         if (entity.getCategoryId() != null) {
             cacheManager.ensureTableLoaded(CachedTable.RELATION);
-            for (TimeseriesRelation rel : memoryCache.listRelations()) {
+            for (TimeseriesRelation rel : memoryCache.listRelations().stream()
+                    .filter(rel -> Objects.equals(entity.getProjectId(), rel.getProjectId())).toList()) {
                 boolean matches = entity.getCategoryId().equals(rel.getTargetSequenceId());
                 if (!matches && rel.getSourceSequences() != null) {
                     matches = rel.getSourceSequences().contains(entity.getCategoryId());
@@ -116,7 +120,8 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
             }
             // Re-sync constraints whose variableMapping references this categoryId
             cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
-            for (TimeseriesConstraint c : memoryCache.listConstraints()) {
+            for (TimeseriesConstraint c : memoryCache.listConstraints().stream()
+                    .filter(c -> Objects.equals(entity.getProjectId(), c.getProjectId())).toList()) {
                 if (c.getVariableMapping() != null && c.getVariableMapping().containsValue(entity.getCategoryId())) {
                     coreGrpcClient.syncConstraintConfig(c);
                 }
@@ -137,11 +142,16 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
 
     @Override
     public void validateCategory(String categoryId) {
+        validateCategory(null, categoryId);
+    }
+
+    private void validateCategory(String projectId, String categoryId) {
         if (categoryId == null) {
             return;
         }
         cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
-        if (memoryCache.getCategory(categoryId).isEmpty()) {
+        if (memoryCache.getCategory(projectId, categoryId).isEmpty()
+                && memoryCache.getCategory(categoryId).isEmpty()) {
             throw new BusinessException("category not found: " + categoryId);
         }
     }
@@ -168,12 +178,13 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
         memoryCache.getInstanceConfig(sequenceId).ifPresent(coreGrpcClient::syncInstanceConfig);
     }
 
-    private String resolveCategoryName(String categoryId) {
+    private String resolveCategoryName(String projectId, String categoryId) {
         if (categoryId == null) {
             return null;
         }
         cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
-        return memoryCache.getCategory(categoryId)
+        return memoryCache.getCategory(projectId, categoryId)
+                .or(() -> memoryCache.getCategory(categoryId))
                 .map(TimeseriesCategory::getCategoryName)
                 .orElse(null);
     }
@@ -192,7 +203,8 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
         if (request == null) {
             return true;
         }
-        return equalsIfPresent(request.getSequenceId(), entity.getSequenceId())
+        return equalsIfPresent(request.getProjectId(), entity.getProjectId())
+                && equalsIfPresent(request.getSequenceId(), entity.getSequenceId())
                 && equalsIfPresent(request.getCategoryId(), entity.getCategoryId())
                 && equalsIfPresent(request.getDeviceInstanceId(), entity.getDeviceInstanceId())
                 && equalsTextIfPresent(request.getAccessStatus(), entity.getAccessStatus());

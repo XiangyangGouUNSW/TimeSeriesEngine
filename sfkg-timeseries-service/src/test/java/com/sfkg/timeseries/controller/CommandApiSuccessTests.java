@@ -52,6 +52,7 @@ class CommandApiSuccessTests {
 
     private static final String INSTANCE_SAVE_JSON = """
             {
+            "projectId": "project-a",
               "sequenceId": 1001,
               "instanceName": "main transformer oil temperature",
               "externalSequenceId": 9001,
@@ -64,6 +65,7 @@ class CommandApiSuccessTests {
 
     private static final String INSTANCE_QUERY_JSON = """
             {
+            "projectId": "project-a",
               "sequenceId": 1001,
               "categoryId": 2001,
               "deviceInstanceId": 3001,
@@ -73,15 +75,17 @@ class CommandApiSuccessTests {
 
     private static final String HISTORY_QUERY_JSON = """
             {
+            "projectId": "project-a",
               "sequenceId": 1001,
               "startTime": "2026-08-03T10:00:00",
               "endTime": "2026-08-03T11:00:00",
-              "granularity": "1m"
+              "granularity": 60000
             }
             """;
 
     private static final String TIMESERIES_DATA_SAVE_JSON = """
             {
+            "projectId": "project-a",
               "sequence_id": 1001,
               "data": {
                 "2026-08-03T10:00:00": 32.5,
@@ -93,6 +97,7 @@ class CommandApiSuccessTests {
 
     private static final String CATEGORY_SAVE_JSON = """
             {
+            "projectId": "project-a",
               "categoryId": 2001,
               "categoryName": "temperature",
               "dataType": "DOUBLE",
@@ -105,6 +110,7 @@ class CommandApiSuccessTests {
 
     private static final String CATEGORY_QUERY_JSON = """
             {
+            "projectId": "project-a",
               "categoryId": 2001,
               "categoryName": "temperature",
               "dataType": "DOUBLE",
@@ -115,6 +121,7 @@ class CommandApiSuccessTests {
 
     private static final String CONSTRAINT_SAVE_JSON = """
             {
+            "projectId": "project-a",
               "constraintId": 5001,
               "constraintName": "temperature upper limit",
               "variableMapping": {"x": 1001},
@@ -128,6 +135,7 @@ class CommandApiSuccessTests {
 
     private static final String CONSTRAINT_QUERY_JSON = """
             {
+            "projectId": "project-a",
               "constraintId": 5001,
               "constraintName": "temperature upper limit",
               "effectiveStatus": "ENABLE",
@@ -138,6 +146,7 @@ class CommandApiSuccessTests {
 
     private static final String RELATION_SAVE_JSON = """
             {
+            "projectId": "project-a",
               "relationId": 6001,
               "relationName": "load affects temperature",
               "sourceCategories": [2002],
@@ -153,6 +162,7 @@ class CommandApiSuccessTests {
 
     private static final String RELATION_QUERY_JSON = """
             {
+            "projectId": "project-a",
               "relationId": 6001,
               "relationName": "load affects temperature",
               "sourceCategoryId": 2002,
@@ -166,6 +176,7 @@ class CommandApiSuccessTests {
 
     private static final String CATEGORY_STATUS_JSON = """
             {
+            "projectId": "project-a",
               "categoryId": 2001,
               "confirmStatus": "CONFIRMED",
               "effectiveStatus": "ENABLE"
@@ -174,6 +185,7 @@ class CommandApiSuccessTests {
 
     private static final String CONSTRAINT_STATUS_JSON = """
             {
+            "projectId": "project-a",
               "constraintId": 5001,
               "confirmStatus": "CONFIRMED",
               "effectiveStatus": "ENABLE"
@@ -182,6 +194,7 @@ class CommandApiSuccessTests {
 
     private static final String RELATION_STATUS_JSON = """
             {
+            "projectId": "project-a",
               "relationId": 6001,
               "confirmStatus": "CONFIRMED",
               "effectiveStatus": "ENABLE"
@@ -190,6 +203,7 @@ class CommandApiSuccessTests {
 
     private static final String ANOMALY_TASK_SAVE_JSON = """
             {
+            "projectId": "project-a",
               "taskId": "task-anomaly-001",
               "taskName": "temperature anomaly detection",
               "sequenceIds": ["temperature-1", "pressure-1"],
@@ -204,6 +218,7 @@ class CommandApiSuccessTests {
 
     private static final String FORECAST_TASK_SAVE_JSON = """
             {
+            "projectId": "project-a",
               "taskId": 7002,
               "taskName": "temperature forecast",
               "forecastObjects": [1001, 1002],
@@ -215,6 +230,7 @@ class CommandApiSuccessTests {
 
     private static final String ANOMALY_TASK_QUERY_JSON = """
             {
+            "projectId": "project-a",
               "taskId": 7001,
               "taskName": "temperature",
               "taskType": "ANOMALY",
@@ -225,6 +241,7 @@ class CommandApiSuccessTests {
 
     private static final String ANOMALY_TASK_STATUS_JSON = """
             {
+            "projectId": "project-a",
               "taskId": 7001,
               "taskType": "ANOMALY",
               "status": "DISABLE"
@@ -233,6 +250,7 @@ class CommandApiSuccessTests {
 
     private static final String FORECAST_TASK_QUERY_JSON = """
             {
+            "projectId": "project-a",
               "taskId": 7002,
               "taskName": "temperature",
               "taskType": "FORECAST",
@@ -243,6 +261,7 @@ class CommandApiSuccessTests {
 
     private static final String FORECAST_TASK_STATUS_JSON = """
             {
+            "projectId": "project-a",
               "taskId": 7002,
               "taskType": "FORECAST",
               "status": "DISABLE"
@@ -251,6 +270,7 @@ class CommandApiSuccessTests {
 
     private static final String EVENT_QUERY_JSON = """
             {
+            "projectId": "project-a",
               "eventType": "ANOMALY",
               "eventSource": "ANOMALY_DETECTION",
               "eventLevel": "WARNING",
@@ -264,12 +284,14 @@ class CommandApiSuccessTests {
 
     private static final String EVENT_DETAIL_JSON = """
             {
+            "projectId": "project-a",
               "eventId": 8001
             }
             """;
 
     private static final String EVENT_SAVE_JSON = """
             {
+            "projectId": "project-a",
               "eventId": 8001,
               "eventName": "temperature warning",
               "eventType": "ANOMALY",
@@ -289,12 +311,14 @@ class CommandApiSuccessTests {
 
     private static final String DECISION_QUERY_JSON = """
             {
+            "projectId": "project-a",
               "eventId": 8001
             }
             """;
 
     private static final String FEEDBACK_JSON = """
             {
+            "projectId": "project-a",
               "eventId": 8001,
               "disposalResult": "confirmed and processed",
               "handleStatus": "HANDLED"
@@ -303,6 +327,7 @@ class CommandApiSuccessTests {
 
     private static final String ANOMALY_RESULT_QUERY_JSON = """
             {
+            "projectId": "project-a",
               "taskId": 7001,
               "sequenceId": 1001,
               "startTime": "2026-08-03T10:00:00",
@@ -313,6 +338,7 @@ class CommandApiSuccessTests {
 
     private static final String FORECAST_RESULT_QUERY_JSON = """
             {
+            "projectId": "project-a",
               "taskId": 7002,
               "sequenceId": 1001,
               "startTime": "2026-08-03T10:00:00",
@@ -426,33 +452,41 @@ class CommandApiSuccessTests {
                     .andExpect(jsonPath("$.message").value(request.expectedSuccess()));
         }
 
-        verify(instanceService, times(2)).saveInstanceConfig(org.mockito.ArgumentMatchers.any(InstanceConfigSaveRequest.class));
+        verify(instanceService).createInstanceConfig(org.mockito.ArgumentMatchers.any(InstanceConfigSaveRequest.class));
+        verify(instanceService).saveInstanceConfig(org.mockito.ArgumentMatchers.any(InstanceConfigSaveRequest.class));
         verify(instanceService).queryInstanceConfigs(org.mockito.ArgumentMatchers.any(InstanceConfigQueryRequest.class));
         verify(dataService).queryHistoryData(org.mockito.ArgumentMatchers.any(HistoryDataQueryRequest.class));
         verify(dataService).saveTimeseriesData(org.mockito.ArgumentMatchers.any(TimeseriesDataSaveRequest.class));
 
         verify(semanticService).listCategories(org.mockito.ArgumentMatchers.any(CategoryQueryRequest.class));
-        verify(semanticService, times(2)).saveCategory(org.mockito.ArgumentMatchers.any(CategorySaveRequest.class));
+        verify(semanticService).createCategory(org.mockito.ArgumentMatchers.any(CategorySaveRequest.class));
+        verify(semanticService).saveCategory(org.mockito.ArgumentMatchers.any(CategorySaveRequest.class));
         verify(semanticService).updateCategoryStatus(org.mockito.ArgumentMatchers.any(CategoryStatusUpdateRequest.class));
         verify(semanticService).listConstraints(org.mockito.ArgumentMatchers.any(ConstraintQueryRequest.class));
-        verify(semanticService, times(2)).saveConstraint(org.mockito.ArgumentMatchers.any(ConstraintSaveRequest.class));
+        verify(semanticService).createConstraint(org.mockito.ArgumentMatchers.any(ConstraintSaveRequest.class));
+        verify(semanticService).saveConstraint(org.mockito.ArgumentMatchers.any(ConstraintSaveRequest.class));
         verify(semanticService).updateConstraintStatus(org.mockito.ArgumentMatchers.any(ConstraintStatusUpdateRequest.class));
         verify(semanticService).listRelations(org.mockito.ArgumentMatchers.any(RelationQueryRequest.class));
-        verify(semanticService, times(2)).saveRelation(org.mockito.ArgumentMatchers.any(RelationSaveRequest.class));
+        verify(semanticService).createRelation(org.mockito.ArgumentMatchers.any(RelationSaveRequest.class));
+        verify(semanticService).saveRelation(org.mockito.ArgumentMatchers.any(RelationSaveRequest.class));
         verify(semanticService).updateRelationStatus(org.mockito.ArgumentMatchers.any(RelationStatusUpdateRequest.class));
 
-        verify(anomalyTaskService, times(2)).saveAnomalyTask(org.mockito.ArgumentMatchers.any(AnomalyTaskSaveRequest.class));
+        verify(anomalyTaskService).createAnomalyTask(org.mockito.ArgumentMatchers.any(AnomalyTaskSaveRequest.class));
+        verify(anomalyTaskService).saveAnomalyTask(org.mockito.ArgumentMatchers.any(AnomalyTaskSaveRequest.class));
         verify(anomalyTaskService).listAnomalyTasks(org.mockito.ArgumentMatchers.any(TaskQueryRequest.class));
         verify(anomalyTaskService).updateAnomalyTaskStatus(org.mockito.ArgumentMatchers.any(TaskStatusUpdateRequest.class));
-        verify(forecastTaskService, times(2)).saveForecastTask(org.mockito.ArgumentMatchers.any(ForecastTaskSaveRequest.class));
+        verify(forecastTaskService).createForecastTask(org.mockito.ArgumentMatchers.any(ForecastTaskSaveRequest.class));
+        verify(forecastTaskService).saveForecastTask(org.mockito.ArgumentMatchers.any(ForecastTaskSaveRequest.class));
         verify(forecastTaskService).listForecastTasks(org.mockito.ArgumentMatchers.any(TaskQueryRequest.class));
         verify(forecastTaskService).updateForecastTaskStatus(org.mockito.ArgumentMatchers.any(TaskStatusUpdateRequest.class));
 
         verify(eventService).listEvents(org.mockito.ArgumentMatchers.any(EventQueryRequest.class));
         verify(eventService).getEventDetail(org.mockito.ArgumentMatchers.anyString());
         verify(eventService, times(2)).saveEvent(org.mockito.ArgumentMatchers.any(EventSaveRequest.class));
-        verify(decisionService).getDiagnosisResult(org.mockito.ArgumentMatchers.anyString());
-        verify(decisionService).getDecisionSuggestion(org.mockito.ArgumentMatchers.anyString());
+        verify(decisionService).getDiagnosisResult(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString());
+        verify(decisionService).getDecisionSuggestion(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString());
         verify(decisionService).submitDisposalFeedback(org.mockito.ArgumentMatchers.any(DisposalFeedbackRequest.class));
         verify(anomalyResultService).queryAnomalyResults(org.mockito.ArgumentMatchers.any(AnomalyResultQueryRequest.class));
         verify(forecastResultService).queryForecastResults(org.mockito.ArgumentMatchers.any(ForecastResultQueryRequest.class));

@@ -6,6 +6,7 @@ import lombok.Data;
 @Data
 public class CategoryVO {
 
+    private String projectId;
     private String categoryId;
     private String categoryName;
     private String dataType;

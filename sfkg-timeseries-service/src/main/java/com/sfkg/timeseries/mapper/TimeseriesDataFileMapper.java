@@ -107,6 +107,9 @@ public class TimeseriesDataFileMapper {
         if (request.getSequenceId() != null && !request.getSequenceId().equals(point.getSequenceId())) {
             return false;
         }
+        if (request.getProjectId() != null && !request.getProjectId().equals(point.getProjectId())) {
+            return false;
+        }
         if (request.getStartTime() != null && isBefore(point.getTimestamp(), request.getStartTime())) {
             return false;
         }

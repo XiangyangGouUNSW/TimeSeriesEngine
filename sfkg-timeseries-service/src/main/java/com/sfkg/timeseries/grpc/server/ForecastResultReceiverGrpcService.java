@@ -63,6 +63,7 @@ public class ForecastResultReceiverGrpcService
 
     private TimeseriesForecastResult toEntity(ForecastResultMessage msg) {
         TimeseriesForecastResult entity = new TimeseriesForecastResult();
+        entity.setProjectId(emptyToNull(msg.getProjectId()));
         entity.setResultId("FR_" + msg.getTaskId() + "_" + msg.getRunId() + "_" + UUID.randomUUID().toString().substring(0, 8));
         entity.setTaskId(msg.getTaskId().isBlank() ? null : msg.getTaskId());
         entity.setRunId(msg.getRunId().isBlank() ? null : msg.getRunId());

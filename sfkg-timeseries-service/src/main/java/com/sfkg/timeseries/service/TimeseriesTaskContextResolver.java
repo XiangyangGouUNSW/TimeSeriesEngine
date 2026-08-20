@@ -39,7 +39,7 @@ public class TimeseriesTaskContextResolver {
         if (task.getFeatureSequenceIds() != null) {
             features.addAll(task.getFeatureSequenceIds());
         }
-        features.addAll(collectFeatureSequenceIds(targetIds));
+        features.addAll(collectFeatureSequenceIds(task.getProjectId(), targetIds));
         return features;
     }
 
@@ -50,23 +50,24 @@ public class TimeseriesTaskContextResolver {
         if (task == null) {
             return ctx.build();
         }
+        ctx.setProjectId(nullToEmpty(task.getProjectId()));
 
         List<String> seqIds = task.getSequenceIds() != null
                 ? new ArrayList<>(task.getSequenceIds()) : List.of();
 
         // sequences metadata
         for (String seqId : seqIds) {
-            TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(seqId);
+            TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(task.getProjectId(), seqId);
             if (inst != null) {
                 ctx.addSequences(toSequenceMetadata(inst, "TARGET"));
             }
         }
 
         // relations — discovered by sequenceId AND categoryId, expanded to concrete pairs
-        ctx.addAllRelations(collectExpandedRelations(new HashSet<>(seqIds)));
+        ctx.addAllRelations(collectExpandedRelations(task.getProjectId(), new HashSet<>(seqIds)));
 
         // feature sequences from relations (category-level also expanded)
-        List<TimeseriesInstanceConfig> featureInstances = expandFeatureSequences(seqIds);
+        List<TimeseriesInstanceConfig> featureInstances = expandFeatureSequences(task.getProjectId(), seqIds);
         Set<String> contextSeqIds = new HashSet<>(seqIds);
         featureInstances.stream()
                 .map(TimeseriesInstanceConfig::getSequenceId)
@@ -74,7 +75,7 @@ public class TimeseriesTaskContextResolver {
                 .forEach(contextSeqIds::add);
 
         // constraint ids — expanded to the exact Core-side constraint_id values
-        Set<String> constraintIds = collectConstraintIds(seqIds, contextSeqIds, task.getConstraintIds());
+        Set<String> constraintIds = collectConstraintIds(task.getProjectId(), seqIds, contextSeqIds, task.getConstraintIds());
         ctx.addAllConstraintIds(constraintIds);
 
         for (TimeseriesInstanceConfig srcInst : featureInstances) {
@@ -90,6 +91,7 @@ public class TimeseriesTaskContextResolver {
         if (task == null) {
             return ctx.build();
         }
+        ctx.setProjectId(nullToEmpty(task.getProjectId()));
 
         List<String> targetIds = task.getForecastObjects() != null
                 ? new ArrayList<>(task.getForecastObjects()) : List.of();
@@ -97,18 +99,18 @@ public class TimeseriesTaskContextResolver {
                 ? new ArrayList<>(task.getFeatureSequenceIds()) : new ArrayList<>();
 
         Set<String> autoFeatures = new HashSet<>(featureIds);
-        autoFeatures.addAll(collectFeatureSequenceIds(targetIds));
+        autoFeatures.addAll(collectFeatureSequenceIds(task.getProjectId(), targetIds));
 
         // target sequences
         for (String seqId : targetIds) {
-            TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(seqId);
+            TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(task.getProjectId(), seqId);
             if (inst != null) {
                 ctx.addSequences(toSequenceMetadata(inst, "TARGET"));
             }
         }
         // feature sequences
         for (String seqId : autoFeatures) {
-            TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(seqId);
+            TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(task.getProjectId(), seqId);
             if (inst != null) {
                 ctx.addSequences(toSequenceMetadata(inst, "FEATURE"));
             }
@@ -117,13 +119,13 @@ public class TimeseriesTaskContextResolver {
         // relations — discovered by sequenceId AND categoryId, expanded to concrete pairs
         Set<String> candidateIds = new HashSet<>(targetIds);
         candidateIds.addAll(autoFeatures);
-        ctx.addAllRelations(collectExpandedRelations(candidateIds));
+        ctx.addAllRelations(collectExpandedRelations(task.getProjectId(), candidateIds));
 
         Set<String> contextSeqIds = new HashSet<>(targetIds);
         contextSeqIds.addAll(autoFeatures);
 
         // constraint ids — expanded to the exact Core-side constraint_id values
-        Set<String> constraintIds = collectConstraintIds(targetIds, contextSeqIds, task.getConstraintIds());
+        Set<String> constraintIds = collectConstraintIds(task.getProjectId(), targetIds, contextSeqIds, task.getConstraintIds());
         ctx.addAllConstraintIds(constraintIds);
 
         ctx.setKnowledgeVersion(String.valueOf(System.currentTimeMillis()));
@@ -133,7 +135,7 @@ public class TimeseriesTaskContextResolver {
     private SequenceMetadata toSequenceMetadata(TimeseriesInstanceConfig inst, String role) {
         String unit = "";
         if (inst.getCategoryId() != null) {
-            unit = memoryCache.getCategory(inst.getCategoryId())
+            unit = memoryCache.getCategory(inst.getProjectId(), inst.getCategoryId())
                     .map(c -> c.getDefaultUnit() != null ? c.getDefaultUnit() : "")
                     .orElse("");
         }
@@ -152,13 +154,13 @@ public class TimeseriesTaskContextResolver {
      * Category-level sources/targets are expanded to concrete sequence pairs,
      * with relationId matching the Core-end format: {relationId}_{source}_{target}.
      */
-    private List<SequenceRelation> collectExpandedRelations(Set<String> seqIds) {
+    private List<SequenceRelation> collectExpandedRelations(String projectId, Set<String> seqIds) {
         if (seqIds.isEmpty()) return List.of();
 
         // Lookup keys: sequenceIds + their categoryIds
         Set<String> lookupKeys = new HashSet<>(seqIds);
         for (String seqId : seqIds) {
-            TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(seqId);
+            TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(projectId, seqId);
             if (inst != null && inst.getCategoryId() != null) {
                 lookupKeys.add(inst.getCategoryId());
             }
@@ -168,24 +170,24 @@ public class TimeseriesTaskContextResolver {
         Set<String> addedExpandedIds = new HashSet<>();
 
         for (String key : lookupKeys) {
-            for (TimeseriesRelation rel : memoryCache.listRelationsByTargetSequenceId(key)) {
-                expandRelation(rel, seqIds, addedExpandedIds, result);
+            for (TimeseriesRelation rel : memoryCache.listRelationsByTargetSequenceId(projectId, key)) {
+                expandRelation(projectId, rel, seqIds, addedExpandedIds, result);
             }
-            for (TimeseriesRelation rel : memoryCache.listRelationsBySourceSequenceId(key)) {
-                expandRelation(rel, seqIds, addedExpandedIds, result);
+            for (TimeseriesRelation rel : memoryCache.listRelationsBySourceSequenceId(projectId, key)) {
+                expandRelation(projectId, rel, seqIds, addedExpandedIds, result);
             }
         }
         return result;
     }
 
-    private void expandRelation(TimeseriesRelation rel, Set<String> taskSeqIds,
+    private void expandRelation(String projectId, TimeseriesRelation rel, Set<String> taskSeqIds,
             Set<String> addedExpandedIds, List<SequenceRelation> result) {
         if (!isRelationEnabled(rel)) return;
 
-        List<String> srcSeqs = expandIds(rel.getSourceSequences());
+        List<String> srcSeqs = expandIds(projectId, rel.getSourceSequences());
         if (srcSeqs.isEmpty()) return;
 
-        List<String> tgtSeqs = expandIds(
+        List<String> tgtSeqs = expandIds(projectId,
                 rel.getTargetSequenceId() != null ? List.of(rel.getTargetSequenceId()) : List.of());
         // Only include targets that are in the task's sequences
         tgtSeqs.retainAll(taskSeqIds);
@@ -217,14 +219,15 @@ public class TimeseriesTaskContextResolver {
      * Expand category IDs to sequence IDs. If an ID is a category, enumerate
      * all sequences under that category. Otherwise treat as a sequence ID directly.
      */
-    private List<String> expandIds(Collection<String> ids) {
+    private List<String> expandIds(String projectId, Collection<String> ids) {
         if (ids == null || ids.isEmpty()) return List.of();
         List<String> result = new ArrayList<>();
         for (String id : ids) {
             if (id == null || id.isBlank()) continue;
-            if (memoryCache.getCategory(id).isPresent()) {
+            if (memoryCache.getCategory(projectId, id).isPresent()) {
                 for (TimeseriesInstanceConfig inst : memoryCache.listInstanceConfigs()) {
-                    if (id.equals(inst.getCategoryId()) && inst.getSequenceId() != null) {
+                    if (java.util.Objects.equals(projectId, inst.getProjectId())
+                            && id.equals(inst.getCategoryId()) && inst.getSequenceId() != null) {
                         result.add(inst.getSequenceId());
                     }
                 }
@@ -239,20 +242,20 @@ public class TimeseriesTaskContextResolver {
      * Collect feature sequence IDs from relations targeting the given sequence IDs.
      * Category-level relations are expanded.
      */
-    private Set<String> collectFeatureSequenceIds(List<String> targetIds) {
+    private Set<String> collectFeatureSequenceIds(String projectId, List<String> targetIds) {
         Set<String> features = new HashSet<>();
         Set<String> lookupKeys = new HashSet<>(targetIds);
         for (String seqId : targetIds) {
-            TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(seqId);
+            TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(projectId, seqId);
             if (inst != null && inst.getCategoryId() != null) {
                 lookupKeys.add(inst.getCategoryId());
             }
         }
         for (String key : lookupKeys) {
-            for (TimeseriesRelation rel : memoryCache.listRelationsByTargetSequenceId(key)) {
+            for (TimeseriesRelation rel : memoryCache.listRelationsByTargetSequenceId(projectId, key)) {
                 if (!isRelationEnabled(rel)) continue;
                 if (rel.getSourceSequences() != null) {
-                    features.addAll(expandIds(rel.getSourceSequences()));
+                    features.addAll(expandIds(projectId, rel.getSourceSequences()));
                 }
             }
         }
@@ -262,11 +265,11 @@ public class TimeseriesTaskContextResolver {
     /**
      * Expand feature sequences and return their InstanceConfig for metadata.
      */
-    private List<TimeseriesInstanceConfig> expandFeatureSequences(List<String> targetIds) {
-        Set<String> featureIds = collectFeatureSequenceIds(targetIds);
+    private List<TimeseriesInstanceConfig> expandFeatureSequences(String projectId, List<String> targetIds) {
+        Set<String> featureIds = collectFeatureSequenceIds(projectId, targetIds);
         List<TimeseriesInstanceConfig> result = new ArrayList<>();
         for (String seqId : featureIds) {
-            TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(seqId);
+            TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(projectId, seqId);
             if (inst != null) {
                 result.add(inst);
             }
@@ -289,7 +292,7 @@ public class TimeseriesTaskContextResolver {
      * call Core constraint checking with exact IDs.
      */
     private Set<String> collectConstraintIds(
-            List<String> targetSeqIds,
+            String projectId, List<String> targetSeqIds,
             Collection<String> contextSeqIds,
             Collection<String> explicitIds) {
 
@@ -298,7 +301,7 @@ public class TimeseriesTaskContextResolver {
 
         if (explicitIds != null) {
             for (String constraintId : explicitIds) {
-                TimeseriesConstraint constraint = memoryCache.getConstraint(constraintId).orElse(null);
+                TimeseriesConstraint constraint = memoryCache.getConstraint(projectId, constraintId).orElse(null);
                 if (isConstraintActive(constraint)) {
                     result.addAll(constraintExpansionResolver.expandConstraintIdsForContext(
                             constraint, targetSeqIds, contextSeqIds, true));
@@ -306,7 +309,8 @@ public class TimeseriesTaskContextResolver {
             }
         }
 
-        for (TimeseriesConstraint c : memoryCache.listConstraints()) {
+        for (TimeseriesConstraint c : memoryCache.listConstraints().stream()
+                .filter(c -> java.util.Objects.equals(projectId, c.getProjectId())).toList()) {
             if (!isConstraintActive(c) || explicitOriginalIds.contains(c.getConstraintId())) {
                 continue;
             }
@@ -327,5 +331,9 @@ public class TimeseriesTaskContextResolver {
 
     private boolean isRelationEnabled(TimeseriesRelation rel) {
         return rel != null && "ENABLE".equalsIgnoreCase(rel.getEffectiveStatus());
+    }
+
+    private String nullToEmpty(String value) {
+        return value == null ? "" : value;
     }
 }

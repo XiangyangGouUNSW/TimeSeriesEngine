@@ -35,7 +35,7 @@ public class TimeseriesDecisionController {
 
     @PostMapping(value = "/diagnosis", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ApiResult<DiagnosisResultVO> getDiagnosisResultByJson(@RequestBody DecisionQueryRequest request) {
-        DiagnosisResultVO data = decisionService.getDiagnosisResult(request.getEventId());
+        DiagnosisResultVO data = decisionService.getDiagnosisResult(request.getProjectId(), request.getEventId());
         return returnSuccess("diagnosis query success", data);
     }
 
@@ -47,7 +47,7 @@ public class TimeseriesDecisionController {
 
     @PostMapping(value = "/suggestion", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ApiResult<DecisionSuggestionVO> getDecisionSuggestionByJson(@RequestBody DecisionQueryRequest request) {
-        DecisionSuggestionVO data = decisionService.getDecisionSuggestion(request.getEventId());
+        DecisionSuggestionVO data = decisionService.getDecisionSuggestion(request.getProjectId(), request.getEventId());
         return returnSuccess("decision suggestion query success", data);
     }
 

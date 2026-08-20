@@ -6,6 +6,7 @@ import lombok.Data;
 
 @Data
 public class EventSaveRequest {
+    private String projectId;
 
     private String eventId;
     private String eventName;

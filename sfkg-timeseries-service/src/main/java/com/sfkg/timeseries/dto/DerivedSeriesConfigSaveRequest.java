@@ -5,6 +5,7 @@ import lombok.Data;
 
 @Data
 public class DerivedSeriesConfigSaveRequest {
+    private String projectId;
 
     private List<DerivedSeriesConfigItem> items;
 

@@ -4,6 +4,7 @@ import lombok.Data;
 
 @Data
 public class InstanceConfigSaveRequest {
+    private String projectId;
 
     private String sequenceId;
     private String instanceName;

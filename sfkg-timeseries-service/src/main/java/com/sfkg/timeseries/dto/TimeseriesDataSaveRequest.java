@@ -7,6 +7,8 @@ import lombok.Data;
 @Data
 public class TimeseriesDataSaveRequest {
 
+    private String projectId;
+
     @JsonAlias("return_resolved_data")
     private Boolean returnResolvedData;
 
@@ -14,6 +16,8 @@ public class TimeseriesDataSaveRequest {
 
     @Data
     public static class IngestPointDTO {
+        private String projectId;
+
         @JsonAlias("sequence_id")
         private String sequenceId;
 

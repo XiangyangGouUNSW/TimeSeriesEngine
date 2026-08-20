@@ -49,7 +49,7 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
         String taskId = request != null ? request.getTaskId() : null;
         if (taskId != null) {
             cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
-            if (memoryCache.getForecastTask(taskId).isPresent()) {
+            if (memoryCache.getForecastTask(request.getProjectId(), taskId).isPresent()) {
                 throw new BusinessException("forecast task already exists: " + taskId);
             }
         }
@@ -72,12 +72,14 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
                 ? generateTaskId()
                 : request.getTaskId();
 
-        TimeseriesForecastTask entity = memoryCache.computeForecastTask(taskId, existing -> {
+        TimeseriesForecastTask entity = memoryCache.computeForecastTask(
+                request.getProjectId(), taskId, existing -> {
             TimeseriesForecastTask e = existing != null ? existing : new TimeseriesForecastTask();
             if (request != null) {
                 BeanUtils.copyProperties(request, e);
             }
             e.setTaskId(taskId);
+            e.setProjectId(request.getProjectId());
             // audit fields
             LocalDateTime now = LocalDateTime.now();
             String user = request != null ? request.getUser() : null;
@@ -118,9 +120,11 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
             return;
         }
         cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
-        TimeseriesForecastTask entity = memoryCache.computeForecastTask(request.getTaskId(), existing -> {
+        TimeseriesForecastTask entity = memoryCache.computeForecastTask(
+                request.getProjectId(), request.getTaskId(), existing -> {
             TimeseriesForecastTask e = existing != null ? existing : new TimeseriesForecastTask();
             e.setTaskId(request.getTaskId());
+            e.setProjectId(request.getProjectId());
             e.setStatus(request.getStatus());
             // audit fields
             LocalDateTime now = LocalDateTime.now();
@@ -135,7 +139,7 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
         });
 
         forecastTaskMapper.updateById(entity);
-        forecastGrpcClient.updateForecastTaskStatus(request.getTaskId(), request.getStatus());
+        forecastGrpcClient.updateForecastTaskStatus(entity.getProjectId(), request.getTaskId(), request.getStatus());
     }
 
     private static final long MAX_FORECAST_HORIZON = 10_000;
@@ -153,14 +157,14 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
             throw new BusinessException("forecastObjects must contain valid sequence IDs");
         }
         for (String seqId : targetSet) {
-            TimeseriesInstanceConfig instance = memoryCache.getInstanceBySequenceId(seqId);
+            TimeseriesInstanceConfig instance = memoryCache.getInstanceBySequenceId(request.getProjectId(), seqId);
             if (instance == null) {
                 throw new BusinessException("forecast target sequence not found: " + seqId);
             }
         }
         if (request.getFeatureSequenceIds() != null) {
             for (String featId : request.getFeatureSequenceIds()) {
-                if (featId != null && memoryCache.getInstanceBySequenceId(featId) == null) {
+                if (featId != null && memoryCache.getInstanceBySequenceId(request.getProjectId(), featId) == null) {
                     throw new BusinessException("feature sequence not found: " + featId);
                 }
                 if (featId != null && targetSet.contains(featId)) {
@@ -171,7 +175,7 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
         if (request.getConstraintIds() != null && !request.getConstraintIds().isEmpty()) {
             cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
             for (String constraintId : request.getConstraintIds()) {
-                TimeseriesConstraint constraint = memoryCache.getConstraint(constraintId).orElse(null);
+                TimeseriesConstraint constraint = memoryCache.getConstraint(request.getProjectId(), constraintId).orElse(null);
                 if (constraint == null) {
                     throw new BusinessException("constraint not found: " + constraintId);
                 }
@@ -241,7 +245,8 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
         if (request == null) {
             return true;
         }
-        return equalsIfPresent(request.getTaskId(), entity.getTaskId())
+        return equalsIfPresent(request.getProjectId(), entity.getProjectId())
+                && equalsIfPresent(request.getTaskId(), entity.getTaskId())
                 && taskTypeMatches(request.getTaskType())
                 && containsIfPresent(request.getTaskName(), entity.getTaskName())
                 && equalsTextIfPresent(request.getStatus(), entity.getStatus())

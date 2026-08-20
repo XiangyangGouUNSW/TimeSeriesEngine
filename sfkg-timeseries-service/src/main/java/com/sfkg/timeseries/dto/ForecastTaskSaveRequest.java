@@ -5,6 +5,7 @@ import lombok.Data;
 
 @Data
 public class ForecastTaskSaveRequest {
+    private String projectId;
 
     private String taskId;
     private String taskName;

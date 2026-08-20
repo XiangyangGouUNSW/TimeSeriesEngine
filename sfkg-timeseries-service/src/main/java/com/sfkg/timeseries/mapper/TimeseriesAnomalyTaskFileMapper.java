@@ -56,6 +56,7 @@ public class TimeseriesAnomalyTaskFileMapper implements TimeseriesAnomalyTaskMap
     private boolean sameBusinessKey(TimeseriesAnomalyTask incoming, TimeseriesAnomalyTask stored) {
         return incoming != null
                 && stored != null
+                && Objects.equals(incoming.getProjectId(), stored.getProjectId())
                 && Objects.equals(incoming.getTaskId(), stored.getTaskId());
     }
 

@@ -1,4 +1,5 @@
 {
+  "projectId": "project-a",
   "eventId": "8001",
   "eventName": "temperature warning",
   "eventType": "ANOMALY",

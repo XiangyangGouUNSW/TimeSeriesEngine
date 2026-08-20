@@ -54,7 +54,8 @@ public class ForecastGrpcClient {
         }
         ForecastTaskConfig.Builder configBuilder = ForecastTaskConfig.newBuilder()
                 .setTaskId(nullToEmpty(task.getTaskId()))
-                .setTaskName(nullToEmpty(task.getTaskName()));
+                .setTaskName(nullToEmpty(task.getTaskName()))
+                .setProjectId(nullToEmpty(task.getProjectId()));
         if (task.getForecastObjects() != null) {
             configBuilder.addAllTargetSequenceIds(task.getForecastObjects());
         }
@@ -77,7 +78,7 @@ public class ForecastGrpcClient {
         configBuilder.setSemanticContext(contextResolver.resolveForecastContext(task));
 
         AnalysisSyncForecastTaskRequest req = AnalysisSyncForecastTaskRequest.newBuilder()
-                .setMeta(newMeta())
+                .setMeta(newMeta(task.getProjectId()))
                 .setConfigVersion(System.currentTimeMillis())
                 .setTask(configBuilder.build())
                 .build();
@@ -97,6 +98,10 @@ public class ForecastGrpcClient {
     }
 
     public SyncResult updateForecastTaskStatus(String taskId, String status) {
+        return updateForecastTaskStatus(null, taskId, status);
+    }
+
+    public SyncResult updateForecastTaskStatus(String projectId, String taskId, String status) {
         String address = grpcClientProperties.getForecastAddress();
         if (isBlank(address)) {
             return notConfigured("UpdateTaskStatus");
@@ -110,9 +115,10 @@ public class ForecastGrpcClient {
             protoStatus = AnalysisTaskStatus.TASK_STATUS_UNSPECIFIED;
         }
         AnalysisUpdateTaskStatusRequest req = AnalysisUpdateTaskStatusRequest.newBuilder()
-                .setMeta(newMeta())
+                .setMeta(newMeta(projectId))
                 .setTaskId(nullToEmpty(taskId))
                 .setStatus(protoStatus)
+                .setProjectId(nullToEmpty(projectId))
                 .build();
         LOG.info("[{}] -> UpdateTaskStatus taskId={} status={} at {}", SERVICE_NAME, taskId, status, address);
         ManagedChannel channel = channelRegistry.getChannel(address);
@@ -142,6 +148,7 @@ public class ForecastGrpcClient {
                         .setTaskId(nullToEmpty(request.getTaskId()))
                         .setLatestOnly(true)
                         .setLimit(10)
+                        .setProjectId(nullToEmpty(request.getProjectId()))
                         .build())
                 .build();
         LOG.info("[{}] -> QueryForecastResults taskId={} at {}", SERVICE_NAME, request.getTaskId(), address);
@@ -165,9 +172,14 @@ public class ForecastGrpcClient {
     // ── helpers ────────────────────────────────────────────────────────
 
     private RequestMeta newMeta() {
+        return newMeta(null);
+    }
+
+    private RequestMeta newMeta(String projectId) {
         return RequestMeta.newBuilder()
                 .setRequestId(UUID.randomUUID().toString())
                 .setSentAtMs(System.currentTimeMillis())
+                .setProjectId(nullToEmpty(projectId))
                 .build();
     }
 

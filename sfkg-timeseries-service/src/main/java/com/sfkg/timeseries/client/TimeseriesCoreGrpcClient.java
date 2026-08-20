@@ -116,9 +116,11 @@ public class TimeseriesCoreGrpcClient {
                 .setCategoryId(nullToEmpty(config.getCategoryId()))
                 .setDataType(nullToEmpty(config.getDataType()).toLowerCase())
                 .setSeriesKind(toSeriesKind(config.getSeriesKind()))
+                .setProjectId(nullToEmpty(config.getProjectId()))
                 .build();
         SyncInstanceConfigsRequest req = SyncInstanceConfigsRequest.newBuilder()
                 .addItems(item)
+                .setProjectId(nullToEmpty(config.getProjectId()))
                 .build();
         LOG.info("[{}] -> syncInstanceConfigs sequenceId={} at {}", SERVICE_NAME, config.getSequenceId(), address);
         return callCoreSync(address, stub -> stub.syncInstanceConfigs(req), "syncInstanceConfigs");
@@ -141,7 +143,11 @@ public class TimeseriesCoreGrpcClient {
                     .setCategoryId(nullToEmpty(config.getCategoryId()))
                     .setDataType(nullToEmpty(config.getDataType()).toLowerCase())
                     .setSeriesKind(toSeriesKind(config.getSeriesKind()))
+                    .setProjectId(nullToEmpty(config.getProjectId()))
                     .build());
+        }
+        if (configs.get(0).getProjectId() != null) {
+            reqBuilder.setProjectId(configs.get(0).getProjectId());
         }
         LOG.info("[{}] -> syncInstanceConfigs count={} at {}", SERVICE_NAME, configs.size(), address);
         return callCoreSync(address, stub -> stub.syncInstanceConfigs(reqBuilder.build()), "syncInstanceConfigs");
@@ -163,6 +169,7 @@ public class TimeseriesCoreGrpcClient {
 
         SyncConstraintsRequest req = SyncConstraintsRequest.newBuilder()
                 .addAllItems(items)
+                .setProjectId(nullToEmpty(constraint.getProjectId()))
                 .build();
         LOG.info("[{}] -> syncConstraints constraintId={} expanded to {} rules at {}",
                 SERVICE_NAME, constraint.getConstraintId(), items.size(), address);
@@ -177,6 +184,7 @@ public class TimeseriesCoreGrpcClient {
                     .setConstraintId(expandedRule.constraintId())
                     .setLowerBound(constraint.getLowerBound() != null ? constraint.getLowerBound() : -Double.MAX_VALUE)
                     .setUpperBound(constraint.getUpperBound() != null ? constraint.getUpperBound() : Double.MAX_VALUE)
+                    .setProjectId(nullToEmpty(constraint.getProjectId()))
                     .putAllVariableMapping(expandedRule.variableMapping());
             if (constraint.getTerms() != null) {
                 for (TimeseriesConstraint.ConstraintTermItem term : constraint.getTerms()) {
@@ -187,7 +195,11 @@ public class TimeseriesCoreGrpcClient {
                             .build());
                 }
             }
-            items.add(RuntimeConstraintConfig.newBuilder().setRule(rb.build()).setEnabled(enabled).build());
+            items.add(RuntimeConstraintConfig.newBuilder()
+                    .setRule(rb.build())
+                    .setEnabled(enabled)
+                    .setProjectId(nullToEmpty(constraint.getProjectId()))
+                    .build());
         }
         return items;
     }
@@ -208,15 +220,16 @@ public class TimeseriesCoreGrpcClient {
         }
 
         // Resolve source/target: category IDs → sequence IDs, grouped by deviceInstanceId
-        List<String> srcSeqIds = resolveToSequences(relation.getSourceSequences());
-        List<String> tgtSeqIds = resolveToSequences(
+        List<String> srcSeqIds = resolveToSequences(relation.getProjectId(), relation.getSourceSequences());
+        List<String> tgtSeqIds = resolveToSequences(relation.getProjectId(),
                 relation.getTargetSequenceId() != null ? List.of(relation.getTargetSequenceId()) : List.of());
 
         // Group by deviceInstanceId — only pair sequences on the same device
-        Map<String, List<String>> srcByDevice = groupByDeviceInstanceId(srcSeqIds);
-        Map<String, List<String>> tgtByDevice = groupByDeviceInstanceId(tgtSeqIds);
+        Map<String, List<String>> srcByDevice = groupByDeviceInstanceId(relation.getProjectId(), srcSeqIds);
+        Map<String, List<String>> tgtByDevice = groupByDeviceInstanceId(relation.getProjectId(), tgtSeqIds);
 
-        SyncRelationsRequest.Builder reqBuilder = SyncRelationsRequest.newBuilder();
+        SyncRelationsRequest.Builder reqBuilder = SyncRelationsRequest.newBuilder()
+                .setProjectId(nullToEmpty(relation.getProjectId()));
         int count = 0;
         for (Map.Entry<String, List<String>> entry : srcByDevice.entrySet()) {
             String deviceId = entry.getKey();
@@ -231,6 +244,7 @@ public class TimeseriesCoreGrpcClient {
                             .setTargetSequenceId(nullToEmpty(tgt))
                             .setRelationType(nullToEmpty(relation.getRelationType()).toLowerCase())
                             .setConfidence(relation.getConfidence() != null ? relation.getConfidence().doubleValue() : 0.0)
+                            .setProjectId(nullToEmpty(relation.getProjectId()))
                             .setEnabled("ENABLE".equalsIgnoreCase(relation.getEffectiveStatus()));
                     // 每个展开后的 pair 只有一个 source，权重恒为 1.0
                     RuntimeRelationSource source = buildRelationSource(src, relation.getLagRange());
@@ -257,12 +271,20 @@ public class TimeseriesCoreGrpcClient {
     // ── window config ──────────────────────────────────────────────────
 
     public SyncResult syncWindowConfig(long windowSizeMs) {
+        return syncWindowConfig(null, windowSizeMs);
+    }
+
+    public SyncResult syncWindowConfig(String projectId, long windowSizeMs) {
         String address = grpcClientProperties.getCoreAddress();
         if (isBlank(address)) {
             return notConfigured("syncWindowConfig");
         }
         SyncWindowConfigRequest req = SyncWindowConfigRequest.newBuilder()
-                .setConfig(RuntimeWindowConfig.newBuilder().setWindowSize(windowSizeMs).build())
+                .setConfig(RuntimeWindowConfig.newBuilder()
+                        .setWindowSize(windowSizeMs)
+                        .setProjectId(nullToEmpty(projectId))
+                        .build())
+                .setProjectId(nullToEmpty(projectId))
                 .build();
         LOG.info("[{}] -> syncWindowConfig windowSize={}ms at {}", SERVICE_NAME, windowSizeMs, address);
         return callCoreSync(address, stub -> stub.syncWindowConfig(req), "syncWindowConfig");
@@ -278,11 +300,13 @@ public class TimeseriesCoreGrpcClient {
         if (request == null || request.getItems() == null || request.getItems().isEmpty()) {
             return SyncResult.fail("no derived series configs");
         }
-        SyncDerivedSeriesConfigsRequest.Builder b = SyncDerivedSeriesConfigsRequest.newBuilder();
+        SyncDerivedSeriesConfigsRequest.Builder b = SyncDerivedSeriesConfigsRequest.newBuilder()
+                .setProjectId(nullToEmpty(request.getProjectId()));
         for (DerivedSeriesConfigSaveRequest.DerivedSeriesConfigItem item : request.getItems()) {
             DerivedSeriesConfig.Builder cb = DerivedSeriesConfig.newBuilder()
                     .setDerivedSequenceId(nullToEmpty(item.getDerivedSequenceId()))
-                    .setEnabled(item.isEnabled());
+                    .setEnabled(item.isEnabled())
+                    .setProjectId(nullToEmpty(request.getProjectId()));
             if (item.getLinearCombination() != null) {
                 LinearCombinationConfig.Builder lc = LinearCombinationConfig.newBuilder()
                         .setBias(item.getLinearCombination().getBias() != null
@@ -334,15 +358,21 @@ public class TimeseriesCoreGrpcClient {
 
     // ── relation config helpers ────────────────────────────────────────
     private List<String> resolveToSequences(Collection<String> ids) {
+        return resolveToSequences(null, ids);
+    }
+
+    private List<String> resolveToSequences(String projectId, Collection<String> ids) {
         if (ids == null || ids.isEmpty()) return List.of();
         List<String> result = new ArrayList<>();
         for (String id : ids) {
             if (id == null || id.isBlank()) continue;
             // Check if it's a category ID
-            if (memoryCache.getCategory(id).isPresent()) {
+            if (memoryCache.getCategory(projectId, id).isPresent()
+                    || (projectId == null && memoryCache.getCategory(id).isPresent())) {
                 // Expand category → all sequence IDs
                 for (TimeseriesInstanceConfig inst : memoryCache.listInstanceConfigs()) {
-                    if (id.equals(inst.getCategoryId()) && inst.getSequenceId() != null) {
+                    if (java.util.Objects.equals(projectId, inst.getProjectId())
+                            && id.equals(inst.getCategoryId()) && inst.getSequenceId() != null) {
                         result.add(inst.getSequenceId());
                     }
                 }
@@ -355,9 +385,16 @@ public class TimeseriesCoreGrpcClient {
     }
 
     private Map<String, List<String>> groupByDeviceInstanceId(List<String> seqIds) {
+        return groupByDeviceInstanceId(null, seqIds);
+    }
+
+    private Map<String, List<String>> groupByDeviceInstanceId(String projectId, List<String> seqIds) {
         Map<String, List<String>> map = new LinkedHashMap<>();
         for (String seqId : seqIds) {
-            TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(seqId);
+            TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(projectId, seqId);
+            if (inst == null && projectId == null) {
+                inst = memoryCache.getInstanceBySequenceId(seqId);
+            }
             String deviceId = inst != null && inst.getDeviceInstanceId() != null ? inst.getDeviceInstanceId() : "_default";
             map.computeIfAbsent(deviceId, k -> new ArrayList<>()).add(seqId);
         }
@@ -465,6 +502,7 @@ public class TimeseriesCoreGrpcClient {
         }
 
         IngestDataRequest.Builder reqBuilder = IngestDataRequest.newBuilder();
+        reqBuilder.setProjectId(nullToEmpty(request.getProjectId()));
         if (request.getReturnResolvedData() != null) {
             reqBuilder.setReturnResolvedData(request.getReturnResolvedData());
         }
@@ -476,6 +514,8 @@ public class TimeseriesCoreGrpcClient {
             if (p.getSequenceId() != null) {
                 pointBuilder.setSequenceId(p.getSequenceId());
             }
+            pointBuilder.setProjectId(nullToEmpty(
+                    p.getProjectId() != null ? p.getProjectId() : request.getProjectId()));
             pointBuilder.setValue(buildTimeseriesValue(p));
             reqBuilder.addPoints(pointBuilder.build());
         }
@@ -539,6 +579,7 @@ public class TimeseriesCoreGrpcClient {
         if (request.getGranularity() != null) {
             reqBuilder.setGranularity(request.getGranularity());
         }
+        reqBuilder.setProjectId(nullToEmpty(request.getProjectId()));
         QueryHistoryDataRequest req = reqBuilder.build();
         LOG.info("[{}] -> queryHistoryData seqs={} at {}", SERVICE_NAME, req.getSequenceIdsList(), address);
 
@@ -552,6 +593,7 @@ public class TimeseriesCoreGrpcClient {
                     SERVICE_NAME, op.getCode(), resp.getData().getPointsCount());
 
             HistoryDataVO vo = new HistoryDataVO();
+            vo.setProjectId(request.getProjectId());
             if (resp.hasData() && resp.getData().getPointsCount() > 0) {
                 String firstSeq = resp.getData().getPoints(0).getSequenceId();
                 vo.setSequenceId(firstSeq);
@@ -568,6 +610,7 @@ public class TimeseriesCoreGrpcClient {
 
     private TimeseriesDataPoint toDataPoint(RawTimeseriesPoint p) {
         TimeseriesDataPoint dp = new TimeseriesDataPoint();
+        dp.setProjectId(p.getProjectId());
         dp.setSequenceId(p.getSequenceId());
         dp.setTimestamp(p.getTime() > 0
                 ? java.time.LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(p.getTime()), java.time.ZoneId.systemDefault())
@@ -601,6 +644,9 @@ public class TimeseriesCoreGrpcClient {
         }
         if (request != null && request.getEndTime() != null) {
             b.setEndTime(request.getEndTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+        }
+        if (request != null) {
+            b.setProjectId(nullToEmpty(request.getProjectId()));
         }
         LOG.info("[{}] -> queryHistoryOverview at {}", SERVICE_NAME, address);
         ManagedChannel channel = channelRegistry.getChannel(address);
@@ -645,6 +691,9 @@ public class TimeseriesCoreGrpcClient {
         }
         if (request != null && request.getEndTime() != null) {
             b.setEndTime(request.getEndTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+        }
+        if (request != null) {
+            b.setProjectId(nullToEmpty(request.getProjectId()));
         }
         LOG.info("[{}] -> queryWindowData at {}", SERVICE_NAME, address);
         ManagedChannel channel = channelRegistry.getChannel(address);
@@ -695,6 +744,12 @@ public class TimeseriesCoreGrpcClient {
     public AlignedWindowData alignWindowData(List<String> seqIds, String dependentSequenceId,
                                              List<String> relationIds,
                                              LocalDateTime startTime, LocalDateTime endTime) {
+        return alignWindowData(null, seqIds, dependentSequenceId, relationIds, startTime, endTime);
+    }
+
+    public AlignedWindowData alignWindowData(String projectId, List<String> seqIds, String dependentSequenceId,
+                                             List<String> relationIds,
+                                             LocalDateTime startTime, LocalDateTime endTime) {
         String address = grpcClientProperties.getCoreAddress();
         if (isBlank(address)) {
             LOG.warn("[{}] alignWindowData skipped: address not configured", SERVICE_NAME);
@@ -702,7 +757,8 @@ public class TimeseriesCoreGrpcClient {
         }
         List<String> ids = seqIds != null ? seqIds : List.of();
         QueryWindowDataRequest.Builder wq = QueryWindowDataRequest.newBuilder()
-                .addAllSequenceIds(ids);
+                .addAllSequenceIds(ids)
+                .setProjectId(nullToEmpty(projectId));
         if (startTime != null) {
             wq.setStartTime(startTime.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
         }
@@ -711,7 +767,8 @@ public class TimeseriesCoreGrpcClient {
         }
         AlignWindowDataRequest.Builder reqBuilder = AlignWindowDataRequest.newBuilder()
                 .setWindowQuery(wq.build())
-                .setConfig(buildAlignmentConfig(ids, dependentSequenceId));
+                .setConfig(buildAlignmentConfig(projectId, ids, dependentSequenceId))
+                .setProjectId(nullToEmpty(projectId));
         if (relationIds != null && !relationIds.isEmpty()) {
             reqBuilder.addAllRelationIds(relationIds);
         }
@@ -741,6 +798,12 @@ public class TimeseriesCoreGrpcClient {
     public ComputeStatisticsResponse computeBasicStatistics(AlignedWindowData alignedData,
                                                             List<String> seqIds, String dependentSequenceId,
                                                             String relationId) {
+        return computeBasicStatistics(null, alignedData, seqIds, dependentSequenceId, relationId);
+    }
+
+    public ComputeStatisticsResponse computeBasicStatistics(String projectId, AlignedWindowData alignedData,
+                                                            List<String> seqIds, String dependentSequenceId,
+                                                            String relationId) {
         String address = grpcClientProperties.getCoreAddress();
         if (isBlank(address)) {
             LOG.warn("[{}] computeBasicStatistics skipped: address not configured", SERVICE_NAME);
@@ -751,7 +814,9 @@ public class TimeseriesCoreGrpcClient {
         }
         ComputeStatisticsRequest.Builder reqBuilder = ComputeStatisticsRequest.newBuilder()
                 .setAlignedData(alignedData)
-                .setAlignmentConfig(buildAlignmentConfig(seqIds != null ? seqIds : List.of(), dependentSequenceId));
+                .setAlignmentConfig(buildAlignmentConfig(projectId,
+                        seqIds != null ? seqIds : List.of(), dependentSequenceId))
+                .setProjectId(nullToEmpty(projectId));
         if (relationId != null && !relationId.isBlank()) {
             reqBuilder.setRelationId(relationId);
         }
@@ -778,10 +843,15 @@ public class TimeseriesCoreGrpcClient {
      * Core uses this to know which variable the correlation vector is computed against.
      */
     private AlignmentConfig buildAlignmentConfig(List<String> seqIds, String dependentSequenceId) {
+        return buildAlignmentConfig(null, seqIds, dependentSequenceId);
+    }
+
+    private AlignmentConfig buildAlignmentConfig(String projectId, List<String> seqIds, String dependentSequenceId) {
         String dependent = (dependentSequenceId == null || dependentSequenceId.isBlank())
                 ? (seqIds != null && !seqIds.isEmpty() ? seqIds.get(0) : null)
                 : dependentSequenceId;
         AlignmentConfig.Builder ac = AlignmentConfig.newBuilder();
+        ac.setProjectId(nullToEmpty(projectId));
         for (String seqId : seqIds) {
             SequenceAlignmentConfig.Builder sc = SequenceAlignmentConfig.newBuilder()
                     .setSequenceId(seqId);
@@ -806,8 +876,8 @@ public class TimeseriesCoreGrpcClient {
                 || !"ENABLE".equalsIgnoreCase(relation.getEffectiveStatus())) {
             return List.of();
         }
-        List<String> srcSeqIds = resolveToSequences(relation.getSourceSequences());
-        List<String> tgtSeqIds = resolveToSequences(
+        List<String> srcSeqIds = resolveToSequences(relation.getProjectId(), relation.getSourceSequences());
+        List<String> tgtSeqIds = resolveToSequences(relation.getProjectId(),
                 relation.getTargetSequenceId() != null
                         ? List.of(relation.getTargetSequenceId()) : List.of());
         if (dependentSequenceId != null && !dependentSequenceId.isBlank()) {
@@ -819,8 +889,8 @@ public class TimeseriesCoreGrpcClient {
                 ? new java.util.HashSet<>(sequenceIds)
                 : java.util.Set.of();
 
-        Map<String, List<String>> srcByDevice = groupByDeviceInstanceId(srcSeqIds);
-        Map<String, List<String>> tgtByDevice = groupByDeviceInstanceId(tgtSeqIds);
+        Map<String, List<String>> srcByDevice = groupByDeviceInstanceId(relation.getProjectId(), srcSeqIds);
+        Map<String, List<String>> tgtByDevice = groupByDeviceInstanceId(relation.getProjectId(), tgtSeqIds);
 
         List<String> expanded = new ArrayList<>();
         for (Map.Entry<String, List<String>> entry : srcByDevice.entrySet()) {

@@ -1,4 +1,5 @@
 {
+  "projectId": "project-a",
   "sequenceId": "temperature-1",
   "instanceName": "main transformer oil temperature",
   "externalSequenceId": "temp",

@@ -6,6 +6,7 @@ import lombok.Data;
 @Data
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class ConstraintQueryRequest {
+    private String projectId;
 
     private String constraintId;
     private String constraintName;

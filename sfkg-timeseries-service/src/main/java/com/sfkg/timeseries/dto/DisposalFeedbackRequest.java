@@ -4,6 +4,7 @@ import lombok.Data;
 
 @Data
 public class DisposalFeedbackRequest {
+    private String projectId;
 
     private String eventId;
     private String disposalResult;

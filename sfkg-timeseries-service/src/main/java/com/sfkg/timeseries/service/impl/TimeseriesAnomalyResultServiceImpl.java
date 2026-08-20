@@ -65,6 +65,7 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
         String ts = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyMMddHHmmssSSS"));
         String eventId = "EVT_" + source + "_" + seq + "_" + ts;
         TimeseriesEvent event = new TimeseriesEvent();
+        event.setProjectId(result != null ? result.getProjectId() : null);
         event.setEventId(eventId);
         event.setEventName(source + " event on " + seq);
         event.setEventType(stripAnomalyPrefix(result == null ? null : result.getEventType(),
@@ -87,7 +88,7 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
         event.setUpdateTime(now);
 
         // idempotent: skip if event already exists
-        memoryCache.computeEvent(eventId, existing -> {
+        memoryCache.computeEvent(event.getProjectId(), eventId, existing -> {
             if (existing != null) {
                 LOGGER.info("anomaly event already exists, skip: eventId={}", eventId);
                 return existing;
@@ -106,6 +107,7 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
             return true;
         }
         return sequenceMatches(request.getSequenceId(), event)
+                && equalsTextIfPresent(request.getProjectId(), event.getProjectId())
                 && equalsTextIfPresent(request.getEventLevel(), event.getEventLevel())
                 && afterOrEqual(request.getStartTime(), event.getEventTime())
                 && beforeOrEqual(request.getEndTime(), event.getEventTime());

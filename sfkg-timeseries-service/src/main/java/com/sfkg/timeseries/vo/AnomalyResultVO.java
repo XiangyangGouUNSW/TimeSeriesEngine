@@ -7,6 +7,7 @@ import lombok.Data;
 @Data
 public class AnomalyResultVO {
 
+    private String projectId;
     private String resultId;
     private String taskId;
     private String sequenceId;

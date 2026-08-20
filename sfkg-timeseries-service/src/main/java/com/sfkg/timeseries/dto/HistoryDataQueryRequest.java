@@ -6,6 +6,7 @@ import lombok.Data;
 
 @Data
 public class HistoryDataQueryRequest {
+    private String projectId;
 
     private String sequenceId;
     private List<String> sequenceIds;

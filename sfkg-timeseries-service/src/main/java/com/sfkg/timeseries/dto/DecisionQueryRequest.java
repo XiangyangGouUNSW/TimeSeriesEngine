@@ -4,6 +4,7 @@ import lombok.Data;
 
 @Data
 public class DecisionQueryRequest {
+    private String projectId;
 
     private String eventId;
 }

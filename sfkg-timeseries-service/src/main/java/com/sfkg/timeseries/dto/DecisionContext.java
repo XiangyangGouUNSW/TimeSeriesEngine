@@ -5,6 +5,7 @@ import lombok.Data;
 
 @Data
 public class DecisionContext {
+    private String projectId;
 
     private String eventId;
     private Map<String, Object> eventInfo;

@@ -74,6 +74,7 @@ public class AnomalyResultReceiverGrpcService
 
             // create an event from this anomaly result
             AnomalyResultVO vo = new AnomalyResultVO();
+            vo.setProjectId(entity.getProjectId());
             vo.setResultId(entity.getResultId());
             vo.setTaskId(entity.getTaskId());
             vo.setSequenceIds(entity.getSequenceIds());
@@ -87,7 +88,7 @@ public class AnomalyResultReceiverGrpcService
             // resolve related rules (constraint IDs) from the anomaly task
             if (entity.getTaskId() != null) {
                 cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
-                memoryCache.getAnomalyTask(entity.getTaskId())
+                memoryCache.getAnomalyTask(entity.getProjectId(), entity.getTaskId())
                         .ifPresent(task -> vo.setConstraintIds(task.getConstraintIds()));
             }
             anomalyResultService.createAnomalyEvent(vo);
@@ -119,12 +120,13 @@ public class AnomalyResultReceiverGrpcService
             String ts = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyMMddHHmmssSSS"));
             String taskId = entity.getTaskId() != null ? entity.getTaskId() : "UNKNOWN";
             String eventId = "EVT_FORECAST_" + taskId + "_" + ts;
-            memoryCache.computeEvent(eventId, existing -> {
+            memoryCache.computeEvent(entity.getProjectId(), eventId, existing -> {
                 if (existing != null) {
                     LOG.info("forecast event already exists, skip: eventId={}", eventId);
                     return existing;
                 }
                 TimeseriesEvent event = new TimeseriesEvent();
+                event.setProjectId(entity.getProjectId());
                 event.setEventId(eventId);
                 event.setEventName("forecast event on " + taskId);
                 event.setEventType("WARNING");
@@ -153,6 +155,7 @@ public class AnomalyResultReceiverGrpcService
 
     private TimeseriesAnomalyResult toEntity(AnomalyResultMessage msg) {
         TimeseriesAnomalyResult entity = new TimeseriesAnomalyResult();
+        entity.setProjectId(emptyToNull(msg.getProjectId()));
         String source = msg.getSource().name();
         entity.setTaskId(emptyToNull(msg.getTaskId()));
         String seqs = String.join("_", msg.getSequenceIdsList());
@@ -173,6 +176,7 @@ public class AnomalyResultReceiverGrpcService
 
     private TimeseriesForecastResult toForecastEntity(ForecastResultMessage msg) {
         TimeseriesForecastResult entity = new TimeseriesForecastResult();
+        entity.setProjectId(emptyToNull(msg.getProjectId()));
         entity.setResultId("FR_" + msg.getTaskId() + "_" + msg.getRunId() + "_" + UUID.randomUUID().toString().substring(0, 8));
         entity.setTaskId(emptyToNull(msg.getTaskId()));
         entity.setRunId(emptyToNull(msg.getRunId()));

@@ -98,7 +98,9 @@ public class DecisionGrpcClient {
                 .setMeta(RequestMeta.newBuilder()
                         .setRequestId(UUID.randomUUID().toString())
                         .setSentAtMs(System.currentTimeMillis())
+                        .setProjectId(nullToEmpty(context.getProjectId()))
                         .build())
+                .setProjectId(nullToEmpty(context.getProjectId()))
                 .setEventId(nullToEmpty(context.getEventId()));
         if (context.getEventInfo() != null) {
             Object eventType = context.getEventInfo().get("eventType");

@@ -62,6 +62,7 @@ public class TimeseriesCategoryFileMapper implements TimeseriesCategoryMapper {
     private boolean sameBusinessKey(TimeseriesCategory incoming, TimeseriesCategory stored) {
         return incoming != null
                 && stored != null
+                && Objects.equals(incoming.getProjectId(), stored.getProjectId())
                 && Objects.equals(incoming.getCategoryId(), stored.getCategoryId());
     }
 

@@ -49,6 +49,7 @@ public class TimeseriesForecastResultServiceImpl implements TimeseriesForecastRe
         String taskId = result != null && result.getTaskId() != null ? result.getTaskId() : "UNKNOWN";
         String eventId = "EVT_FORECAST_" + taskId + "_" + ts;
         TimeseriesEvent event = new TimeseriesEvent();
+        event.setProjectId(result != null ? result.getProjectId() : null);
         event.setEventId(eventId);
         event.setEventName("forecast event on " + taskId);
         event.setEventType("WARNING");
@@ -66,7 +67,7 @@ public class TimeseriesForecastResultServiceImpl implements TimeseriesForecastRe
         event.setUpdateTime(now);
 
         eventMapper.insert(event);
-        memoryCache.computeEvent(eventId, existing -> event);
+        memoryCache.computeEvent(event.getProjectId(), eventId, existing -> event);
         return eventId;
     }
 

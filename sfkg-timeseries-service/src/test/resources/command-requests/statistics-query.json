@@ -1,4 +1,5 @@
 {
+  "projectId": "project-a",
   "sequenceIds": ["ETTh1_OT", "ETTh1_HUFL", "ETTh1_LUFL"],
   "dependentSequenceId": "ETTh1_OT",
   "relationIds": ["r-hufl-ot", "r-lufl-ot"],

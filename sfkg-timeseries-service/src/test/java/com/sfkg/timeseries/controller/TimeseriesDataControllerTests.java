@@ -25,10 +25,11 @@ class TimeseriesDataControllerTests {
     void queryHistoryDataReturnsSuccess() throws Exception {
         String json = """
                 {
+                  "projectId": "project-a",
                   "sequenceId": 1001,
                   "startTime": "2026-08-03T10:00:00",
                   "endTime": "2026-08-03T11:00:00",
-                  "granularity": "1m"
+                  "granularity": 60000
                 }
                 """;
 
@@ -45,6 +46,7 @@ class TimeseriesDataControllerTests {
     void saveTimeseriesDataReturnsSuccess() throws Exception {
         String json = """
                 {
+                  "projectId": "project-a",
                   "sequence_id": 1001,
                   "data": {
                     "2026-08-03T10:00:00": 32.5,

@@ -9,12 +9,15 @@ public class TimeseriesCacheManager {
 
     private final TimeseriesMemoryCache memoryCache;
     private final TimeseriesCacheLoader cacheLoader;
+    private final TimeseriesProjectRegistry projectRegistry;
 
     public TimeseriesCacheManager(
             TimeseriesMemoryCache memoryCache,
-            TimeseriesCacheLoader cacheLoader) {
+            TimeseriesCacheLoader cacheLoader,
+            TimeseriesProjectRegistry projectRegistry) {
         this.memoryCache = memoryCache;
         this.cacheLoader = cacheLoader;
+        this.projectRegistry = projectRegistry;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -26,6 +29,7 @@ public class TimeseriesCacheManager {
         for (CachedTable table : CachedTable.values()) {
             ensureTableLoaded(table);
         }
+        projectRegistry.refreshFromCache(memoryCache);
     }
 
     public synchronized void ensureTableLoaded(CachedTable table) {

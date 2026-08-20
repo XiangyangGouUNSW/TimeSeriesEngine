@@ -23,7 +23,7 @@ timeseries:
   data-ingest:
     enabled: ${TIMESERIES_DATA_INGEST_ENABLED:true}
     endpoint: ${TIMESERIES_DATA_INGEST_ENDPOINT:http://127.0.0.1:8006}
-    database: ${TIMESERIES_DATA_INGEST_DATABASE:ship_power_system}
+    database: ${TIMESERIES_DATA_INGEST_DATABASE:ett_system}
     timeout-seconds: ${TIMESERIES_DATA_INGEST_TIMEOUT_SECONDS:5}
   grpc:
     server-port: ${TIMESERIES_GRPC_SERVER_PORT:9105}

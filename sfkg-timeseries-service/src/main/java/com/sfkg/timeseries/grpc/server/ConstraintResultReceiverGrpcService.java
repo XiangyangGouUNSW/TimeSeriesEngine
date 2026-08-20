@@ -59,7 +59,7 @@ public class ConstraintResultReceiverGrpcService
                     request.getCheckTimeMs());
 
             List<String> originalIds = mapToOriginalConstraintIds(
-                    request.getViolatedConstraintIdsList());
+                    request.getProjectId(), request.getViolatedConstraintIdsList());
             TimeseriesConstraintResult entity = toEntity(request, originalIds);
             resultMapper.insert(entity);
 
@@ -67,12 +67,13 @@ public class ConstraintResultReceiverGrpcService
                 String ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyMMddHHmmssSSS"));
                 String cids = String.join("_", originalIds);
                 String eventId = "EVT_CONSTRAINT_" + cids + "_" + ts;
-                memoryCache.computeEvent(eventId, existing -> {
+                memoryCache.computeEvent(entity.getProjectId(), eventId, existing -> {
                     if (existing != null) {
                         LOG.info("constraint event already exists, skip: eventId={}", eventId);
                         return existing;
                     }
                     TimeseriesEvent event = new TimeseriesEvent();
+                    event.setProjectId(entity.getProjectId());
                     event.setEventId(eventId);
                     event.setEventName("constraint violated: " + cids);
                     event.setEventType("ANOMALY");
@@ -105,6 +106,7 @@ public class ConstraintResultReceiverGrpcService
 
     private TimeseriesConstraintResult toEntity(ConstraintResultMessage msg, List<String> originalIds) {
         TimeseriesConstraintResult entity = new TimeseriesConstraintResult();
+        entity.setProjectId(emptyToNull(msg.getProjectId()));
         entity.setResultId("CR_" + UUID.randomUUID().toString().substring(0, 8));
         entity.setCheckTime(msg.getCheckTimeMs() > 0
                 ? LocalDateTime.ofInstant(Instant.ofEpochMilli(msg.getCheckTimeMs()), ZoneId.systemDefault())
@@ -116,12 +118,13 @@ public class ConstraintResultReceiverGrpcService
         return entity;
     }
 
-    private List<String> mapToOriginalConstraintIds(List<String> expandedIds) {
+    private List<String> mapToOriginalConstraintIds(String projectId, List<String> expandedIds) {
         if (expandedIds == null || expandedIds.isEmpty()) {
             return List.of();
         }
         cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
         List<String> originals = memoryCache.listConstraints().stream()
+                .filter(c -> java.util.Objects.equals(projectId, c.getProjectId()))
                 .map(TimeseriesConstraint::getConstraintId)
                 .filter(id -> id != null && !id.isBlank())
                 .distinct()
@@ -139,5 +142,9 @@ public class ConstraintResultReceiverGrpcService
             result.add(mapped);
         }
         return result;
+    }
+
+    private String emptyToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 }

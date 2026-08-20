@@ -7,6 +7,7 @@ import lombok.Data;
 @Data
 public class ConstraintVO {
 
+    private String projectId;
     private String constraintId;
     private String constraintName;
     private Map<String, String> variableMapping;

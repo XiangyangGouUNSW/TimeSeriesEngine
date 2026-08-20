@@ -22,7 +22,8 @@ public class TimeseriesAnomalyResultFileMapper implements TimeseriesAnomalyResul
     @Override
     public void insert(TimeseriesAnomalyResult entity) {
         store.upsert(
-                item -> Objects.equals(entity.getResultId(), item.getResultId()),
+                item -> Objects.equals(entity.getProjectId(), item.getProjectId())
+                        && Objects.equals(entity.getResultId(), item.getResultId()),
                 entity);
     }
 

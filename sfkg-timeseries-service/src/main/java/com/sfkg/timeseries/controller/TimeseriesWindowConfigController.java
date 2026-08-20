@@ -23,7 +23,7 @@ public class TimeseriesWindowConfigController {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ApiResult<Void> syncWindowConfig(@RequestBody WindowConfigSaveRequest request) {
-        coreGrpcClient.syncWindowConfig(request.getWindowSizeMs());
+        coreGrpcClient.syncWindowConfig(request.getProjectId(), request.getWindowSizeMs());
         return returnSuccess("window config sync success");
     }
 }

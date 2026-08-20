@@ -50,7 +50,7 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
         String taskId = request != null ? request.getTaskId() : null;
         if (taskId != null) {
             cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
-            if (memoryCache.getAnomalyTask(taskId).isPresent()) {
+            if (memoryCache.getAnomalyTask(request.getProjectId(), taskId).isPresent()) {
                 throw new BusinessException("anomaly task already exists: " + taskId);
             }
         }
@@ -74,12 +74,14 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
                 ? generateTaskId()
                 : request.getTaskId();
 
-        TimeseriesAnomalyTask entity = memoryCache.computeAnomalyTask(taskId, existing -> {
+        TimeseriesAnomalyTask entity = memoryCache.computeAnomalyTask(
+                request != null ? request.getProjectId() : null, taskId, existing -> {
             TimeseriesAnomalyTask e = existing != null ? existing : new TimeseriesAnomalyTask();
             if (request != null) {
                 BeanUtils.copyProperties(request, e);
             }
             e.setTaskId(taskId);
+            e.setProjectId(request != null ? request.getProjectId() : (existing != null ? existing.getProjectId() : null));
             // audit fields
             LocalDateTime now = LocalDateTime.now();
             String user = request != null ? request.getUser() : null;
@@ -120,9 +122,11 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
             return;
         }
         cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
-        TimeseriesAnomalyTask entity = memoryCache.computeAnomalyTask(request.getTaskId(), existing -> {
+        TimeseriesAnomalyTask entity = memoryCache.computeAnomalyTask(
+                request.getProjectId(), request.getTaskId(), existing -> {
             TimeseriesAnomalyTask e = existing != null ? existing : new TimeseriesAnomalyTask();
             e.setTaskId(request.getTaskId());
+            e.setProjectId(request.getProjectId());
             e.setStatus(request.getStatus());
             // audit fields
             LocalDateTime now = LocalDateTime.now();
@@ -137,7 +141,7 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
         });
 
         anomalyTaskMapper.updateById(entity);
-        anomalyGrpcClient.updateAnomalyTaskStatus(request.getTaskId(), request.getStatus());
+        anomalyGrpcClient.updateAnomalyTaskStatus(entity.getProjectId(), request.getTaskId(), request.getStatus());
     }
 
     private static final Set<String> VALID_DETECT_METHODS = Set.of(
@@ -151,7 +155,7 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
         }
         cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
         for (String sequenceId : request.getSequenceIds()) {
-            TimeseriesInstanceConfig instance = memoryCache.getInstanceBySequenceId(sequenceId);
+            TimeseriesInstanceConfig instance = memoryCache.getInstanceBySequenceId(request.getProjectId(), sequenceId);
             if (instance == null) {
                 throw new BusinessException("sequence not found: " + sequenceId);
             }
@@ -162,7 +166,7 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
         if (request.getConstraintIds() != null && !request.getConstraintIds().isEmpty()) {
             cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
             for (String constraintId : request.getConstraintIds()) {
-                TimeseriesConstraint constraint = memoryCache.getConstraint(constraintId).orElse(null);
+                TimeseriesConstraint constraint = memoryCache.getConstraint(request.getProjectId(), constraintId).orElse(null);
                 if (constraint == null) {
                     throw new BusinessException("constraint not found: " + constraintId);
                 }
@@ -235,7 +239,8 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
         if (request == null) {
             return true;
         }
-        return equalsIfPresent(request.getTaskId(), entity.getTaskId())
+        return equalsIfPresent(request.getProjectId(), entity.getProjectId())
+                && equalsIfPresent(request.getTaskId(), entity.getTaskId())
                 && taskTypeMatches(request.getTaskType())
                 && containsIfPresent(request.getTaskName(), entity.getTaskName())
                 && equalsTextIfPresent(request.getStatus(), entity.getStatus())

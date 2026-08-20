@@ -7,6 +7,7 @@ import lombok.Data;
 @Data
 public class TimeseriesEvent {
 
+    private String projectId;
     private String eventId;
     private String eventName;
     private String eventType;

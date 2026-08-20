@@ -6,6 +6,7 @@ import lombok.Data;
 @Data
 public class EventDetailVO {
 
+    private String projectId;
     private String eventId;
     private String eventName;
     private String eventDescription;

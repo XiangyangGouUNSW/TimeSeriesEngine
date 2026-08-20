@@ -8,6 +8,7 @@ import lombok.Data;
 @Data
 public class TimeseriesStatisticsResult {
 
+    private String projectId;
     private String resultId;
     private List<String> sequenceIds;
     private String dependentSequenceId;

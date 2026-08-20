@@ -1,4 +1,5 @@
 {
+  "projectId": "project-a",
   "taskId": "task-anomaly-001",
   "taskName": "temperature anomaly detection",
   "sequenceIds": [

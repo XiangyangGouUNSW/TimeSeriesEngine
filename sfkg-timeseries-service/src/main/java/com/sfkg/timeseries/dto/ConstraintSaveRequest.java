@@ -8,6 +8,7 @@ import lombok.Data;
 @Data
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class ConstraintSaveRequest {
+    private String projectId;
 
     private String constraintId;
     private String constraintName;

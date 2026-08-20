@@ -92,7 +92,8 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         String categoryId = request != null ? request.getCategoryId() : null;
         if (categoryId != null) {
             cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
-            if (memoryCache.getCategory(categoryId).isPresent()) {
+            if (memoryCache.getCategory(request.getProjectId(), categoryId).isPresent()
+                    || memoryCache.getCategory(categoryId).isPresent()) {
                 throw new BusinessException("category already exists: " + categoryId);
             }
         }
@@ -105,12 +106,14 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 ? generateId()
                 : request.getCategoryId();
 
-        TimeseriesCategory entity = memoryCache.computeCategory(categoryId, existing -> {
+        TimeseriesCategory entity = memoryCache.computeCategory(
+                request != null ? request.getProjectId() : null, categoryId, existing -> {
             TimeseriesCategory e = existing != null ? existing : new TimeseriesCategory();
             if (request != null) {
                 BeanUtils.copyProperties(request, e);
             }
             e.setCategoryId(categoryId);
+            e.setProjectId(request != null ? request.getProjectId() : (existing != null ? existing.getProjectId() : null));
             // audit fields
             LocalDateTime now = LocalDateTime.now();
             String user = request != null ? request.getUser() : null;
@@ -136,9 +139,11 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             return;
         }
         cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
-        TimeseriesCategory entity = memoryCache.computeCategory(request.getCategoryId(), existing -> {
+        TimeseriesCategory entity = memoryCache.computeCategory(
+                request.getProjectId(), request.getCategoryId(), existing -> {
             TimeseriesCategory e = existing != null ? existing : new TimeseriesCategory();
             e.setCategoryId(request.getCategoryId());
+            e.setProjectId(request.getProjectId());
             if (request.getConfirmStatus() != null) {
                 e.setConfirmStatus(request.getConfirmStatus());
             }
@@ -174,7 +179,8 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         String constraintId = request != null ? request.getConstraintId() : null;
         if (constraintId != null) {
             cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
-            if (memoryCache.getConstraint(constraintId).isPresent()) {
+            if (memoryCache.getConstraint(request.getProjectId(), constraintId).isPresent()
+                    || memoryCache.getConstraint(constraintId).isPresent()) {
                 throw new BusinessException("constraint already exists: " + constraintId);
             }
         }
@@ -184,7 +190,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
     private String doSaveConstraint(ConstraintSaveRequest request) {
         if (request != null) {
             validateConstraintExpression(request.getConstraintExpression());
-            validateVariableMapping(request.getVariableMapping());
+            validateVariableMapping(request.getProjectId(), request.getVariableMapping());
             if (request.getTerms() == null || request.getTerms().isEmpty()) {
                 throw new BusinessException("constraint terms must not be empty");
             }
@@ -194,7 +200,8 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 ? generateId()
                 : request.getConstraintId();
 
-        TimeseriesConstraint entity = memoryCache.computeConstraint(constraintId, existing -> {
+        TimeseriesConstraint entity = memoryCache.computeConstraint(
+                request != null ? request.getProjectId() : null, constraintId, existing -> {
             TimeseriesConstraint e = existing != null ? existing : new TimeseriesConstraint();
             if (request != null) {
                 BeanUtils.copyProperties(request, e);
@@ -211,6 +218,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 }
             }
             e.setConstraintId(constraintId);
+            e.setProjectId(request != null ? request.getProjectId() : (existing != null ? existing.getProjectId() : null));
             // audit fields
             LocalDateTime now = LocalDateTime.now();
             String user = request != null ? request.getUser() : null;
@@ -227,7 +235,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         });
 
         constraintMapper.insert(entity);
-        syncSemanticToCore(constraintId);
+        syncSemanticToCore(entity.getProjectId(), constraintId);
         return constraintId;
     }
 
@@ -237,9 +245,11 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             return;
         }
         cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
-        TimeseriesConstraint entity = memoryCache.computeConstraint(request.getConstraintId(), existing -> {
+        TimeseriesConstraint entity = memoryCache.computeConstraint(
+                request.getProjectId(), request.getConstraintId(), existing -> {
             TimeseriesConstraint e = existing != null ? existing : new TimeseriesConstraint();
             e.setConstraintId(request.getConstraintId());
+            e.setProjectId(request.getProjectId());
             if (request.getConfirmStatus() != null) {
                 e.setConfirmStatus(request.getConfirmStatus());
             }
@@ -258,8 +268,8 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             return e;
         });
         constraintMapper.updateById(entity);
-        syncSemanticToCore(entity.getConstraintId());
-        reSyncTasksForConstraint(entity.getConstraintId());
+        syncSemanticToCore(entity.getProjectId(), entity.getConstraintId());
+        reSyncTasksForConstraint(entity.getProjectId(), entity.getConstraintId());
     }
 
     @Override
@@ -291,7 +301,8 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         String relationId = request != null ? request.getRelationId() : null;
         if (relationId != null) {
             cacheManager.ensureTableLoaded(CachedTable.RELATION);
-            if (memoryCache.getRelation(relationId).isPresent()) {
+            if (memoryCache.getRelation(request.getProjectId(), relationId).isPresent()
+                    || memoryCache.getRelation(relationId).isPresent()) {
                 throw new BusinessException("relation already exists: " + relationId);
             }
         }
@@ -305,13 +316,15 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 ? generateId()
                 : request.getRelationId();
 
-        TimeseriesRelation entity = memoryCache.computeRelation(relationId, existing -> {
+        TimeseriesRelation entity = memoryCache.computeRelation(
+                request != null ? request.getProjectId() : null, relationId, existing -> {
             TimeseriesRelation e = existing != null ? existing : new TimeseriesRelation();
             if (request != null) {
                 BeanUtils.copyProperties(request, e);
             }
             e.setRelationId(relationId);
-            e.setTargetCategoryName(resolveCategoryName(e.getTargetSequenceId()));
+            e.setProjectId(request != null ? request.getProjectId() : (existing != null ? existing.getProjectId() : null));
+            e.setTargetCategoryName(resolveCategoryName(e.getProjectId(), e.getTargetSequenceId()));
             // audit fields
             LocalDateTime now = LocalDateTime.now();
             String user = request != null ? request.getUser() : null;
@@ -328,7 +341,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         });
 
         relationMapper.insert(entity);
-        syncSemanticToCore(relationId);
+        syncSemanticToCore(entity.getProjectId(), relationId);
         return relationId;
     }
 
@@ -338,9 +351,11 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             return;
         }
         cacheManager.ensureTableLoaded(CachedTable.RELATION);
-        TimeseriesRelation entity = memoryCache.computeRelation(request.getRelationId(), existing -> {
+        TimeseriesRelation entity = memoryCache.computeRelation(
+                request.getProjectId(), request.getRelationId(), existing -> {
             TimeseriesRelation e = existing != null ? existing : new TimeseriesRelation();
             e.setRelationId(request.getRelationId());
+            e.setProjectId(request.getProjectId());
             if (request.getConfirmStatus() != null) {
                 e.setConfirmStatus(request.getConfirmStatus());
             }
@@ -359,8 +374,8 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             return e;
         });
         relationMapper.updateById(entity);
-        syncSemanticToCore(entity.getRelationId());
-        reSyncTasksForRelation(entity.getRelationId());
+        syncSemanticToCore(entity.getProjectId(), entity.getRelationId());
+        reSyncTasksForRelation(entity.getProjectId(), entity.getRelationId());
     }
 
     @Override
@@ -401,6 +416,10 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
 
     @Override
     public void validateVariableMapping(Map<String, String> variableMapping) {
+        validateVariableMapping(null, variableMapping);
+    }
+
+    private void validateVariableMapping(String projectId, Map<String, String> variableMapping) {
         if (variableMapping == null || variableMapping.isEmpty()) {
             throw new BusinessException("variable mapping must not be empty");
         }
@@ -413,7 +432,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             if (entry.getValue() == null || entry.getValue().isBlank()) {
                 throw new BusinessException("sequenceId must not be empty for variable: " + entry.getKey());
             }
-            if (!isValidSequenceOrCategory(entry.getValue())) {
+            if (!isValidSequenceOrCategory(projectId, entry.getValue())) {
                 throw new BusinessException("mapped sequence or category not found: " + entry.getValue()
                         + " for variable: " + entry.getKey());
             }
@@ -440,14 +459,14 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 throw new BusinessException("source sequence cannot equal target: " + src);
             }
             sourceSet.add(src);
-            if (!isValidSequenceOrCategory(src)) {
+            if (!isValidSequenceOrCategory(request.getProjectId(), src)) {
                 throw new BusinessException("source sequence or category not found: " + src);
             }
         }
         if (sourceSet.isEmpty()) {
             throw new BusinessException("sourceSequences must contain valid sequence or category IDs");
         }
-        if (!isValidSequenceOrCategory(request.getTargetSequenceId())) {
+        if (!isValidSequenceOrCategory(request.getProjectId(), request.getTargetSequenceId())) {
             throw new BusinessException("target sequence or category not found: " + request.getTargetSequenceId());
         }
         if (request.getRelationType() != null && !request.getRelationType().isBlank()
@@ -483,6 +502,14 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         memoryCache.getRelation(semanticId).ifPresent(coreGrpcClient::syncRelationConfig);
     }
 
+    public void syncSemanticToCore(String projectId, String semanticId) {
+        if (semanticId == null) return;
+        cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
+        cacheManager.ensureTableLoaded(CachedTable.RELATION);
+        memoryCache.getConstraint(projectId, semanticId).ifPresent(coreGrpcClient::syncConstraintConfig);
+        memoryCache.getRelation(projectId, semanticId).ifPresent(coreGrpcClient::syncRelationConfig);
+    }
+
     private String generateId() {
         return UUID.randomUUID().toString();
     }
@@ -505,12 +532,13 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         return vo;
     }
 
-    private String resolveCategoryName(String categoryId) {
+    private String resolveCategoryName(String projectId, String categoryId) {
         if (categoryId == null) {
             return null;
         }
         cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
-        return memoryCache.getCategory(categoryId)
+        return memoryCache.getCategory(projectId, categoryId)
+                .or(() -> memoryCache.getCategory(categoryId))
                 .map(TimeseriesCategory::getCategoryName)
                 .orElse(null);
     }
@@ -519,7 +547,8 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         if (request == null) {
             return true;
         }
-        return equalsIfPresent(request.getCategoryId(), entity.getCategoryId())
+        return equalsIfPresent(request.getProjectId(), entity.getProjectId())
+                && equalsIfPresent(request.getCategoryId(), entity.getCategoryId())
                 && containsIfPresent(request.getCategoryName(), entity.getCategoryName())
                 && equalsTextIfPresent(request.getDataType(), entity.getDataType())
                 && equalsTextIfPresent(request.getApplicableObjectType(), entity.getApplicableObjectType())
@@ -530,7 +559,8 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         if (request == null) {
             return true;
         }
-        return equalsIfPresent(request.getConstraintId(), entity.getConstraintId())
+        return equalsIfPresent(request.getProjectId(), entity.getProjectId())
+                && equalsIfPresent(request.getConstraintId(), entity.getConstraintId())
                 && containsIfPresent(request.getConstraintName(), entity.getConstraintName())
                 && equalsTextIfPresent(request.getEffectiveStatus(), entity.getEffectiveStatus())
                 && equalsTextIfPresent(request.getConfirmStatus(), entity.getConfirmStatus())
@@ -541,7 +571,8 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         if (request == null) {
             return true;
         }
-        return equalsIfPresent(request.getRelationId(), entity.getRelationId())
+        return equalsIfPresent(request.getProjectId(), entity.getProjectId())
+                && equalsIfPresent(request.getRelationId(), entity.getRelationId())
                 && containsIfPresent(request.getRelationName(), entity.getRelationName())
                 && sourceContains(request.getSourceSequenceId(), entity)
                 && equalsIfPresent(request.getTargetSequenceId(), entity.getTargetSequenceId())
@@ -588,43 +619,49 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 || containsIfPresent(keyword, entity.getLagRange());
     }
 
-    private boolean isValidSequenceOrCategory(String id) {
+    private boolean isValidSequenceOrCategory(String projectId, String id) {
         if (id == null || id.isBlank()) return false;
-        return memoryCache.getInstanceBySequenceId(id) != null
-                || memoryCache.getCategory(id).isPresent();
+        return memoryCache.getInstanceBySequenceId(projectId, id) != null
+                || memoryCache.getCategory(projectId, id).isPresent();
     }
 
-    private void reSyncTasksForConstraint(String constraintId) {
+    private void reSyncTasksForConstraint(String projectId, String constraintId) {
         if (constraintId == null) return;
         cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
         cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
         for (TimeseriesAnomalyTask task : memoryCache.listAnomalyTasks()) {
-            if (task.getConstraintIds() != null && task.getConstraintIds().contains(constraintId)) {
+            if (Objects.equals(projectId, task.getProjectId())
+                    && task.getConstraintIds() != null && task.getConstraintIds().contains(constraintId)) {
                 anomalyGrpcClient.syncAnomalyTask(task);
             }
         }
         for (TimeseriesForecastTask task : memoryCache.listForecastTasks()) {
-            if (task.getConstraintIds() != null && task.getConstraintIds().contains(constraintId)) {
+            if (Objects.equals(projectId, task.getProjectId())
+                    && task.getConstraintIds() != null && task.getConstraintIds().contains(constraintId)) {
                 forecastGrpcClient.syncForecastTask(task);
             }
         }
     }
 
-    private void reSyncTasksForRelation(String relationId) {
+    private void reSyncTasksForRelation(String projectId, String relationId) {
         if (relationId == null) return;
         cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
         cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
         cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
-        TimeseriesRelation rel = memoryCache.getRelation(relationId).orElse(null);
+        TimeseriesRelation rel = memoryCache.getRelation(projectId, relationId).orElse(null);
         if (rel == null) return;
-        Set<String> affectedSeqIds = resolveAffectedSequenceIds(rel);
+        Set<String> affectedSeqIds = resolveAffectedSequenceIds(projectId, rel);
         for (TimeseriesAnomalyTask task : memoryCache.listAnomalyTasks()) {
-            if (task.getSequenceIds() != null && !java.util.Collections.disjoint(task.getSequenceIds(), affectedSeqIds)) {
+            if (Objects.equals(projectId, task.getProjectId())
+                    && task.getSequenceIds() != null
+                    && !java.util.Collections.disjoint(task.getSequenceIds(), affectedSeqIds)) {
                 anomalyGrpcClient.syncAnomalyTask(task);
             }
         }
         for (TimeseriesForecastTask task : memoryCache.listForecastTasks()) {
-            if (task.getForecastObjects() != null && !java.util.Collections.disjoint(task.getForecastObjects(), affectedSeqIds)) {
+            if (Objects.equals(projectId, task.getProjectId())
+                    && task.getForecastObjects() != null
+                    && !java.util.Collections.disjoint(task.getForecastObjects(), affectedSeqIds)) {
                 forecastGrpcClient.syncForecastTask(task);
             }
         }
@@ -633,13 +670,14 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
     /**
      * Resolve all sequence IDs affected by a relation (sources + targets, categories expanded).
      */
-    private Set<String> resolveAffectedSequenceIds(TimeseriesRelation rel) {
+    private Set<String> resolveAffectedSequenceIds(String projectId, TimeseriesRelation rel) {
         Set<String> ids = new HashSet<>();
         if (rel.getSourceSequences() != null) {
             for (String src : rel.getSourceSequences()) {
-                if (memoryCache.getCategory(src).isPresent()) {
+                if (memoryCache.getCategory(projectId, src).isPresent()) {
                     for (TimeseriesInstanceConfig inst : memoryCache.listInstanceConfigs()) {
-                        if (src.equals(inst.getCategoryId()) && inst.getSequenceId() != null) {
+                        if (Objects.equals(projectId, inst.getProjectId())
+                                && src.equals(inst.getCategoryId()) && inst.getSequenceId() != null) {
                             ids.add(inst.getSequenceId());
                         }
                     }
@@ -650,9 +688,10 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         }
         String tgt = rel.getTargetSequenceId();
         if (tgt != null) {
-            if (memoryCache.getCategory(tgt).isPresent()) {
+            if (memoryCache.getCategory(projectId, tgt).isPresent()) {
                 for (TimeseriesInstanceConfig inst : memoryCache.listInstanceConfigs()) {
-                    if (tgt.equals(inst.getCategoryId()) && inst.getSequenceId() != null) {
+                    if (Objects.equals(projectId, inst.getProjectId())
+                            && tgt.equals(inst.getCategoryId()) && inst.getSequenceId() != null) {
                         ids.add(inst.getSequenceId());
                     }
                 }

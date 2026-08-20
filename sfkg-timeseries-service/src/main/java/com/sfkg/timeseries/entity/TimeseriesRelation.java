@@ -8,6 +8,7 @@ import lombok.Data;
 @Data
 public class TimeseriesRelation {
 
+    private String projectId;
     private String relationId;
     private String relationName;
     private List<String> sourceSequences;

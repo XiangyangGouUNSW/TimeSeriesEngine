@@ -6,6 +6,7 @@ import lombok.Data;
 @Data
 public class ForecastTaskVO {
 
+    private String projectId;
     private String taskId;
     private String taskName;
     private String forecastHorizon;
