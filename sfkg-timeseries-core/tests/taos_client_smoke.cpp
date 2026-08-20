@@ -2,6 +2,7 @@
 #include <iostream>
 #include <map>
 #include <string>
+#include <unistd.h>
 #include <variant>
 #include <vector>
 
@@ -28,7 +29,9 @@ int main() {
     setenv("SFKG_TAOS_PORT", "6030", 1);
     setenv("SFKG_TAOS_USER", "root", 1);
     setenv("SFKG_TAOS_PASSWORD", "taosdata", 1);
-    setenv("SFKG_TAOS_DB", "sfkg_timeseries_test", 1);
+    const auto database = std::string("sfkg_taos_smoke_") +
+        std::to_string(static_cast<long long>(getpid()));
+    setenv("SFKG_TAOS_DB", database.c_str(), 1);
 
     core::internal::TaosClient client;
     bool passed = true;
@@ -166,6 +169,10 @@ int main() {
     passed &= expect(
         unavailable_client.ensureSchema().code == core::OperationCode::Unavailable,
         "TDengine unavailable is Unavailable");
+
+    passed &= expect(
+        client.dropDatabaseForTesting().code == core::OperationCode::Ok,
+        "cleanup isolated smoke database");
 
     std::cout << (passed ? "taos client smoke passed\n" : "taos client smoke failed\n");
     return passed ? 0 : 1;

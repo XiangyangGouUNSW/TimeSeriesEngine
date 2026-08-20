@@ -330,10 +330,19 @@ bool queryTimingEnabled() {
     return value != nullptr && std::string_view(value) == "1";
 }
 
-std::string tableName(const SequenceId& sequence_id) {
-    // FNV-1a is deterministic across processes and platforms.  The prefix
-    // keeps the generated identifier a legal, non-user-controlled table name.
+std::string tableName(
+    const ProjectId& project_id,
+    const SequenceId& sequence_id) {
+    // Child table names are database-global in TDengine, even when their
+    // supertables differ. Include both scopes so the same sequence_id can be
+    // written independently by multiple projects.
     std::uint64_t hash = 1469598103934665603ULL;
+    for (const unsigned char ch : project_id) {
+        hash ^= ch;
+        hash *= 1099511628211ULL;
+    }
+    hash ^= 0xff;
+    hash *= 1099511628211ULL;
     for (const unsigned char ch : sequence_id) {
         hash ^= ch;
         hash *= 1099511628211ULL;
@@ -392,8 +401,9 @@ struct BoundGroup {
     std::array<TAOS_STMT2_BIND, 2> tags{};
     std::array<TAOS_STMT2_BIND, 5> columns{};
 
-    explicit BoundGroup(const Group& group) : sequence_id(group.sequence_id) {
-        table_name = tableName(sequence_id);
+    BoundGroup(const ProjectId& project_id, const Group& group)
+        : sequence_id(group.sequence_id) {
+        table_name = tableName(project_id, sequence_id);
         const auto point_count = group.points.size();
         const auto type_index = group.points.front()->value.index();
         timestamps.resize(point_count);
@@ -862,7 +872,8 @@ OperationResult TaosClient::insertRawOnConnection(
     try {
         for (const auto& [sequence_id, group] : groups) {
             (void)sequence_id;
-            bound_groups.push_back(std::make_unique<BoundGroup>(group));
+            bound_groups.push_back(
+                std::make_unique<BoundGroup>(project_id, group));
             auto& bound = *bound_groups.back();
             table_names.push_back(bound.table_name.data());
             tags.push_back(bound.tags.data());

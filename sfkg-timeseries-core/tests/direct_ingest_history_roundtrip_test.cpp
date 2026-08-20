@@ -61,6 +61,32 @@ int main() {
     core::HistoryQueryService history(registry, taos);
 
     constexpr core::Timestamp base = 1'800'000'000'000;
+
+    // TDengine child tables are database-global. Reusing the same sequence ID
+    // in two projects must therefore produce two independent child tables.
+    const core::TimeseriesBatch project_a_batch{
+        {{base, "project-shared-sequence", 1.0, "project-a"}},
+        "project-a"};
+    const core::TimeseriesBatch project_b_batch{
+        {{base, "project-shared-sequence", 2.0, "project-b"}},
+        "project-b"};
+    assert(taos.insertRaw("project-a", project_a_batch).code ==
+           core::OperationCode::Ok);
+    assert(taos.insertRaw("project-b", project_b_batch).code ==
+           core::OperationCode::Ok);
+    core::TimeseriesBatch project_a_read;
+    core::TimeseriesBatch project_b_read;
+    assert(taos.queryRaw(
+               "project-a", {"project-shared-sequence"}, base, base + 1,
+               &project_a_read).code == core::OperationCode::Ok);
+    assert(taos.queryRaw(
+               "project-b", {"project-shared-sequence"}, base, base + 1,
+               &project_b_read).code == core::OperationCode::Ok);
+    assert(project_a_read.points.size() == 1);
+    assert(project_b_read.points.size() == 1);
+    assert(std::get<double>(project_a_read.points.front().value) == 1.0);
+    assert(std::get<double>(project_b_read.points.front().value) == 2.0);
+
     const core::TimeseriesIngestData input_a{
         std::nullopt, "direct-source", "external-a", base, 21.5};
     const core::TimeseriesIngestData input_b{
