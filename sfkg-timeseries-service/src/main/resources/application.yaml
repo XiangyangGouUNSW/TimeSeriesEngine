@@ -25,7 +25,7 @@ timeseries:
     read-from-gstore: ${TIMESERIES_READ_FROM_GSTORE:true}
     fallback-to-local: ${TIMESERIES_GSTORE_FALLBACK_TO_LOCAL:true}
     endpoint: ${TIMESERIES_DATA_INGEST_ENDPOINT:http://127.0.0.1:8006}
-    database: ${TIMESERIES_DATA_INGEST_DATABASE:ett_system}
+    database: ${TIMESERIES_DATA_INGEST_DATABASE:ett-system}
     timeout-seconds: ${TIMESERIES_DATA_INGEST_TIMEOUT_SECONDS:5}
   project-catalog-file: ${TIMESERIES_PROJECT_CATALOG_FILE:data/timeseries-projects.json}
   grpc:
