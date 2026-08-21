@@ -44,6 +44,18 @@ public class DataIngestClient {
         return parseInsertResponse(sendRaw(request));
     }
 
+    public DataIngestInsertResponse update(DataIngestInsertPayload payload) {
+        if (!isEnabled()) {
+            return new DataIngestInsertResponse();
+        }
+        HttpRequest request = HttpRequest.newBuilder(updateUri())
+                .timeout(Duration.ofSeconds(Math.max(1, properties.getTimeoutSeconds())))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(toJson(payload), StandardCharsets.UTF_8))
+                .build();
+        return parseInsertResponse(sendRaw(request));
+    }
+
     public DataIngestRecordsResponse queryRecords(String databaseName, String tableName) {
         ObjectNode payload = objectMapper.createObjectNode();
         payload.put("db_name", databaseName);
@@ -88,6 +100,10 @@ public class DataIngestClient {
 
     private URI insertUri() {
         return URI.create(trimEndpoint() + "/insert");
+    }
+
+    private URI updateUri() {
+        return URI.create(trimEndpoint() + "/update");
     }
 
     private URI healthUri() {

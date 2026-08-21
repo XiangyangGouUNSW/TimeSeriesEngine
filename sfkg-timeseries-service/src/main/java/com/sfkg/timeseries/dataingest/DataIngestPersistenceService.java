@@ -47,8 +47,8 @@ public class DataIngestPersistenceService {
             DataIngestInsertPayload payload = newInsertPayload();
             payload.setDbName(properties.databaseForProject(projectId));
             payload.getEntities().add(toEntityPayload(tableName, businessKey, rawFields));
-            DataIngestInsertResponse response = dataIngestClient.insert(payload);
-            LOG.info("DataIngest write success: table={} key={} db={} entities={} relations={} triples={} message={}",
+            DataIngestInsertResponse response = dataIngestClient.update(payload);
+            LOG.info("DataIngest upsert success: table={} key={} db={} entities={} relations={} triples={} message={}",
                     tableName,
                     businessKey,
                     response.getDbName(),
