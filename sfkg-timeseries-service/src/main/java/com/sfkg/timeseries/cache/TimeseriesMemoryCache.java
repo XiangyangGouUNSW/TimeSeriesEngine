@@ -10,6 +10,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import com.sfkg.timeseries.entity.TimeseriesAnomalyResult;
@@ -25,6 +27,8 @@ import com.sfkg.timeseries.entity.TimeseriesSyncLog;
 
 @Component
 public class TimeseriesMemoryCache {
+
+    private static final Logger LOG = LoggerFactory.getLogger(TimeseriesMemoryCache.class);
 
     private final Set<CachedTable> loadedTables = ConcurrentHashMap.newKeySet();
     private final List<TimeseriesInstanceConfig> instanceConfigs = new CopyOnWriteArrayList<>();
@@ -112,9 +116,14 @@ public class TimeseriesMemoryCache {
             TimeseriesInstanceConfig existing = getInstanceConfig(projectId, sequenceId).orElse(null);
             TimeseriesInstanceConfig result = updater.apply(existing);
             if (result != null && result.getSequenceId() != null) {
+                String oldKey = cacheKey(projectId, sequenceId);
+                String newKey = cacheKey(result.getProjectId(), result.getSequenceId());
+                if (!oldKey.equals(newKey)) {
+                    instanceBySequenceId.remove(oldKey);
+                }
                 upsert(instanceConfigs, item -> sameProject(result.getProjectId(), item.getProjectId())
                         && result.getSequenceId().equals(item.getSequenceId()), result);
-                instanceBySequenceId.put(cacheKey(result.getProjectId(), result.getSequenceId()), result);
+                instanceBySequenceId.put(newKey, result);
                 markLoaded(CachedTable.INSTANCE_CONFIG);
             }
             return result;
@@ -132,17 +141,29 @@ public class TimeseriesMemoryCache {
         }
     }
 
+    /**
+     * @deprecated use {@link #getInstanceConfig(String, String)} with an
+     * explicit projectId — without it the match is ambiguous across projects.
+     */
+    @Deprecated
     public Optional<TimeseriesInstanceConfig> getInstanceConfig(String sequenceId) {
-        return instanceConfigs.stream()
-                .filter(entity -> equalsValue(sequenceId, entity.getSequenceId()))
-                .findFirst();
+        return firstAcrossProjects("getInstanceConfig",
+                instanceConfigs.stream()
+                        .filter(entity -> equalsValue(sequenceId, entity.getSequenceId()))
+                        .collect(Collectors.toList()),
+                TimeseriesInstanceConfig::getProjectId);
     }
 
     public Optional<TimeseriesInstanceConfig> getInstanceConfig(String projectId, String sequenceId) {
-        return instanceConfigs.stream()
-                .filter(entity -> sameProject(projectId, entity.getProjectId())
-                        && equalsValue(sequenceId, entity.getSequenceId()))
-                .findFirst();
+        if (sequenceId == null) {
+            return Optional.empty();
+        }
+        TimeseriesInstanceConfig found = instanceBySequenceId.get(cacheKey(projectId, sequenceId));
+        return found != null
+                && sequenceId.equals(found.getSequenceId())
+                && sameProject(projectId, found.getProjectId())
+                ? Optional.of(found)
+                : Optional.empty();
     }
 
     public List<TimeseriesInstanceConfig> listInstanceConfigs() {
@@ -185,10 +206,16 @@ public class TimeseriesMemoryCache {
         }
     }
 
+    /**
+     * @deprecated use {@link #getCategory(String, String)} with an explicit projectId.
+     */
+    @Deprecated
     public Optional<TimeseriesCategory> getCategory(String categoryId) {
-        return categories.stream()
-                .filter(entity -> equalsValue(categoryId, entity.getCategoryId()))
-                .findFirst();
+        return firstAcrossProjects("getCategory",
+                categories.stream()
+                        .filter(entity -> equalsValue(categoryId, entity.getCategoryId()))
+                        .collect(Collectors.toList()),
+                TimeseriesCategory::getProjectId);
     }
 
     public Optional<TimeseriesCategory> getCategory(String projectId, String categoryId) {
@@ -221,9 +248,14 @@ public class TimeseriesMemoryCache {
             TimeseriesConstraint existing = getConstraint(projectId, constraintId).orElse(null);
             TimeseriesConstraint result = updater.apply(existing);
             if (result != null && result.getConstraintId() != null) {
+                String oldKey = cacheKey(projectId, constraintId);
+                String newKey = cacheKey(result.getProjectId(), result.getConstraintId());
+                if (!oldKey.equals(newKey)) {
+                    constraintByConstraintId.remove(oldKey);
+                }
                 upsert(constraints, item -> sameProject(result.getProjectId(), item.getProjectId())
                         && result.getConstraintId().equals(item.getConstraintId()), result);
-                constraintByConstraintId.put(cacheKey(result.getProjectId(), result.getConstraintId()), result);
+                constraintByConstraintId.put(newKey, result);
                 markLoaded(CachedTable.CONSTRAINT);
             }
             return result;
@@ -241,17 +273,28 @@ public class TimeseriesMemoryCache {
         }
     }
 
+    /**
+     * @deprecated use {@link #getConstraint(String, String)} with an explicit projectId.
+     */
+    @Deprecated
     public Optional<TimeseriesConstraint> getConstraint(String constraintId) {
-        return constraints.stream()
-                .filter(entity -> equalsValue(constraintId, entity.getConstraintId()))
-                .findFirst();
+        return firstAcrossProjects("getConstraint",
+                constraints.stream()
+                        .filter(entity -> equalsValue(constraintId, entity.getConstraintId()))
+                        .collect(Collectors.toList()),
+                TimeseriesConstraint::getProjectId);
     }
 
     public Optional<TimeseriesConstraint> getConstraint(String projectId, String constraintId) {
-        return constraints.stream()
-                .filter(entity -> sameProject(projectId, entity.getProjectId())
-                        && equalsValue(constraintId, entity.getConstraintId()))
-                .findFirst();
+        if (constraintId == null) {
+            return Optional.empty();
+        }
+        TimeseriesConstraint found = constraintByConstraintId.get(cacheKey(projectId, constraintId));
+        return found != null
+                && constraintId.equals(found.getConstraintId())
+                && sameProject(projectId, found.getProjectId())
+                ? Optional.of(found)
+                : Optional.empty();
     }
 
     public List<TimeseriesConstraint> listConstraints() {
@@ -277,11 +320,16 @@ public class TimeseriesMemoryCache {
             TimeseriesRelation existing = getRelation(projectId, relationId).orElse(null);
             TimeseriesRelation result = updater.apply(existing);
             if (result != null && result.getRelationId() != null) {
+                removeRelationFromIndexes(existing);
+                String oldKey = cacheKey(projectId, relationId);
+                String newKey = cacheKey(result.getProjectId(), result.getRelationId());
+                if (!oldKey.equals(newKey)) {
+                    relationByRelationId.remove(oldKey);
+                }
                 upsert(relations, item -> sameProject(result.getProjectId(), item.getProjectId())
                         && result.getRelationId().equals(item.getRelationId()), result);
-                relationByRelationId.put(cacheKey(result.getProjectId(), result.getRelationId()), result);
-                rebuildRelationsByTargetId();
-                rebuildRelationsBySourceId();
+                relationByRelationId.put(newKey, result);
+                addRelationToIndexes(result);
                 markLoaded(CachedTable.RELATION);
             }
             return result;
@@ -291,27 +339,39 @@ public class TimeseriesMemoryCache {
     public void putRelation(TimeseriesRelation entity) {
         if (entity != null && entity.getRelationId() != null) {
             synchronized (relationLock) {
+                TimeseriesRelation existing = getRelation(entity.getProjectId(), entity.getRelationId()).orElse(null);
+                removeRelationFromIndexes(existing);
                 upsert(relations, item -> sameProject(entity.getProjectId(), item.getProjectId())
                         && entity.getRelationId().equals(item.getRelationId()), entity);
                 relationByRelationId.put(cacheKey(entity.getProjectId(), entity.getRelationId()), entity);
-                rebuildRelationsByTargetId();
-                rebuildRelationsBySourceId();
+                addRelationToIndexes(entity);
                 markLoaded(CachedTable.RELATION);
             }
         }
     }
 
+    /**
+     * @deprecated use {@link #getRelation(String, String)} with an explicit projectId.
+     */
+    @Deprecated
     public Optional<TimeseriesRelation> getRelation(String relationId) {
-        return relations.stream()
-                .filter(entity -> equalsValue(relationId, entity.getRelationId()))
-                .findFirst();
+        return firstAcrossProjects("getRelation",
+                relations.stream()
+                        .filter(entity -> equalsValue(relationId, entity.getRelationId()))
+                        .collect(Collectors.toList()),
+                TimeseriesRelation::getProjectId);
     }
 
     public Optional<TimeseriesRelation> getRelation(String projectId, String relationId) {
-        return relations.stream()
-                .filter(entity -> sameProject(projectId, entity.getProjectId())
-                        && equalsValue(relationId, entity.getRelationId()))
-                .findFirst();
+        if (relationId == null) {
+            return Optional.empty();
+        }
+        TimeseriesRelation found = relationByRelationId.get(cacheKey(projectId, relationId));
+        return found != null
+                && relationId.equals(found.getRelationId())
+                && sameProject(projectId, found.getProjectId())
+                ? Optional.of(found)
+                : Optional.empty();
     }
 
     public List<TimeseriesRelation> listRelations() {
@@ -340,9 +400,14 @@ public class TimeseriesMemoryCache {
             TimeseriesEvent existing = getEvent(projectId, eventId).orElse(null);
             TimeseriesEvent result = updater.apply(existing);
             if (result != null && result.getEventId() != null) {
+                String oldKey = cacheKey(projectId, eventId);
+                String newKey = cacheKey(result.getProjectId(), result.getEventId());
+                if (!oldKey.equals(newKey)) {
+                    eventsByEventId.remove(oldKey);
+                }
                 upsert(events, item -> sameProject(result.getProjectId(), item.getProjectId())
                         && result.getEventId().equals(item.getEventId()), result);
-                eventsByEventId.put(cacheKey(result.getProjectId(), result.getEventId()), result);
+                eventsByEventId.put(newKey, result);
                 markLoaded(CachedTable.EVENT);
             }
             return result;
@@ -360,17 +425,28 @@ public class TimeseriesMemoryCache {
         }
     }
 
+    /**
+     * @deprecated use {@link #getEvent(String, String)} with an explicit projectId.
+     */
+    @Deprecated
     public Optional<TimeseriesEvent> getEvent(String eventId) {
-        return events.stream()
-                .filter(entity -> equalsValue(eventId, entity.getEventId()))
-                .findFirst();
+        return firstAcrossProjects("getEvent",
+                events.stream()
+                        .filter(entity -> equalsValue(eventId, entity.getEventId()))
+                        .collect(Collectors.toList()),
+                TimeseriesEvent::getProjectId);
     }
 
     public Optional<TimeseriesEvent> getEvent(String projectId, String eventId) {
-        return events.stream()
-                .filter(entity -> sameProject(projectId, entity.getProjectId())
-                        && equalsValue(eventId, entity.getEventId()))
-                .findFirst();
+        if (eventId == null) {
+            return Optional.empty();
+        }
+        TimeseriesEvent found = eventsByEventId.get(cacheKey(projectId, eventId));
+        return found != null
+                && eventId.equals(found.getEventId())
+                && sameProject(projectId, found.getProjectId())
+                ? Optional.of(found)
+                : Optional.empty();
     }
 
     public List<TimeseriesEvent> listEvents() {
@@ -413,10 +489,16 @@ public class TimeseriesMemoryCache {
         }
     }
 
+    /**
+     * @deprecated use {@link #getAnomalyTask(String, String)} with an explicit projectId.
+     */
+    @Deprecated
     public Optional<TimeseriesAnomalyTask> getAnomalyTask(String taskId) {
-        return anomalyTasks.stream()
-                .filter(entity -> equalsValue(taskId, entity.getTaskId()))
-                .findFirst();
+        return firstAcrossProjects("getAnomalyTask",
+                anomalyTasks.stream()
+                        .filter(entity -> equalsValue(taskId, entity.getTaskId()))
+                        .collect(Collectors.toList()),
+                TimeseriesAnomalyTask::getProjectId);
     }
 
     public Optional<TimeseriesAnomalyTask> getAnomalyTask(String projectId, String taskId) {
@@ -466,10 +548,16 @@ public class TimeseriesMemoryCache {
         }
     }
 
+    /**
+     * @deprecated use {@link #getForecastTask(String, String)} with an explicit projectId.
+     */
+    @Deprecated
     public Optional<TimeseriesForecastTask> getForecastTask(String taskId) {
-        return forecastTasks.stream()
-                .filter(entity -> equalsValue(taskId, entity.getTaskId()))
-                .findFirst();
+        return firstAcrossProjects("getForecastTask",
+                forecastTasks.stream()
+                        .filter(entity -> equalsValue(taskId, entity.getTaskId()))
+                        .collect(Collectors.toList()),
+                TimeseriesForecastTask::getProjectId);
     }
 
     public Optional<TimeseriesForecastTask> getForecastTask(String projectId, String taskId) {
@@ -552,26 +640,63 @@ public class TimeseriesMemoryCache {
 
     // ── Indexed query methods ────────────────────────────────────────
 
+    /**
+     * @deprecated use {@link #getInstanceBySequenceId(String, String)} with an
+     * explicit projectId — without it the match is ambiguous across projects.
+     */
+    @Deprecated
     public TimeseriesInstanceConfig getInstanceBySequenceId(String sequenceId) {
-        return sequenceId == null ? null : instanceConfigs.stream()
-                .filter(item -> sequenceId.equals(item.getSequenceId()))
-                .findFirst().orElse(null);
+        return firstAcrossProjects("getInstanceBySequenceId",
+                sequenceId == null
+                        ? List.of()
+                        : instanceConfigs.stream()
+                                .filter(item -> sequenceId.equals(item.getSequenceId()))
+                                .collect(Collectors.toList()),
+                TimeseriesInstanceConfig::getProjectId)
+                .orElse(null);
     }
 
     public TimeseriesInstanceConfig getInstanceBySequenceId(String projectId, String sequenceId) {
-        return sequenceId != null ? instanceBySequenceId.get(cacheKey(projectId, sequenceId)) : null;
+        if (sequenceId == null) {
+            return null;
+        }
+        TimeseriesInstanceConfig found = instanceBySequenceId.get(cacheKey(projectId, sequenceId));
+        return found != null
+                && sequenceId.equals(found.getSequenceId())
+                && sameProject(projectId, found.getProjectId())
+                ? found : null;
     }
 
+    /**
+     * @deprecated use {@link #getRelationByRelationId(String, String)} with an explicit projectId.
+     */
+    @Deprecated
     public TimeseriesRelation getRelationByRelationId(String relationId) {
-        return relationId == null ? null : relations.stream()
-                .filter(item -> relationId.equals(item.getRelationId()))
-                .findFirst().orElse(null);
+        return firstAcrossProjects("getRelationByRelationId",
+                relationId == null
+                        ? List.of()
+                        : relations.stream()
+                                .filter(item -> relationId.equals(item.getRelationId()))
+                                .collect(Collectors.toList()),
+                TimeseriesRelation::getProjectId)
+                .orElse(null);
     }
 
     public TimeseriesRelation getRelationByRelationId(String projectId, String relationId) {
-        return relationId != null ? relationByRelationId.get(cacheKey(projectId, relationId)) : null;
+        if (relationId == null) {
+            return null;
+        }
+        TimeseriesRelation found = relationByRelationId.get(cacheKey(projectId, relationId));
+        return found != null
+                && relationId.equals(found.getRelationId())
+                && sameProject(projectId, found.getProjectId())
+                ? found : null;
     }
 
+    /**
+     * @deprecated use {@link #listRelationsByTargetSequenceId(String, String)} with an explicit projectId.
+     */
+    @Deprecated
     public List<TimeseriesRelation> listRelationsByTargetSequenceId(String sequenceId) {
         return relations.stream().filter(item -> sequenceId != null
                 && sequenceId.equals(item.getTargetSequenceId())).toList();
@@ -583,6 +708,10 @@ public class TimeseriesMemoryCache {
                 : List.of();
     }
 
+    /**
+     * @deprecated use {@link #listRelationsBySourceSequenceId(String, String)} with an explicit projectId.
+     */
+    @Deprecated
     public List<TimeseriesRelation> listRelationsBySourceSequenceId(String sequenceId) {
         return relations.stream().filter(item -> sequenceId != null
                 && item.getSourceSequences() != null && item.getSourceSequences().contains(sequenceId)).toList();
@@ -594,16 +723,36 @@ public class TimeseriesMemoryCache {
                 : List.of();
     }
 
+    /**
+     * @deprecated use {@link #getEventByEventId(String, String)} with an explicit projectId.
+     */
+    @Deprecated
     public TimeseriesEvent getEventByEventId(String eventId) {
-        return eventId == null ? null : events.stream()
-                .filter(item -> eventId.equals(item.getEventId()))
-                .findFirst().orElse(null);
+        return firstAcrossProjects("getEventByEventId",
+                eventId == null
+                        ? List.of()
+                        : events.stream()
+                                .filter(item -> eventId.equals(item.getEventId()))
+                                .collect(Collectors.toList()),
+                TimeseriesEvent::getProjectId)
+                .orElse(null);
     }
 
     public TimeseriesEvent getEventByEventId(String projectId, String eventId) {
-        return eventId != null ? eventsByEventId.get(cacheKey(projectId, eventId)) : null;
+        if (eventId == null) {
+            return null;
+        }
+        TimeseriesEvent found = eventsByEventId.get(cacheKey(projectId, eventId));
+        return found != null
+                && eventId.equals(found.getEventId())
+                && sameProject(projectId, found.getProjectId())
+                ? found : null;
     }
 
+    /**
+     * @deprecated use {@link #listAnomalyResultsByTaskId(String, String)} with an explicit projectId.
+     */
+    @Deprecated
     public List<TimeseriesAnomalyResult> listAnomalyResultsByTaskId(String taskId) {
         return anomalyResults.stream().filter(item -> taskId != null
                 && ((item.getTaskId() != null && taskId.equals(item.getTaskId()))
@@ -616,6 +765,10 @@ public class TimeseriesMemoryCache {
                 : List.of();
     }
 
+    /**
+     * @deprecated use {@link #listForecastResultsByTaskId(String, String)} with an explicit projectId.
+     */
+    @Deprecated
     public List<TimeseriesForecastResult> listForecastResultsByTaskId(String taskId) {
         return forecastResults.stream().filter(item -> taskId != null && taskId.equals(item.getTaskId())).toList();
     }
@@ -653,24 +806,75 @@ public class TimeseriesMemoryCache {
 
     private void rebuildRelationsByTargetId() {
         relationsByTargetSequenceId.clear();
-        relations.forEach(r -> {
-            if (r.getTargetSequenceId() != null) {
-                relationsByTargetSequenceId.computeIfAbsent(cacheKey(r.getProjectId(), r.getTargetSequenceId()), k -> new CopyOnWriteArrayList<>()).add(r);
-            }
-        });
+        relations.forEach(this::addRelationToTargetIndex);
     }
 
     private void rebuildRelationsBySourceId() {
         relationsBySourceSequenceId.clear();
-        relations.forEach(r -> {
-            if (r.getSourceSequences() != null) {
-                r.getSourceSequences().forEach(src -> {
-                    if (src != null) {
-                        relationsBySourceSequenceId.computeIfAbsent(cacheKey(r.getProjectId(), src), k -> new CopyOnWriteArrayList<>()).add(r);
-                    }
-                });
+        relations.forEach(this::addRelationToSourceIndex);
+    }
+
+    private void addRelationToIndexes(TimeseriesRelation relation) {
+        if (relation == null) {
+            return;
+        }
+        addRelationToTargetIndex(relation);
+        addRelationToSourceIndex(relation);
+    }
+
+    private void addRelationToTargetIndex(TimeseriesRelation relation) {
+        if (relation.getTargetSequenceId() != null) {
+            relationsByTargetSequenceId
+                    .computeIfAbsent(cacheKey(relation.getProjectId(), relation.getTargetSequenceId()),
+                            k -> new CopyOnWriteArrayList<>())
+                    .add(relation);
+        }
+    }
+
+    private void addRelationToSourceIndex(TimeseriesRelation relation) {
+        if (relation.getSourceSequences() != null) {
+            relation.getSourceSequences().forEach(src -> {
+                if (src != null) {
+                    relationsBySourceSequenceId
+                            .computeIfAbsent(cacheKey(relation.getProjectId(), src),
+                                    k -> new CopyOnWriteArrayList<>())
+                            .add(relation);
+                }
+            });
+        }
+    }
+
+    private void removeRelationFromIndexes(TimeseriesRelation relation) {
+        if (relation == null) {
+            return;
+        }
+        if (relation.getTargetSequenceId() != null) {
+            removeRelationFromIndex(relationsByTargetSequenceId,
+                    cacheKey(relation.getProjectId(), relation.getTargetSequenceId()), relation);
+        }
+        if (relation.getSourceSequences() != null) {
+            for (String src : relation.getSourceSequences()) {
+                if (src != null) {
+                    removeRelationFromIndex(relationsBySourceSequenceId,
+                            cacheKey(relation.getProjectId(), src), relation);
+                }
             }
-        });
+        }
+    }
+
+    private void removeRelationFromIndex(Map<String, List<TimeseriesRelation>> index,
+            String key, TimeseriesRelation relation) {
+        List<TimeseriesRelation> entries = index.get(key);
+        if (entries == null) {
+            return;
+        }
+        entries.removeIf(item -> item == relation
+                || (sameProject(relation.getProjectId(), item.getProjectId())
+                    && relation.getRelationId() != null
+                    && relation.getRelationId().equals(item.getRelationId())));
+        if (entries.isEmpty()) {
+            index.remove(key);
+        }
     }
 
     private void rebuildAnomalyResultsByTaskId() {
@@ -722,6 +926,27 @@ public class TimeseriesMemoryCache {
     }
 
     private String cacheKey(String projectId, String id) {
-        return String.valueOf(projectId) + "::" + String.valueOf(id);
+        return (projectId == null ? "" : projectId) + "::" + String.valueOf(id);
+    }
+
+    /**
+     * Legacy no-project fallback: return the first match, but log a warning
+     * when the same id exists under multiple distinct projects (ambiguous).
+     */
+    private <T> Optional<T> firstAcrossProjects(String methodName, List<T> matches,
+            java.util.function.Function<T, String> projectExtractor) {
+        if (matches.isEmpty()) {
+            return Optional.empty();
+        }
+        long distinctProjects = matches.stream()
+                .map(projectExtractor)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .count();
+        if (distinctProjects > 1) {
+            LOG.warn("[cache] {}: legacy no-project lookup matched {} distinct projects; "
+                    + "use the project-aware overload", methodName, distinctProjects);
+        }
+        return Optional.of(matches.get(0));
     }
 }

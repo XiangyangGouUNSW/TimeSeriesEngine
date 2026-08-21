@@ -60,6 +60,7 @@ public class DataIngestPersistenceService {
         } catch (RuntimeException exception) {
             LOG.warn("DataIngest dual-write failed: table={} key={} reason={}",
                     tableName, businessKey, exception.getMessage());
+            throw exception;
         }
     }
 
