@@ -13,7 +13,7 @@ public class DataIngestProperties {
     private String endpoint = "http://127.0.0.1:8006";
     private String database = "ett_system";
     private String namespace = "http://gbuilder.org/knowledge/";
-    private int timeoutSeconds = 5;
+    private long timeoutMillis = 500;
 
     public boolean isEnabled() {
         return enabled;
@@ -75,12 +75,12 @@ public class DataIngestProperties {
         return database + "_" + normalized;
     }
 
-    public int getTimeoutSeconds() {
-        return timeoutSeconds;
+    public long getTimeoutMillis() {
+        return timeoutMillis;
     }
 
-    public void setTimeoutSeconds(int timeoutSeconds) {
-        this.timeoutSeconds = timeoutSeconds;
+    public void setTimeoutMillis(long timeoutMillis) {
+        this.timeoutMillis = timeoutMillis;
     }
 
 }

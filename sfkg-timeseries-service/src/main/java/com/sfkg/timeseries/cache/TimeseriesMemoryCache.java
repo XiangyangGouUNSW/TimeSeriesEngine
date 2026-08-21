@@ -1,7 +1,6 @@
 package com.sfkg.timeseries.cache;
 
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -13,12 +12,10 @@ import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Component;
 
-import com.sfkg.timeseries.dto.HistoryDataQueryRequest;
 import com.sfkg.timeseries.entity.TimeseriesAnomalyResult;
 import com.sfkg.timeseries.entity.TimeseriesAnomalyTask;
 import com.sfkg.timeseries.entity.TimeseriesCategory;
 import com.sfkg.timeseries.entity.TimeseriesConstraint;
-import com.sfkg.timeseries.entity.TimeseriesDataPoint;
 import com.sfkg.timeseries.entity.TimeseriesEvent;
 import com.sfkg.timeseries.entity.TimeseriesForecastResult;
 import com.sfkg.timeseries.entity.TimeseriesForecastTask;
@@ -40,7 +37,6 @@ public class TimeseriesMemoryCache {
     private final List<TimeseriesAnomalyResult> anomalyResults = new CopyOnWriteArrayList<>();
     private final List<TimeseriesForecastResult> forecastResults = new CopyOnWriteArrayList<>();
     private final List<TimeseriesSyncLog> syncLogs = new CopyOnWriteArrayList<>();
-    private final List<TimeseriesDataPoint> dataPoints = new CopyOnWriteArrayList<>();
 
     // ── Map indexes for fast lookup ───────────────────────────────────
     private final Map<String, TimeseriesInstanceConfig> instanceBySequenceId = new ConcurrentHashMap<>();
@@ -63,7 +59,6 @@ public class TimeseriesMemoryCache {
     private final Object anomalyResultLock = new Object();
     private final Object forecastResultLock = new Object();
     private final Object syncLogLock = new Object();
-    private final Object dataPointLock = new Object();
 
     public boolean isLoaded(CachedTable table) {
         return loadedTables.contains(table);
@@ -89,7 +84,6 @@ public class TimeseriesMemoryCache {
             case ANOMALY_RESULT -> { anomalyResults.clear(); anomalyResultsByTaskId.clear(); }
             case FORECAST_RESULT -> { forecastResults.clear(); forecastResultsByTaskId.clear(); }
             case SYNC_LOG -> syncLogs.clear();
-            case TIMESERIES_DATA -> dataPoints.clear();
         }
         markUnloaded(table);
     }
@@ -556,77 +550,12 @@ public class TimeseriesMemoryCache {
         return List.copyOf(syncLogs);
     }
 
-    public void replaceTimeseriesDataPoints(Collection<TimeseriesDataPoint> points) {
-        synchronized (dataPointLock) {
-            replaceAll(dataPoints, points);
-            markLoaded(CachedTable.TIMESERIES_DATA);
-        }
-    }
-
-    public void replaceTimeseriesDataPoints(String sequenceId, Collection<TimeseriesDataPoint> points) {
-        synchronized (dataPointLock) {
-            if (sequenceId == null) {
-                replaceTimeseriesDataPoints(points);
-                return;
-            }
-            dataPoints.removeIf(point -> equalsValue(sequenceId, point.getSequenceId()));
-            if (points != null) {
-                dataPoints.addAll(points);
-            }
-            markLoaded(CachedTable.TIMESERIES_DATA);
-        }
-    }
-
-    public void putTimeseriesDataPoints(Collection<TimeseriesDataPoint> points) {
-        if (points == null || points.isEmpty()) {
-            return;
-        }
-        synchronized (dataPointLock) {
-            for (TimeseriesDataPoint point : points) {
-                if (point != null && point.getSequenceId() != null && point.getTimestamp() != null) {
-                    upsert(
-                            dataPoints,
-                            item -> sameProject(point.getProjectId(), item.getProjectId())
-                                    && point.getSequenceId().equals(item.getSequenceId())
-                                    && point.getTimestamp().equals(item.getTimestamp()),
-                            point);
-                }
-            }
-            markLoaded(CachedTable.TIMESERIES_DATA);
-        }
-    }
-
-    public List<TimeseriesDataPoint> listTimeseriesDataPoints(HistoryDataQueryRequest request) {
-        return dataPoints.stream()
-                .filter(point -> matchesDataQuery(request, point))
-                .sorted(Comparator
-                        .comparing(TimeseriesDataPoint::getSequenceId, Comparator.nullsLast(String::compareTo))
-                        .thenComparing(TimeseriesDataPoint::getTimestamp, Comparator.nullsLast(java.time.LocalDateTime::compareTo)))
-                .collect(Collectors.toList());
-    }
-
     // ── Indexed query methods ────────────────────────────────────────
 
     public TimeseriesInstanceConfig getInstanceBySequenceId(String sequenceId) {
         return sequenceId == null ? null : instanceConfigs.stream()
                 .filter(item -> sequenceId.equals(item.getSequenceId()))
                 .findFirst().orElse(null);
-    }
-
-    public void replaceTimeseriesDataPoints(String projectId, String sequenceId,
-            Collection<TimeseriesDataPoint> points) {
-        synchronized (dataPointLock) {
-            if (sequenceId == null) {
-                replaceTimeseriesDataPoints(points);
-                return;
-            }
-            dataPoints.removeIf(point -> sameProject(projectId, point.getProjectId())
-                    && equalsValue(sequenceId, point.getSequenceId()));
-            if (points != null) {
-                dataPoints.addAll(points);
-            }
-            markLoaded(CachedTable.TIMESERIES_DATA);
-        }
     }
 
     public TimeseriesInstanceConfig getInstanceBySequenceId(String projectId, String sequenceId) {
@@ -794,26 +723,5 @@ public class TimeseriesMemoryCache {
 
     private String cacheKey(String projectId, String id) {
         return String.valueOf(projectId) + "::" + String.valueOf(id);
-    }
-
-    private boolean matchesDataQuery(HistoryDataQueryRequest request, TimeseriesDataPoint point) {
-        if (point == null) {
-            return false;
-        }
-        if (request == null) {
-            return true;
-        }
-        if (request.getSequenceId() != null && !request.getSequenceId().equals(point.getSequenceId())) {
-            return false;
-        }
-        if (request.getProjectId() != null && !request.getProjectId().equals(point.getProjectId())) {
-            return false;
-        }
-        if (request.getStartTime() != null
-                && (point.getTimestamp() == null || point.getTimestamp().isBefore(request.getStartTime()))) {
-            return false;
-        }
-        return request.getEndTime() == null
-                || (point.getTimestamp() != null && !point.getTimestamp().isAfter(request.getEndTime()));
     }
 }

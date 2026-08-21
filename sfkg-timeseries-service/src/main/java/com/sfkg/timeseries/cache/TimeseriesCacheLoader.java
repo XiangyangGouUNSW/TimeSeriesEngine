@@ -4,7 +4,6 @@ import com.sfkg.timeseries.entity.TimeseriesAnomalyResult;
 import com.sfkg.timeseries.entity.TimeseriesAnomalyTask;
 import com.sfkg.timeseries.entity.TimeseriesCategory;
 import com.sfkg.timeseries.entity.TimeseriesConstraint;
-import com.sfkg.timeseries.entity.TimeseriesDataPoint;
 import com.sfkg.timeseries.entity.TimeseriesEvent;
 import com.sfkg.timeseries.entity.TimeseriesForecastResult;
 import com.sfkg.timeseries.entity.TimeseriesForecastTask;
@@ -17,7 +16,6 @@ import com.sfkg.timeseries.mapper.TimeseriesAnomalyResultMapper;
 import com.sfkg.timeseries.mapper.TimeseriesAnomalyTaskMapper;
 import com.sfkg.timeseries.mapper.TimeseriesCategoryMapper;
 import com.sfkg.timeseries.mapper.TimeseriesConstraintMapper;
-import com.sfkg.timeseries.mapper.TimeseriesDataFileMapper;
 import com.sfkg.timeseries.mapper.TimeseriesEventMapper;
 import com.sfkg.timeseries.mapper.TimeseriesForecastResultMapper;
 import com.sfkg.timeseries.mapper.TimeseriesForecastTaskMapper;
@@ -42,7 +40,6 @@ public class TimeseriesCacheLoader {
     private final ObjectProvider<TimeseriesForecastResultMapper> forecastResultMapper;
     private final ObjectProvider<TimeseriesForecastTaskMapper> forecastTaskMapper;
     private final ObjectProvider<TimeseriesSyncLogMapper> syncLogMapper;
-    private final ObjectProvider<TimeseriesDataFileMapper> dataFileMapper;
     private final ObjectProvider<TimeseriesProjectMapper> projectMapper;
     private final DataIngestRecordLoader dataIngestRecordLoader;
 
@@ -57,7 +54,6 @@ public class TimeseriesCacheLoader {
             ObjectProvider<TimeseriesForecastResultMapper> forecastResultMapper,
             ObjectProvider<TimeseriesForecastTaskMapper> forecastTaskMapper,
             ObjectProvider<TimeseriesSyncLogMapper> syncLogMapper,
-            ObjectProvider<TimeseriesDataFileMapper> dataFileMapper,
             ObjectProvider<TimeseriesProjectMapper> projectMapper,
             DataIngestRecordLoader dataIngestRecordLoader) {
         this.instanceConfigMapper = instanceConfigMapper;
@@ -70,7 +66,6 @@ public class TimeseriesCacheLoader {
         this.forecastResultMapper = forecastResultMapper;
         this.forecastTaskMapper = forecastTaskMapper;
         this.syncLogMapper = syncLogMapper;
-        this.dataFileMapper = dataFileMapper;
         this.projectMapper = projectMapper;
         this.dataIngestRecordLoader = dataIngestRecordLoader;
     }
@@ -123,11 +118,6 @@ public class TimeseriesCacheLoader {
     public List<TimeseriesSyncLog> loadSyncLogs() {
         TimeseriesSyncLogMapper mapper = syncLogMapper.getIfAvailable();
         return mapper == null ? List.of() : emptyIfNull(mapper.selectAll());
-    }
-
-    public List<TimeseriesDataPoint> loadTimeseriesDataPoints() {
-        TimeseriesDataFileMapper mapper = dataFileMapper.getIfAvailable();
-        return mapper == null ? List.of() : emptyIfNull(mapper.selectByCondition(null));
     }
 
     public List<TimeseriesProject> loadActiveProjects() {

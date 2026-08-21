@@ -37,7 +37,7 @@ public class DataIngestClient {
             return new DataIngestInsertResponse();
         }
         HttpRequest request = HttpRequest.newBuilder(insertUri())
-                .timeout(Duration.ofSeconds(Math.max(1, properties.getTimeoutSeconds())))
+                .timeout(Duration.ofMillis(Math.max(1, properties.getTimeoutMillis())))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(toJson(payload), StandardCharsets.UTF_8))
                 .build();
@@ -49,7 +49,7 @@ public class DataIngestClient {
             return new DataIngestInsertResponse();
         }
         HttpRequest request = HttpRequest.newBuilder(updateUri())
-                .timeout(Duration.ofSeconds(Math.max(1, properties.getTimeoutSeconds())))
+                .timeout(Duration.ofMillis(Math.max(1, properties.getTimeoutMillis())))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(toJson(payload), StandardCharsets.UTF_8))
                 .build();
@@ -61,7 +61,7 @@ public class DataIngestClient {
         payload.put("db_name", databaseName);
         payload.put("table_name", tableName);
         HttpRequest request = HttpRequest.newBuilder(recordsUri())
-                .timeout(Duration.ofSeconds(Math.max(1, properties.getTimeoutSeconds())))
+                .timeout(Duration.ofMillis(Math.max(1, properties.getTimeoutMillis())))
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(payload.toString(), StandardCharsets.UTF_8))
                 .build();
@@ -70,7 +70,7 @@ public class DataIngestClient {
 
     public String health() {
         HttpRequest request = HttpRequest.newBuilder(healthUri())
-                .timeout(Duration.ofSeconds(Math.max(1, properties.getTimeoutSeconds())))
+                .timeout(Duration.ofMillis(Math.max(1, properties.getTimeoutMillis())))
                 .GET()
                 .build();
         return send(request);

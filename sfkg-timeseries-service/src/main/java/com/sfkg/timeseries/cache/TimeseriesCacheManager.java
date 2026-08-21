@@ -101,7 +101,6 @@ public class TimeseriesCacheManager {
         memoryCache.replaceAnomalyResults(cacheLoader.loadAnomalyResults());
         memoryCache.replaceForecastResults(cacheLoader.loadForecastResults());
         memoryCache.replaceSyncLogs(cacheLoader.loadSyncLogs());
-        memoryCache.replaceTimeseriesDataPoints(cacheLoader.loadTimeseriesDataPoints());
         return projects;
     }
 
@@ -143,7 +142,6 @@ public class TimeseriesCacheManager {
             case ANOMALY_RESULT -> memoryCache.replaceAnomalyResults(cacheLoader.loadAnomalyResults());
             case FORECAST_RESULT -> memoryCache.replaceForecastResults(cacheLoader.loadForecastResults());
             case SYNC_LOG -> memoryCache.replaceSyncLogs(cacheLoader.loadSyncLogs());
-            case TIMESERIES_DATA -> memoryCache.replaceTimeseriesDataPoints(cacheLoader.loadTimeseriesDataPoints());
         }
     }
 

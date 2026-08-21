@@ -38,7 +38,6 @@ public class TimeseriesProjectRegistry {
         cache.listAnomalyResults().forEach(item -> register(item.getProjectId()));
         cache.listForecastResults().forEach(item -> register(item.getProjectId()));
         cache.listSyncLogs().forEach(item -> register(item.getProjectId()));
-        cache.listTimeseriesDataPoints(null).forEach(item -> register(item.getProjectId()));
     }
 
     public void registerProjects(Collection<TimeseriesProject> projects) {
