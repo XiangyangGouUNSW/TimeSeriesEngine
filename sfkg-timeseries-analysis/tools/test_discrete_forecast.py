@@ -104,26 +104,26 @@ class StubCore:
                 pts.append((self._times()[i], sid, self._data[sid][i]))
         return pts
 
-    def get_sequence_data_scale(self, ids):
+    def get_sequence_data_scale(self, ids, project_id=""):
         return [SequenceDataScale(sequence_id=s, point_count=self._n,
                                   start_time_ms=self._t0,
                                   end_time_ms=self._t0 + (self._n - 1) * self._step)
                 for s in ids]
 
-    def get_history(self, ids, start_time_ms=None, end_time_ms=None):
+    def get_history(self, ids, start_time_ms=None, end_time_ms=None, project_id=""):
         idx = [i for i in range(self._n)
                if (start_time_ms is None or self._times()[i] >= start_time_ms)
                and (end_time_ms is None or self._times()[i] < end_time_ms)]
         ts, rows = raw_points_to_aligned(self._points(ids, idx), ids)
         return HistoricalDataChunk(timestamps_ms=ts, sequence_ids=ids, values=rows)
 
-    def get_aligned_real_time_window(self, ids, window_rows=None):
+    def get_aligned_real_time_window(self, ids, window_rows=None, project_id=""):
         w = window_rows or self._window_rows
         idx = list(range(max(0, self._n - w), self._n))
         ts, rows = raw_points_to_aligned(self._points(ids, idx), ids)
         return AlignedWindow(timestamps_ms=ts, sequence_ids=ids, values=rows)
 
-    def check_constraints(self, constraint_ids, aligned_data=None):
+    def check_constraints(self, constraint_ids, aligned_data=None, project_id=""):
         self.check_calls += 1
         return True, []
 
@@ -156,7 +156,7 @@ def test_routing_and_catboost() -> None:
     res = eng.run_forecast(_ftask("t-cont", "OT", features=["T"]))
     assert res.status == pb.ANALYSIS_STATUS_SUCCESS, f"连续目标应成功：{res.status}"
     assert res.model_version == "patchtst", f"float 目标应路由 PatchTST，实际 {res.model_version}"
-    assert isinstance(eng.store.get("t-cont@v0"), PatchTSTForecaster)
+    assert isinstance(eng.store.get("default::t-cont@v0"), PatchTSTForecaster)
     assert len(res.values) == HORIZON and all(np.isfinite(v) for v in res.values)
     _ok("float 目标 → PatchTST（model_version=patchtst）")
 
@@ -166,7 +166,7 @@ def test_routing_and_catboost() -> None:
     res = eng.run_forecast(task)
     assert res.status == pb.ANALYSIS_STATUS_SUCCESS, f"离散目标应成功：{res.status}"
     assert res.model_version == "catboost", f"int 目标应路由 CatBoost，实际 {res.model_version}"
-    m = eng.store.get("t-disc@v0")
+    m = eng.store.get("default::t-disc@v0")
     assert isinstance(m, CatBoostForecaster), f"应是 CatBoostForecaster，实际 {type(m)}"
     assert len(res.values) == HORIZON, f"预测步数应 = {HORIZON}"
     assert all(np.isfinite(v) for v in res.values), "输出应全有限"
@@ -175,16 +175,16 @@ def test_routing_and_catboost() -> None:
     _ok("int64 目标（有特征）→ CatBoost：SUCCESS + 有限 + 合理码域")
 
     # d) 二次 run_forecast 不重训（store 内存命中同一对象）
-    m1 = eng.store.get("t-disc@v0")
+    m1 = eng.store.get("default::t-disc@v0")
     res2 = eng.run_forecast(task)
     assert res2.status == pb.ANALYSIS_STATUS_SUCCESS
-    assert eng.store.get("t-disc@v0") is m1, "二次调用应命中缓存对象，不重训"
+    assert eng.store.get("default::t-disc@v0") is m1, "二次调用应命中缓存对象，不重训"
     _ok("store 版本 key 缓存：二次调用不重训")
 
     # d) 新 store 从磁盘重建（验 loader 按 model_type 分发）
     eng2 = AnalysisEngine(core_client=StubCore(data), result_client=None, config=CFG,
                           model_store=ModelStore(model_dir=eng.store._model_dir))
-    m2 = eng2.store.get("t-disc@v0")
+    m2 = eng2.store.get("default::t-disc@v0")
     assert isinstance(m2, CatBoostForecaster), "磁盘重建应为 CatBoostForecaster"
     assert m2.model_type == "catboost"
     assert m2._model is not None and m2._patchtst is not None, "内部 PatchTST 应一并恢复"
@@ -205,7 +205,7 @@ def test_constant_forecast() -> None:
     res = eng.run_forecast(task)
     assert res.status == pb.ANALYSIS_STATUS_SUCCESS
     assert res.model_version == "constant"
-    assert isinstance(eng.store.get("t-const@v0"), ConstantForecaster)
+    assert isinstance(eng.store.get("default::t-const@v0"), ConstantForecaster)
     assert len(res.values) == HORIZON
     assert res.values == [res.values[0]] * HORIZON, "自变量类离散预测应全相等（保持当前值）"
     assert res.values[0] == float(data["setpoint"][-1]), \
@@ -258,7 +258,7 @@ def test_data_not_ready() -> None:
     assert res.status == pb.ANALYSIS_STATUS_DATA_NOT_READY, \
         f"数据不足应返回 DATA_NOT_READY（正常结果非异常），实际 {pb.AnalysisStatus.Name(res.status)}"
     assert "数据不足" in res.message
-    assert eng.store.get("t-nodata@v0") is None, "数据不足不应训练/存模型"
+    assert eng.store.get("default::t-nodata@v0") is None, "数据不足不应训练/存模型"
     _ok("数据不足 → DATA_NOT_READY 正常结果 + 不存模型")
 
 

@@ -25,14 +25,18 @@ import time
 from collections import namedtuple
 
 from analysis_engine import AnalysisEngine
+from project import scoped_key
 from result_repository import ResultRepository
 from task_registry import TaskKind, TaskRecord, TaskRegistry, TaskStatus
 
 logger = logging.getLogger(__name__)
 
-# 队列任务：只带 id/kind/版本，worker 消费时从 registry 拉最新 task
+# 队列任务：只带 project/id/kind/版本，worker 消费时从 registry 拉最新 task
 # （不把可变 proto 塞进队列造成跨线程共享，S 更新配置后 worker 拿到的就是新配置）。
-Job = namedtuple("Job", ["task_id", "kind", "config_version"])
+Job = namedtuple("Job", ["project_id", "task_id", "kind", "config_version"])
+
+# inflight 去重键：跨项目隔离（同 task_id 不同 project 是两条独立任务，可并发入队）
+_job_key = lambda project_id, task_id: scoped_key(project_id, task_id)
 
 _SENTINEL = object()   # 优雅退出哨兵
 
@@ -112,22 +116,24 @@ class Scheduler(threading.Thread):
                     if rec.kind == TaskKind.FORECAST:
                         # 模型失效/版本变化需重训 → 解除预测 next_due 门控，
                         # 训完立刻出新一轮预测，不等旧的动态间隔
-                        self.engine.reset_forecast_due(rec.task_id)
+                        self.engine.reset_forecast_due(rec.project_id, rec.task_id)
                     elif rec.kind == TaskKind.ANOMALY:
                         # 异常同理：解除 next_due，重训完成立刻出新一轮检测
-                        self.engine.reset_anomaly_due(rec.task_id)
+                        self.engine.reset_anomaly_due(rec.project_id, rec.task_id)
                     if self._enqueue(self._train_queue, self._train_inflight,
                                      rec, "train"):
                         enq_train += 1
                 elif rec.kind == TaskKind.FORECAST and \
-                        now_ms < self.engine.forecast_due_epoch(rec.task_id):
+                        now_ms < self.engine.forecast_due_epoch(rec.project_id,
+                                                                rec.task_id):
                     # 预测任务动态间隔：成功预测轮按「horizon × percent ÷ 频率」排了
                     # next_due，未到期 → 本轮跳过推理（省推理成本）
                     logger.debug("[scheduler] 任务 %s 未到预测到期时间，本轮跳过",
                                  rec.task_id)
                     skip_due += 1
                 elif rec.kind == TaskKind.ANOMALY and \
-                        now_ms < self.engine.anomaly_due_epoch(rec.task_id):
+                        now_ms < self.engine.anomaly_due_epoch(rec.project_id,
+                                                               rec.task_id):
                     # 异常任务动态间隔：每次真检测按「窗口 × recheck_fraction ÷ 频率」
                     # 排 next_due（有异常→热节奏盯住，无→等整个新窗口）。未到期跳过；
                     # 数据不足/失败轮不设 due → 维持固定周期重试。
@@ -155,17 +161,20 @@ class Scheduler(threading.Thread):
 
         先加 inflight 防「worker 已消费完、producer 后加」造成永久残留；
         队列满回滚并跳过，下个 tick 重试。返回是否真正入队（inflight 去重 / 满 = False）。
+        去重键 = 复合键 project::task_id：同 task_id 不同 project 互不占位。
         """
+        key = _job_key(rec.project_id, rec.task_id)
         with self._inflight_lock:
-            if rec.task_id in inflight:
+            if key in inflight:
                 return False
-            inflight.add(rec.task_id)
+            inflight.add(key)
         try:
-            q.put_nowait(Job(rec.task_id, rec.kind, rec.config_version))
+            q.put_nowait(Job(rec.project_id, rec.task_id, rec.kind,
+                             rec.config_version))
             return True
         except queue.Full:
             with self._inflight_lock:
-                inflight.discard(rec.task_id)
+                inflight.discard(key)
             logger.warning("[scheduler] %s 队列满（maxsize=%d），跳过 %s，下个 tick 重试",
                            pool, q.maxsize, rec.task_id)
             return False
@@ -188,12 +197,12 @@ class Scheduler(threading.Thread):
                                  pool, job.task_id)
             finally:
                 with self._inflight_lock:
-                    inflight.discard(job.task_id)
+                    inflight.discard(_job_key(job.project_id, job.task_id))
                 q.task_done()
 
     def _run_job(self, job: Job, pool: str) -> None:
         """消费前重校验：disable/删除/类型重建/版本变更中途的任务一律丢弃。"""
-        rec = self.registry.get(job.task_id)
+        rec = self.registry.get(job.project_id, job.task_id)
         if rec is None:
             return                                  # 已 DELETED
         if rec.status != TaskStatus.ENABLED:
@@ -226,7 +235,7 @@ class Scheduler(threading.Thread):
                 result = self.engine.run_forecast(rec.task,
                                                   config_version=job.config_version)
             if settled is None or not settled.is_set():
-                self.repository.put(rec.task_id, result)
+                self.repository.put(rec.project_id, rec.task_id, result)
         except Exception:
             rec.error_count += 1
             logger.exception("[scheduler] 任务 %s 执行失败（第 %d 次）",
@@ -275,7 +284,7 @@ class Scheduler(threading.Thread):
                     break
                 if job is not _SENTINEL:
                     with self._inflight_lock:
-                        inflight.discard(job.task_id)
+                        inflight.discard(_job_key(job.project_id, job.task_id))
             for _ in workers:
                 q.put_nowait(_SENTINEL)
         for w in self._train_workers + self._infer_workers:

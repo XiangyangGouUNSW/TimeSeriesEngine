@@ -75,12 +75,12 @@ class StubCore(CoreDataClient):
     def __init__(self, counts: dict[str, int]):
         self.counts = counts
 
-    def get_sequence_data_scale(self, sequence_ids):
+    def get_sequence_data_scale(self, sequence_ids, project_id=""):
         return [SequenceDataScale(sequence_id=sid,
                                   point_count=self.counts.get(sid, 0))
                 for sid in sequence_ids]
 
-    def get_history(self, sequence_ids, start_time_ms=None, end_time_ms=None):
+    def get_history(self, sequence_ids, start_time_ms=None, end_time_ms=None, project_id=""):
         n = max(self.counts.get(sid, 0) for sid in sequence_ids) or 0
         return HistoricalDataChunk(
             timestamps_ms=list(range(n)),
@@ -88,7 +88,7 @@ class StubCore(CoreDataClient):
             values=[[1.0] * len(sequence_ids)] * n,
             is_last_chunk=True)
 
-    def get_aligned_real_time_window(self, sequence_ids):
+    def get_aligned_real_time_window(self, sequence_ids, project_id=""):
         n = max(self.counts.get(sid, 0) for sid in sequence_ids) or 1
         return AlignedWindow(
             timestamps_ms=list(range(n)),
@@ -102,7 +102,7 @@ class SpikeCore(StubCore):
     尖峰放在末尾（倒数第二行）：engine 检测只取窗口最后 window_size=10 行，
     放头部会被截掉。"""
 
-    def get_aligned_real_time_window(self, sequence_ids):
+    def get_aligned_real_time_window(self, sequence_ids, project_id=""):
         n = max(self.counts.get(sid, 0) for sid in sequence_ids) or 20
         vals = [[1.0]] * n
         if n > 3:
@@ -162,7 +162,7 @@ def test_insufficient_data_not_ready() -> None:
     assert res.findings == [], "未训练未检测 → 不应有 finding"
     _ok("数据不足 → DATA_NOT_READY + 消息带缺多少")
 
-    key = eng._anomaly_key("t-gate-low", "HISTORICAL_MATCH", 1)
+    key = eng._anomaly_key(t, "HISTORICAL_MATCH", 1)
     assert not eng.store.is_ready(key), "门槛拦下 → 模型不应落盘"
     assert eng.needs_training(t, TaskKind.ANOMALY, config_version=1), \
         "未落盘 → needs_training 仍 True（下个 tick 继续进训练队列）"
@@ -219,7 +219,7 @@ def test_sufficient_data_trains_and_ready() -> None:
     res = eng.run_anomaly(t, config_version=1)
     assert res.status == pb.ANALYSIS_STATUS_SUCCESS, \
         f"50 ≥ 5 应 SUCCESS，实际 {pb.AnalysisStatus.Name(res.status)}"
-    key = eng._anomaly_key("t-gate-ok", "HISTORICAL_MATCH", 1)
+    key = eng._anomaly_key(t, "HISTORICAL_MATCH", 1)
     assert eng.store.is_ready(key), "训练后模型应落盘"
     assert not eng.needs_training(t, TaskKind.ANOMALY, config_version=1), \
         "落盘后 needs_training 应 False"
@@ -259,8 +259,8 @@ def test_per_method_thresholds_stagger() -> None:
         "DISCRETE(50) 数据够 → 应跑，返回 SUCCESS（不是 DATA_NOT_READY）"
     assert "MUTUAL_COUPLING" in res.message and "推迟" in res.message, \
         f"MUTUAL(200) 不够 → 消息应说明推迟，实际 {res.message!r}"
-    key_d = eng._anomaly_key("t-gate-multi", "DISCRETE_OUTLIER", 1)
-    key_m = eng._anomaly_key("t-gate-multi", "MUTUAL_COUPLING", 1)
+    key_d = eng._anomaly_key(task, "DISCRETE_OUTLIER", 1)
+    key_m = eng._anomaly_key(task, "MUTUAL_COUPLING", 1)
     assert eng.store.is_ready(key_d), "够数据的方法应训练落盘"
     assert not eng.store.is_ready(key_m), "不够数据的方法不应训练"
     assert eng.needs_training(task, TaskKind.ANOMALY, config_version=1), \
@@ -343,18 +343,18 @@ def test_knowledge_version_invalidates_model() -> None:
         semantic_context=pb.SemanticContext(knowledge_version="v1"))
     eng.run_anomaly(task, config_version=1)
 
-    key_v1 = eng._anomaly_key("t-kv", "HISTORICAL_MATCH", 1, "v1")
+    key_v1 = eng._anomaly_key(task, "HISTORICAL_MATCH", 1, "v1")
     assert eng.store.is_ready(key_v1), "v1 训练后模型应就绪（key 带 kv）"
 
-    key_v2 = eng._anomaly_key("t-kv", "HISTORICAL_MATCH", 1, "v2")
+    key_v2 = eng._anomaly_key(task, "HISTORICAL_MATCH", 1, "v2")
     assert not eng.store.is_ready(key_v2), \
         "knowledge_version 变化 → 旧模型不算数，需重训"
     _ok("异常 key 带 kv：v1 就绪、v2 失效需重训")
 
     # 无 kv 的裸 key 与带 kv 的 key 必须不同（防止绕过）
-    assert eng._anomaly_key("t-kv", "HISTORICAL_MATCH", 1) != key_v1, \
+    assert eng._anomaly_key(task, "HISTORICAL_MATCH", 1) != key_v1, \
         "无 kv key ≠ 有 kv key"
-    assert eng._forecast_key("t-kv", 1, "v1") != eng._forecast_key("t-kv", 1, "v2"), \
+    assert eng._forecast_key(task, 1, "v1") != eng._forecast_key(task, 1, "v2"), \
         "预测 key 也应带 kv"
     _ok("裸 key ≠ 带 kv key；预测 key 同样区分 kv")
 
@@ -372,7 +372,7 @@ def test_historical_match_event_gate() -> None:
         f"实际 {pb.AnalysisStatus.Name(res.status)}"
     assert "确认事件" in res.message and "需要 1" in res.message, \
         f"消息应说明事件数门槛，实际 {res.message!r}"
-    key = eng._anomaly_key("t-ev-gate", "HISTORICAL_MATCH", 1)
+    key = eng._anomaly_key(t, "HISTORICAL_MATCH", 1)
     assert not eng.store.is_ready(key), "门槛拦下 → 模型不应落盘"
     _ok("0 事件 + 点数够 → DATA_NOT_READY（消息带确认事件门槛）")
 
@@ -384,10 +384,11 @@ def test_historical_match_event_gate() -> None:
                                   "anomaly": {"minimum_points": 5}},
                           model_store=ModelStore(model_dir=tempfile.mkdtemp()),
                           historical_event_provider=provider)
-    res2 = eng2.run_anomaly(_task("t-ev-gate2"), config_version=1)
+    t2 = _task("t-ev-gate2")
+    res2 = eng2.run_anomaly(t2, config_version=1)
     assert res2.status == pb.ANALYSIS_STATUS_SUCCESS, \
         f"1 事件 ≥ 默认 1 → 放行，实际 {pb.AnalysisStatus.Name(res2.status)}"
-    assert eng2.store.is_ready(eng2._anomaly_key("t-ev-gate2", "HISTORICAL_MATCH", 1))
+    assert eng2.store.is_ready(eng2._anomaly_key(t2, "HISTORICAL_MATCH", 1))
     _ok("事件数达到门槛 → 放行 + 落盘")
 
 
@@ -582,7 +583,7 @@ def test_event_write_cap_and_failure_count() -> None:
 def _servicer_with(engine: AnalysisEngine, task_id: str, kind: TaskKind,
                    task, config_version: int = 1) -> AnalysisServicer:
     registry = TaskRegistry()
-    registry.register(task, kind, config_version=config_version)
+    registry.register("default", task, kind, config_version=config_version)
     return AnalysisServicer(registry, ResultRepository(), engine)
 
 
@@ -633,12 +634,12 @@ def test_real_result_not_overridden() -> None:
     eng = _engine({"a": 0})
     task = _task("t-q-real")
     registry = TaskRegistry()
-    registry.register(task, TaskKind.ANOMALY, config_version=1)
+    registry.register("default", task, TaskKind.ANOMALY, config_version=1)
     repo = ResultRepository()
     real = pb.AnomalyResult(task_id="t-q-real", run_id="run-x",
                             generated_at_ms=1, status=pb.ANALYSIS_STATUS_SUCCESS,
                             message="真实结果", findings=[])
-    repo.put("t-q-real", real)
+    repo.put("default", "t-q-real", real)
     serv = AnalysisServicer(registry, repo, eng)
 
     resp = serv.QueryAnomalyResults(

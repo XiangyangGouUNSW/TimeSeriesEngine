@@ -72,6 +72,7 @@ message RequestMeta {
   string request_id = 1;
   string trace_id = 2;
   int64 sent_at_ms = 3;
+  string project_id = 4;
 }
 
 message TimeRange {
@@ -89,6 +90,7 @@ message AnomalyResultMessage {
   repeated double values = 5;
   Severity severity = 6;
   AnomalySource source = 7;
+  string project_id = 8;
 }
 
 // ── Forecast result receiver message ──────────────────────────────
@@ -103,6 +105,7 @@ message ForecastResultMessage {
   repeated string sequence_ids = 7;
   repeated double values = 8;
   string model_version = 10;
+  string project_id = 11;
 }
 
 // ── Task sync messages ────────────────────────────────────────────
@@ -130,6 +133,7 @@ message SemanticContext {
   repeated string constraint_ids = 3;
   string knowledge_version = 4;
   repeated string confirmed_historical_event_ids = 5;
+  string project_id = 6;
 }
 
 message AnomalyTaskConfig {
@@ -142,6 +146,7 @@ message AnomalyTaskConfig {
   int64 slide_step_ms = 7;
   int32 minimum_points = 8;
   SemanticContext semantic_context = 9;
+  string project_id = 10;
 }
 
 message ForecastTaskConfig {
@@ -154,6 +159,7 @@ message ForecastTaskConfig {
   int32 minimum_points = 7;
   string model_key = 8;
   SemanticContext semantic_context = 9;
+  string project_id = 10;
 }
 
 message AnalysisSyncAnomalyTaskRequest {
@@ -180,6 +186,7 @@ message AnalysisUpdateTaskStatusRequest {
   RequestMeta meta = 1;
   string task_id = 2;
   AnalysisTaskStatus status = 3;
+  string project_id = 4;
 }
 
 // ── Query messages ────────────────────────────────────────────────
@@ -191,6 +198,7 @@ message ResultQuery {
   bool latest_only = 4;
   int32 limit = 5;
   string page_token = 6;
+  string project_id = 7;
 }
 
 message AnomalyFinding {
@@ -263,6 +271,7 @@ message AnalysisDecisionRequest {
   SemanticContext semantic_context = 5;
   repeated string related_historical_event_ids = 6;
   map<string, string> statistics = 7;
+  string project_id = 8;
 }
 
 message AnalysisDecisionResult {

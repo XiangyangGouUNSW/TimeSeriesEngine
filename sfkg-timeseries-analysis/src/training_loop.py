@@ -12,6 +12,8 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
+from project import DEFAULT_PROJECT, normalize_project, scoped_key
+
 logger = logging.getLogger(__name__)
 
 
@@ -21,11 +23,22 @@ def _version_of(key: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
-def _belongs_to_task(key: str, task_id: str) -> bool:
-    """key 是否属于该任务：预测 {task_id}@v{ver} / 异常 {task_id}:{method}@v{ver} / legacy {task_id}。"""
-    return (key == task_id
-            or key.startswith(f"{task_id}@v")
-            or key.startswith(f"{task_id}:"))
+def _belongs_to_scoped(key: str, project_id: str, task_id: str) -> bool:
+    """key 是否属于该 (project, task)：预测 {scoped}@v{ver} / 异常 {scoped}:{method}@v{ver}。
+
+    default 项目额外兼容清理 legacy 无 project 前缀的旧 key（{task_id}@v{ver} 等），
+    保证旧版本升级后仍能清掉历史模型文件。
+    """
+    scoped = scoped_key(project_id, task_id)
+    if (key == scoped
+            or key.startswith(f"{scoped}@v")
+            or key.startswith(f"{scoped}:")):
+        return True
+    if normalize_project(project_id) == DEFAULT_PROJECT:
+        return (key == task_id
+                or key.startswith(f"{task_id}@v")
+                or key.startswith(f"{task_id}:"))
+    return False
 
 
 class ModelStore:
@@ -88,18 +101,19 @@ class ModelStore:
             p.unlink()
         logger.info("[ModelStore] invalidate %s", key)
 
-    def invalidate_task(self, task_id: str, keep_version: int | None = None) -> None:
-        """按任务清理版本化模型，保留最近 2 个版本（keep_version 和 keep_version-1）。
+    def invalidate_task(self, project_id: str, task_id: str,
+                        keep_version: int | None = None) -> None:
+        """按 (project, task) 清理版本化模型，保留最近 2 个版本（keep_version 和 keep_version-1）。
 
         语义：keep_version=None 全删（任务删除）；keep_version=N 保留 {N, N-1}
         （发布回滚到上一个配置可秒级复用旧模型，磁盘有界）。
-        legacy 无版本 key 一律视为待清理。
+        legacy 无版本 key 一律视为待清理（default 项目兼容旧前缀，见 _belongs_to_scoped）。
         """
         keep = {keep_version, keep_version - 1} if keep_version is not None else set()
         stale = []
         with self._lock:
             for key in list(self._models):
-                if not _belongs_to_task(key, task_id):
+                if not _belongs_to_scoped(key, project_id, task_id):
                     continue
                 v = _version_of(key)
                 if keep_version is not None and v is not None and v in keep:
@@ -112,7 +126,7 @@ class ModelStore:
             for p in self._model_dir.iterdir():
                 if p.suffix != ".pt":
                     continue
-                if not _belongs_to_task(p.stem, task_id):
+                if not _belongs_to_scoped(p.stem, project_id, task_id):
                     continue
                 v = _version_of(p.stem)
                 if keep_version is not None and v is not None and v in keep:
@@ -122,8 +136,9 @@ class ModelStore:
                 except OSError:
                     pass
         if stale:
-            logger.info("[ModelStore] invalidate_task %s 清理 %d 个旧版本（保留 %s）",
-                        task_id, len(stale), sorted(keep) if keep else "全部")
+            logger.info("[ModelStore] invalidate_task %s::%s 清理 %d 个旧版本（保留 %s）",
+                        project_id, task_id, len(stale),
+                        sorted(keep) if keep else "全部")
 
     # ---- 具体模型类型的加载方式（由上层注入）----
 

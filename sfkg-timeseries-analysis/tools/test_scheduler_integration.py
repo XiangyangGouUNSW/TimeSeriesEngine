@@ -147,24 +147,24 @@ def main() -> None:
 
         # 3. 异常任务周期执行 → 结果可查。
         #    单序列下 GCAD 无自变量不产出 finding，但模型腿应真实跑通（GCAD 首训入 store）
-        ok = wait_until(lambda: repository.latest("task-sched-anomaly-001") is not None,
+        ok = wait_until(lambda: repository.latest("default", "task-sched-anomaly-001") is not None,
                         15, "异常任务出结果")
         assert ok, "异常任务应在调度周期内出结果"
-        a_res = repository.latest("task-sched-anomaly-001")
+        a_res = repository.latest("default", "task-sched-anomaly-001")
         assert a_res.status == pb.ANALYSIS_STATUS_SUCCESS
-        assert engine.store.get("task-sched-anomaly-001:CAUSAL_PATTERN@v0") is not None, \
+        assert engine.store.get("default::task-sched-anomaly-001:CAUSAL_PATTERN@v0") is not None, \
             "GCAD 模型应已首训并存 store（key 带版本 @v0）"
         print(f"[3] 异常任务出结果 ✓ status=SUCCESS，"
               f"findings={len(a_res.findings)} 条，GCAD 已入 store")
 
         # 4. 预测任务：首训（数据达标自动训）→ 出结果
-        ok = wait_until(lambda: repository.latest("task-sched-forecast-001") is not None,
+        ok = wait_until(lambda: repository.latest("default", "task-sched-forecast-001") is not None,
                         60, "预测任务出结果（含首训）")
         assert ok, "预测任务应在调度周期内完成首训并出结果"
-        f_res = repository.latest("task-sched-forecast-001")
+        f_res = repository.latest("default", "task-sched-forecast-001")
         assert f_res.status == pb.ANALYSIS_STATUS_SUCCESS
         assert len(f_res.values) == 24, "预测 24 步"
-        assert engine.store.get("task-sched-forecast-001@v0") is not None, \
+        assert engine.store.get("default::task-sched-forecast-001@v0") is not None, \
             "预测模型应已存 store（key 带版本 @v0）"
         print(f"[4] 预测任务首训出结果 ✓ 模型已就绪")
 
@@ -172,7 +172,7 @@ def main() -> None:
         #     预测任务动态间隔（horizon×0.7×step_ms，ETT 小时级 → ~16.8h）已把下次
         #     到期排很远，本轮只验"缓存复用"：显式解除 next_due 门控 → 下一 tick 立即
         #     走推理、命中缓存打"跳过训练"（等价于版本变化/重训解除门控的行为）。
-        engine.reset_forecast_due("task-sched-forecast-001")
+        engine.reset_forecast_due("default", "task-sched-forecast-001")
         skip_logs = []
         handler = logging.Handler()
         handler.emit = lambda r: skip_logs.append(r.getMessage()) \
@@ -187,7 +187,7 @@ def main() -> None:
             engine_log.removeHandler(handler)
 
         # 5. UpdateTaskStatus(DISABLED) → 不再执行（历史不再增长）
-        n_before = len(repository.history("task-sched-anomaly-001"))
+        n_before = len(repository.history("default", "task-sched-anomaly-001"))
         ack3 = servicer.UpdateTaskStatus(
             pb.AnalysisUpdateTaskStatusRequest(
                 task_id="task-sched-anomaly-001",
@@ -195,12 +195,12 @@ def main() -> None:
         assert ack3.accepted
         print(f"[5] 停用异常任务（停用前历史 {n_before} 条）")
         time.sleep(INTERVAL * 2 + 0.5)
-        n_after = len(repository.history("task-sched-anomaly-001"))
+        n_after = len(repository.history("default", "task-sched-anomaly-001"))
         assert n_after == n_before, f"停用后不应再执行：{n_before} → {n_after}"
         print(f"    停用后历史仍是 {n_after} 条 ✓ 不再执行")
 
         # 6. 结果仓库保留最近多条（maxlen=5）
-        hist = repository.history("task-sched-anomaly-001")
+        hist = repository.history("default", "task-sched-anomaly-001")
         assert len(hist) == n_before <= 5, "结果应保留最近且不超过 maxlen"
         print(f"[6] 结果仓库保留最近 {len(hist)} 条（maxlen=5）✓")
 

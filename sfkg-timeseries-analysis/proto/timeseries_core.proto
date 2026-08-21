@@ -16,8 +16,8 @@ service TimeseriesCoreService {
   rpc syncDerivedSeriesConfigs(SyncDerivedSeriesConfigsRequest)
       returns (SyncConfigResponse);
 
-  // Production ingest entry: resolve once, persist to cold storage, then
-  // update the hot window inside Core.
+  // Production ingest entry: resolve once, update the hot window inside Core,
+  // and enqueue cold persistence for the background TDengine writers.
   rpc ingestData(IngestDataRequest)
       returns (IngestDataResponse);
   // Fine-grained ingest RPCs are retained for testing, replay and compensation.
@@ -87,16 +87,21 @@ message TimeseriesIngestData {
   string external_sequence_id = 3;
   int64 time = 4;
   TimeseriesValue value = 5;
+  // Optional per-point copy of the request context. The enclosing request's
+  // project_id is authoritative when this field is omitted.
+  string project_id = 6;
 }
 
 message RawTimeseriesPoint {
   int64 time = 1;
   string sequence_id = 2;
   TimeseriesValue value = 3;
+  string project_id = 4;
 }
 
 message TimeseriesBatch {
   repeated RawTimeseriesPoint points = 1;
+  string project_id = 2;
 }
 
 message TimeValuePoint {
@@ -113,6 +118,7 @@ message WindowData {
   int64 window_start_time = 1;
   int64 window_end_time = 2;
   repeated SequenceWindow sequences = 3;
+  string project_id = 4;
 }
 
 message AlignedValue {
@@ -129,6 +135,7 @@ message AlignedWindowData {
   int64 window_start_time = 1;
   int64 window_end_time = 2;
   repeated AlignedSample samples = 3;
+  string project_id = 4;
 }
 
 enum VariableRole {
@@ -173,6 +180,7 @@ message SequenceAlignmentConfig {
 message AlignmentConfig {
   repeated SequenceAlignmentConfig sequences = 1;
   optional int64 bucket_interval = 2;
+  string project_id = 3;
 }
 
 message ConstraintTerm {
@@ -187,6 +195,7 @@ message ConstraintRule {
   double lower_bound = 3;
   double upper_bound = 4;
   repeated ConstraintTerm terms = 5;
+  string project_id = 6;
 }
 
 message ConstraintTermValue {
@@ -217,6 +226,7 @@ message RuntimeInstanceConfig {
   string data_type = 5;
   // Business classification of the sequence; omitted means unspecified.
   SeriesKind series_kind = 6;
+  string project_id = 7;
 }
 
 // Runtime copy of a confirmed constraint. enabled only controls whether the
@@ -224,6 +234,7 @@ message RuntimeInstanceConfig {
 message RuntimeConstraintConfig {
   ConstraintRule rule = 1;
   bool enabled = 2;
+  string project_id = 3;
 }
 
 message RelationLagRange {
@@ -249,29 +260,33 @@ message RuntimeRelationConfig {
   double confidence = 7;
   bool enabled = 8;
   repeated RuntimeRelationSource sources = 9;
+  string project_id = 10;
 }
 
 message SyncInstanceConfigsRequest {
   repeated RuntimeInstanceConfig items = 1;
+  string project_id = 2;
 }
 
 message SyncConstraintsRequest {
   repeated RuntimeConstraintConfig items = 1;
+  string project_id = 2;
 }
 
 message SyncRelationsRequest {
   repeated RuntimeRelationConfig items = 1;
+  string project_id = 2;
 }
 
 message RuntimeWindowConfig {
-  // Milliseconds retained by the Core hot window. The current Core instance
-  // applies one global window configuration; task-specific routing can be
-  // added when task_id is introduced to the data path.
+  // Milliseconds retained by this project's Core hot window.
   int64 window_size = 1;
+  string project_id = 2;
 }
 
 message SyncWindowConfigRequest {
   RuntimeWindowConfig config = 1;
+  string project_id = 2;
 }
 
 message LinearTerm {
@@ -313,14 +328,17 @@ message DerivedSeriesConfig {
     LinearCombinationConfig linear_combination = 3;
     DerivedExpression expression = 4;
   }
+  string project_id = 5;
 }
 
 message SyncDerivedSeriesConfigsRequest {
   repeated DerivedSeriesConfig items = 1;
+  string project_id = 2;
 }
 
 message SyncConfigResponse {
   OperationResult operation = 1;
+  string project_id = 2;
 }
 
 message IngestDataRequest {
@@ -328,6 +346,7 @@ message IngestDataRequest {
   reserved 2;
   // The normalized batch is omitted by default to avoid an unnecessary copy.
   bool return_resolved_data = 3;
+  string project_id = 4;
 }
 
 message IngestDataResponse {
@@ -344,49 +363,62 @@ message IngestDataResponse {
   // Derived sequences are updated in the hot window only and are not persisted
   // to TDengine.
   OperationResult derived_result = 7;
+  // True when the request was accepted by Core and its cold data was queued;
+  // it does not mean that TDengine has finished persisting the batch.
+  bool storage_queued = 8;
+  string project_id = 9;
 }
 
 message ConstraintResultMessage {
   int64 check_time_ms = 1;
   repeated string violated_constraint_ids = 2;
   repeated string sequence_ids = 3;
+  string project_id = 4;
 }
 
 message IngestRequest {
   repeated TimeseriesIngestData points = 1;
+  string project_id = 2;
 }
 
 message IngestResponse {
   OperationResult operation = 1;
   TimeseriesBatch resolved_data = 2;
+  string project_id = 3;
 }
 
 message WriteRawDataRequest {
   TimeseriesBatch data = 1;
+  string project_id = 2;
 }
 
 message WriteRawDataResponse {
   OperationResult operation = 1;
+  string project_id = 2;
 }
 
 message BuildTimeWindowRequest {
   TimeseriesBatch data = 1;
   int64 window_size = 2;
+  string project_id = 3;
 }
 
 message BuildTimeWindowResponse {
   OperationResult operation = 1;
+  string project_id = 2;
 }
 
 message QueryWindowDataRequest {
   repeated string sequence_ids = 1;
   optional int64 start_time = 2;
   optional int64 end_time = 3;
+  string project_id = 4;
 }
 
 message QueryWindowDataResponse {
   OperationResult operation = 1;
   WindowData data = 2;
+  string project_id = 3;
 }
 
 message AlignWindowDataRequest {
@@ -397,11 +429,13 @@ message AlignWindowDataRequest {
   }
   AlignmentConfig config = 2;
   repeated string relation_ids = 4;
+  string project_id = 5;
 }
 
 message AlignWindowDataResponse {
   OperationResult operation = 1;
   AlignedWindowData aligned_data = 2;
+  string project_id = 3;
 }
 
 message NamedMetric {
@@ -435,12 +469,14 @@ message ComputeStatisticsRequest {
   // sequences when a correlation vector is computed from aligned data.
   AlignmentConfig alignment_config = 3;
   string relation_id = 5;
+  string project_id = 6;
 }
 
 message ComputeStatisticsResponse {
   OperationResult operation = 1;
   repeated SequenceMetric sequence_metrics = 2;
   CorrelationVector correlation_vector = 3;
+  string project_id = 4;
 }
 
 message CheckConstraintsRequest {
@@ -454,6 +490,7 @@ message CheckConstraintsRequest {
     QueryWindowDataRequest window_query = 4;
   }
   AlignmentConfig alignment_config = 5;
+  string project_id = 6;
 }
 
 message CheckConstraintsResponse {
@@ -461,6 +498,7 @@ message CheckConstraintsResponse {
   bool satisfied = 2;
   repeated ConstraintViolation violations = 3;
   uint64 evaluated_count = 4;
+  string project_id = 5;
 }
 
 message QueryHistoryDataRequest {
@@ -470,6 +508,7 @@ message QueryHistoryDataRequest {
   // Optional millisecond bucket size. When set, Core returns the last value
   // observed for each sequence in each bucket.
   optional int64 granularity = 4;
+  string project_id = 5;
 }
 
 message QueryHistoryDataResponse {
@@ -477,6 +516,7 @@ message QueryHistoryDataResponse {
   // Points are ordered by time ascending. At equal timestamps, sequence order
   // follows the request's sequence_ids order.
   TimeseriesBatch data = 2;
+  string project_id = 3;
 }
 
 // Omitted sequence_ids and time bounds mean all currently stored history.
@@ -484,6 +524,7 @@ message QueryHistoryOverviewRequest {
   repeated string sequence_ids = 1;
   optional int64 start_time = 2;
   optional int64 end_time = 3;
+  string project_id = 4;
 }
 
 message HistorySeriesSummary {
@@ -507,4 +548,5 @@ message HistoryOverview {
 message QueryHistoryOverviewResponse {
   OperationResult operation = 1;
   HistoryOverview overview = 2;
+  string project_id = 3;
 }

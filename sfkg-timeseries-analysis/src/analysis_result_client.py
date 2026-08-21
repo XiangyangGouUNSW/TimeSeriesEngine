@@ -33,6 +33,7 @@ class AnalysisResultClient:
         self,
         *,
         task_id: str,               # 产生该事件的任务（S 端写图谱时关联任务）
+        project_id: str = "",       # 归属项目（S 端按项目写图谱/隔离知识）
         event_type: int,            # pb.ANOMALY_EVENT_TYPE_ANOMALY / _WARNING
         event_time_ms: int,         # 实际发生或预测触发时刻
         sequence_ids: list[str],    # 关联序列
@@ -43,6 +44,7 @@ class AnalysisResultClient:
         """把异常/预警结果发给 S，S 写图谱。成功返回 True。"""
         msg = pb.AnomalyResultMessage(
             task_id=task_id,
+            project_id=project_id,
             event_type=event_type,
             event_time_ms=event_time_ms,
             sequence_ids=list(sequence_ids),

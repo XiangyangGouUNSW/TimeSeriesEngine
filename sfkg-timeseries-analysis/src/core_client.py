@@ -32,9 +32,16 @@ from data_types import (
 
 
 class CoreDataClient:
-    """抽象接口：三个方法 = 我们要 C 端提供的三个能力。"""
+    """抽象接口：P 端向 C 端要数据的四个能力。
 
-    def get_sequence_data_scale(self, sequence_ids: list[str]) -> list[SequenceDataScale]:
+    所有方法带 project_id 尾参（默认 ""，服务端归一化为 "default"）：C 端按项目
+    隔离热窗口/历史/约束（不同项目有自己的时序关系与知识），P 侧只透传任务的
+    project_id。
+    """
+
+    def get_sequence_data_scale(
+        self, sequence_ids: list[str], project_id: str = ""
+    ) -> list[SequenceDataScale]:
         raise NotImplementedError
 
     def get_history(
@@ -42,10 +49,13 @@ class CoreDataClient:
         sequence_ids: list[str],
         start_time_ms: int | None = None,
         end_time_ms: int | None = None,
+        project_id: str = "",
     ) -> HistoricalDataChunk:
         raise NotImplementedError
 
-    def get_aligned_real_time_window(self, sequence_ids: list[str]) -> AlignedWindow:
+    def get_aligned_real_time_window(
+        self, sequence_ids: list[str], project_id: str = ""
+    ) -> AlignedWindow:
         """取 C 实时窗口（queryWindowData）并对齐成 [时间×序列] 矩阵。
 
         这是模型 detect / 预测的输入；训练才用 get_history（历史数据）。
@@ -58,6 +68,7 @@ class CoreDataClient:
         self,
         target_sequence_id: str,
         independent_sequence_ids: list[str],
+        project_id: str = "",
     ) -> dict[str, float] | None:
         """相关性先验：因变量与每个自变量的相关系数 {independent_id: coef}。
 
@@ -185,7 +196,10 @@ class MockCoreDataClient(CoreDataClient):
 
     # ---------- P 端三个能力（用上面两个接口 + 转换实现） ----------
 
-    def get_sequence_data_scale(self, sequence_ids: list[str]) -> list[SequenceDataScale]:
+    def get_sequence_data_scale(
+        self, sequence_ids: list[str], project_id: str = ""
+    ) -> list[SequenceDataScale]:
+        # Mock 不区分项目（本地数据），project_id 仅接口兼容
         ov = self.query_history_overview(sequence_ids)
         by_id = {s.sequence_id: s for s in ov.series}
         result = []
@@ -204,6 +218,7 @@ class MockCoreDataClient(CoreDataClient):
         sequence_ids: list[str],
         start_time_ms: int | None = None,
         end_time_ms: int | None = None,
+        project_id: str = "",
     ) -> HistoricalDataChunk:
         # C 的 queryHistoryData 要求必须给时间范围；没给就用 overview 补全
         if start_time_ms is None or end_time_ms is None:
@@ -223,12 +238,13 @@ class MockCoreDataClient(CoreDataClient):
         self,
         sequence_ids: list[str],
         window_rows: int = 500,
+        project_id: str = "",
     ) -> AlignedWindow:
         """假实时窗口：取每条序列最后 window_rows 行（模拟 C 的热窗口）。
 
         对应 C 的 queryWindowData：P 传 sequence_ids，C 返回最近一个热窗口，
         P 对齐成 [时间×序列] 矩阵。行数由 C 决定（这里固定 window_rows），
-        引擎按模型需要取尾部。
+        引擎按模型需要取尾部。Mock 不区分项目（本地数据），project_id 仅接口兼容。
         """
         names = [self._col(sid) for sid in sequence_ids]
         n = len(self._timestamps_ms)

@@ -74,7 +74,7 @@ def test_engine_records_due() -> None:
     now0 = int(time.time() * 1000)
     res = eng.run_forecast(_ftask("t-int", "OT", features=["T"], minimum_points=60))
     assert res.status == pb.ANALYSIS_STATUS_SUCCESS, f"预测应成功：{res.status}"
-    due = eng.forecast_due_epoch("t-int")
+    due = eng.forecast_due_epoch("default", "t-int")
     expected = int(_HORIZON * _INTERVAL_PERCENT * _STEP_MS)      # 8×0.7×3.6e6 = 20.16e6
     assert due > now0 + expected - 1_000, \
         f"到期应 ≈ now+间隔：due-now={due - now0}ms，期望 ≥ {expected}"
@@ -91,7 +91,7 @@ def test_engine_no_due_on_not_ready() -> None:
     res = eng.run_forecast(_ftask("t-nodue", "OT", features=["T"], minimum_points=10000))
     assert res.status == pb.ANALYSIS_STATUS_DATA_NOT_READY, \
         f"数据不足应 DATA_NOT_READY：{res.status}"
-    assert eng.forecast_due_epoch("t-nodue") == 0, \
+    assert eng.forecast_due_epoch("default", "t-nodue") == 0, \
         "数据不足轮不应设未来到期（任务保持立即到期，默认周期重试）"
     _ok("数据不足 → next_due = 0（不节流，数据到位后立即重试）")
 
@@ -103,10 +103,10 @@ def test_engine_reset_due() -> None:
     eng = _engine()
     assert eng.run_forecast(_ftask("t-reset", "OT", features=["T"])).status == \
         pb.ANALYSIS_STATUS_SUCCESS
-    assert eng.forecast_due_epoch("t-reset") > 0, "成功预测后应已设到期"
-    eng.reset_forecast_due("t-reset")
-    assert eng.forecast_due_epoch("t-reset") == 0, "reset 后应立即到期"
-    assert eng.forecast_due_epoch("unknown-task") == 0, "未知任务默认为立即到期"
+    assert eng.forecast_due_epoch("default", "t-reset") > 0, "成功预测后应已设到期"
+    eng.reset_forecast_due("default", "t-reset")
+    assert eng.forecast_due_epoch("default", "t-reset") == 0, "reset 后应立即到期"
+    assert eng.forecast_due_epoch("default", "unknown-task") == 0, "未知任务默认为立即到期"
     _ok("reset_forecast_due → next_due = 0（重训/版本变化解除门控）")
 
 
@@ -124,17 +124,17 @@ class GateEngine:
     def needs_training(self, task, kind, config_version: int = 0) -> bool:
         return self.needs_train
 
-    def forecast_due_epoch(self, task_id: str) -> int:
+    def forecast_due_epoch(self, project_id: str, task_id: str) -> int:
         return self.due
 
-    def reset_forecast_due(self, task_id: str) -> None:
+    def reset_forecast_due(self, project_id: str, task_id: str) -> None:
         self.reset_calls += 1
         self.due = 0.0
 
-    def anomaly_due_epoch(self, task_id: str) -> int:
+    def anomaly_due_epoch(self, project_id: str, task_id: str) -> int:
         return self.a_due
 
-    def reset_anomaly_due(self, task_id: str) -> None:
+    def reset_anomaly_due(self, project_id: str, task_id: str) -> None:
         self.reset_calls += 1
         self.a_due = 0.0
 
@@ -158,9 +158,9 @@ def test_scheduler_gate() -> None:
     sched = Scheduler(engine, registry, repo, interval_seconds=0.1,
                       train_queue_size=8, infer_queue_size=8,
                       train_workers=1, infer_workers=1)
-    registry.register(pb.ForecastTaskConfig(task_id="t-f", target_sequence_ids=["a"]),
+    registry.register("default", pb.ForecastTaskConfig(task_id="t-f", target_sequence_ids=["a"]),
                       TaskKind.FORECAST, 0)
-    registry.register(pb.AnomalyTaskConfig(task_id="t-a", sequence_ids=["a"],
+    registry.register("default", pb.AnomalyTaskConfig(task_id="t-a", sequence_ids=["a"],
                                            methods=["TREND_SHIFT"]),
                       TaskKind.ANOMALY, 0)
     engine.due = int(time.time() * 1000) + 10_000_000   # 预测任务很久后才到期
@@ -194,7 +194,7 @@ def test_scheduler_retrain_resets_due() -> None:
     sched = Scheduler(engine, registry, repo, interval_seconds=0.1,
                       train_queue_size=8, infer_queue_size=8,
                       train_workers=1, infer_workers=1)
-    registry.register(pb.ForecastTaskConfig(task_id="t-f", target_sequence_ids=["a"]),
+    registry.register("default", pb.ForecastTaskConfig(task_id="t-f", target_sequence_ids=["a"]),
                       TaskKind.FORECAST, 0)
     sched.start()
     try:

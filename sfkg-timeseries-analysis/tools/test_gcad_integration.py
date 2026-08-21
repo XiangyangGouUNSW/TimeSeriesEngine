@@ -79,7 +79,7 @@ def main() -> None:
     engine = AnalysisEngine(core_client=core, result_client=None, config=_cfg())
     target_id, source_ids = engine._extract_roles(task, seq_ids)
     print(f"[2] _extract_roles → 因变量 {target_id}，自变量 {source_ids}")
-    prior = engine._get_correlation_prior(target_id, source_ids, seq_ids)
+    prior = engine._get_correlation_prior("default", target_id, source_ids, seq_ids)
     print(f"[3] _get_correlation_prior → 列索引先验 {prior}")
 
     # 4. 互耦对识别（MUTUAL_COUPLING 用）

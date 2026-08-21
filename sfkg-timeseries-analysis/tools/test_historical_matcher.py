@@ -127,17 +127,17 @@ class FakeCore:
         self._win = np.zeros((100, 1))
         self._win[60, 0] = 100.0
 
-    def get_aligned_real_time_window(self, seq_ids):
+    def get_aligned_real_time_window(self, seq_ids, project_id=""):
         return SimpleNamespace(
             timestamps_ms=list(range(100)),
             values=[[float(v)] for v in self._win[:, 0]])
 
-    def get_history(self, seq_ids, end_time_ms=None):
+    def get_history(self, seq_ids, end_time_ms=None, project_id=""):
         return SimpleNamespace(
             sequence_ids=list(seq_ids),
             values=[[float(v)] for v in np.arange(200, dtype=float).reshape(-1, 1)[:, 0]])
 
-    def get_sequence_data_scale(self, seq_ids):
+    def get_sequence_data_scale(self, seq_ids, project_id=""):
         # 数据规模 200 点 ≥ 默认门槛 100，不触发数据门槛（门槛专项见 test_anomaly_data_gate）
         return [SimpleNamespace(sequence_id=sid, point_count=200) for sid in seq_ids]
 
@@ -162,7 +162,7 @@ def test_engine_integration() -> None:
     assert res.findings == [], "无确认事件 → 不应有发现"
     _ok("无 provider 任务跑通 → SUCCESS、0 发现")
 
-    key = engine._anomaly_key("t-hist", "HISTORICAL_MATCH", 1)
+    key = engine._anomaly_key(task, "HISTORICAL_MATCH", 1)
     assert engine.store.is_ready(key), "首跑后模型应落盘（空索引）"
     assert not engine.needs_training(task, TaskKind.ANOMALY, config_version=1), \
         "落盘后不应再进训练队列"

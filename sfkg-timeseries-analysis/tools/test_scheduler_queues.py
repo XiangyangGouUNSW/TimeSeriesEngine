@@ -75,16 +75,16 @@ class FakeEngine:
             f"{task.task_id}:{m}@v{config_version}") for m in methods)
 
     # 预测/异常任务动态间隔门控：假引擎不设 next_due，总是立即到期 → 现有用例行为不变
-    def forecast_due_epoch(self, task_id: str) -> int:
+    def forecast_due_epoch(self, project_id: str, task_id: str) -> int:
         return 0
 
-    def reset_forecast_due(self, task_id: str) -> None:
+    def reset_forecast_due(self, project_id: str, task_id: str) -> None:
         pass
 
-    def anomaly_due_epoch(self, task_id: str) -> int:
+    def anomaly_due_epoch(self, project_id: str, task_id: str) -> int:
         return 0
 
-    def reset_anomaly_due(self, task_id: str) -> None:
+    def reset_anomaly_due(self, project_id: str, task_id: str) -> None:
         pass
 
     def run_forecast(self, task, config_version: int = 0):
@@ -135,11 +135,11 @@ class FlakyRegistry(TaskRegistry):
         super().__init__()
         self._fail_left = fail_times
 
-    def get(self, task_id: str):
+    def get(self, project_id: str, task_id: str):
         if self._fail_left > 0:
             self._fail_left -= 1
             raise RuntimeError("模拟注册表崩溃")
-        return super().get(task_id)
+        return super().get(project_id, task_id)
 
 
 def wait_until(cond, timeout: float, desc: str) -> bool:
@@ -168,27 +168,27 @@ def test_config_version() -> None:
     ack1 = servicer.SyncForecastTask(
         pb.AnalysisSyncForecastTaskRequest(config_version=1, task=task), None)
     assert ack1.accepted
-    engine.store.save("t-ver@v1", object())
+    engine.store.save("default::t-ver@v1", object())
 
     # 注册 v2 → 版本变：v1 保留（回滚复用）、v2 需重训
     ack2 = servicer.SyncForecastTask(
         pb.AnalysisSyncForecastTaskRequest(config_version=2, task=task), None)
     assert ack2.accepted
-    assert engine.store.get("t-ver@v1") is not None, "v1 应保留（回滚秒级复用）"
+    assert engine.store.get("default::t-ver@v1") is not None, "v1 应保留（回滚秒级复用）"
     assert engine.needs_training(task, TaskKind.FORECAST, 2) is True, \
         "v2 无模型 → 应重训"
     assert engine.needs_training(task, TaskKind.FORECAST, 1) is False, \
         "回滚到 v1 → 复用旧模型不重训"
-    assert registry.get("t-ver").config_version == 2, "registry 应记录 v2"
+    assert registry.get("default", "t-ver").config_version == 2, "registry 应记录 v2"
     _ok("版本变 → v1 保留 + v2 重训 + 回滚复用")
 
     # keep-2 清理：造 v1/v2/v3，invalidate 保留最近 2
     for v in (1, 2, 3):
-        engine.store.save(f"t-ver@v{v}", object())
-    engine.invalidate_task("t-ver", keep_version=3)
-    assert engine.store.get("t-ver@v3") is not None
-    assert engine.store.get("t-ver@v2") is not None
-    assert engine.store.get("t-ver@v1") is None, "更旧版本应清理（磁盘有界）"
+        engine.store.save(f"default::t-ver@v{v}", object())
+    engine.invalidate_task("default", "t-ver", keep_version=3)
+    assert engine.store.get("default::t-ver@v3") is not None
+    assert engine.store.get("default::t-ver@v2") is not None
+    assert engine.store.get("default::t-ver@v1") is None, "更旧版本应清理（磁盘有界）"
     _ok("keep-2：invalidate 保留当前+上一个，清更旧")
 
 
@@ -202,18 +202,18 @@ def test_disable_queued_job() -> None:
     sched = Scheduler(engine, registry, repo, interval_seconds=0.2,
                       train_queue_size=4, infer_queue_size=4,
                       train_workers=1, infer_workers=1)
-    registry.register(_ftask("t-a"), TaskKind.FORECAST, 0)
-    registry.register(_ftask("t-b"), TaskKind.FORECAST, 0)
+    registry.register("default", _ftask("t-a"), TaskKind.FORECAST, 0)
+    registry.register("default", _ftask("t-b"), TaskKind.FORECAST, 0)
     sched.start()
     try:
         assert wait_until(lambda: len(engine.train_events) >= 1, 3,
                           "t-a 开始训练"), "t-a 应进训练队列"
         time.sleep(0.3)                            # t-b 应已在 t-a 后排队
-        registry.set_status("t-b", TaskStatus.DISABLED)
-        assert wait_until(lambda: repo.latest("t-a") is not None, 3,
+        registry.set_status("default", "t-b", TaskStatus.DISABLED)
+        assert wait_until(lambda: repo.latest("default", "t-a") is not None, 3,
                           "t-a 出结果"), "t-a 应正常完成"
         time.sleep(0.5)                            # 等 worker 弹出 t-b
-        assert repo.latest("t-b") is None, "disable 的排队 job 不应产生结果"
+        assert repo.latest("default", "t-b") is None, "disable 的排队 job 不应产生结果"
         assert not any("t-b" in str(e) for e in engine.run_events), \
             "t-b 不应执行推理"
         _ok("disable 后已排队 job 被重校验丢弃")
@@ -233,7 +233,7 @@ def test_queue_full() -> None:
                       train_queue_size=1, infer_queue_size=1,
                       train_workers=1, infer_workers=1)
     for i in range(5):
-        registry.register(_ftask(f"t-{i}"), TaskKind.FORECAST, 0)
+        registry.register("default", _ftask(f"t-{i}"), TaskKind.FORECAST, 0)
     sched.start()
     try:
         assert wait_until(lambda: len(engine.run_events) >= 1, 5,
@@ -260,13 +260,13 @@ def test_train_not_blocking_inference() -> None:
     sched = Scheduler(engine, registry, repo, interval_seconds=0.2,
                       train_queue_size=4, infer_queue_size=4,
                       train_workers=1, infer_workers=1)
-    registry.register(_ftask("t-slow"), TaskKind.FORECAST, 0)    # 需 3s 训练
+    registry.register("default", _ftask("t-slow"), TaskKind.FORECAST, 0)    # 需 3s 训练
     engine.store.save("t-fast@v0", object())                      # 模型已就绪
-    registry.register(_ftask("t-fast"), TaskKind.FORECAST, 0)
+    registry.register("default", _ftask("t-fast"), TaskKind.FORECAST, 0)
     sched.start()
     try:
         t0 = time.time()
-        assert wait_until(lambda: repo.latest("t-fast") is not None, 2.5,
+        assert wait_until(lambda: repo.latest("default", "t-fast") is not None, 2.5,
                           "就绪任务出结果"), "推理任务应独立于训练 worker"
         elapsed = time.time() - t0
         assert elapsed < 3.0, f"推理被训练阻塞：t-fast 花了 {elapsed:.1f}s"
@@ -286,7 +286,7 @@ def test_graceful_shutdown() -> None:
     sched = Scheduler(engine, registry, repo, interval_seconds=0.2,
                       train_queue_size=4, infer_queue_size=4,
                       train_workers=1, infer_workers=1)
-    registry.register(_ftask("t-exit"), TaskKind.FORECAST, 0)
+    registry.register("default", _ftask("t-exit"), TaskKind.FORECAST, 0)
     sched.start()
     assert wait_until(lambda: len(engine.train_events) >= 1, 3,
                       "worker 在飞"), "训练 job 应已开始"
@@ -334,17 +334,17 @@ def test_job_timeout() -> None:
     sched = Scheduler(engine, registry, repo, interval_seconds=0.1,
                       train_queue_size=4, infer_queue_size=4,
                       train_workers=1, infer_workers=1, infer_timeout_s=0.3)
-    registry.register(_ftask("t-hang"), TaskKind.FORECAST, 0)
+    registry.register("default", _ftask("t-hang"), TaskKind.FORECAST, 0)
     engine.store.save("t-hang@v0", object())      # 模型就绪 → 走推理池
-    registry.register(_ftask("t-quick"), TaskKind.FORECAST, 0)
+    registry.register("default", _ftask("t-quick"), TaskKind.FORECAST, 0)
     engine.store.save("t-quick@v0", object())
     sched.start()
     try:
         assert wait_until(lambda: engine.started.is_set(), 2,
                           "t-hang 进入执行"), "t-hang 应开始跑（挂住）"
         time.sleep(0.6)                           # 超过 0.3s 超时上限
-        assert repo.latest("t-hang") is None, "超时任务本轮不应落库"
-        assert wait_until(lambda: repo.latest("t-quick") is not None, 3,
+        assert repo.latest("default", "t-hang") is None, "超时任务本轮不应落库"
+        assert wait_until(lambda: repo.latest("default", "t-quick") is not None, 3,
                           "超时后 worker 释放，t-quick 出结果"), \
             "挂起任务不应占死 worker（超时释放）"
         _ok("挂起任务超时丢弃本轮，worker 释放，后续任务正常出结果")
@@ -363,15 +363,15 @@ def test_worker_crash_recovery() -> None:
     sched = Scheduler(engine, registry, repo, interval_seconds=0.2,
                       train_queue_size=4, infer_queue_size=4,
                       train_workers=1, infer_workers=1)
-    registry.register(_ftask("t-a"), TaskKind.FORECAST, 0)
-    registry.register(_ftask("t-b"), TaskKind.FORECAST, 0)
+    registry.register("default", _ftask("t-a"), TaskKind.FORECAST, 0)
+    registry.register("default", _ftask("t-b"), TaskKind.FORECAST, 0)
     sched.start()
     try:
         # 消费路径 get() 崩一次：worker 不死亡，t-a 下 tick 重试成功
-        assert wait_until(lambda: repo.latest("t-a") is not None, 5,
+        assert wait_until(lambda: repo.latest("default", "t-a") is not None, 5,
                           "t-a 出结果（崩溃后重试成功）"), \
             "崩溃后 worker 应继续消费并重试 t-a"
-        assert wait_until(lambda: repo.latest("t-b") is not None, 5,
+        assert wait_until(lambda: repo.latest("default", "t-b") is not None, 5,
                           "t-b 出结果"), "t-b 应不受崩溃影响"
         for w in sched._train_workers + sched._infer_workers:
             assert w.is_alive(), f"{w.name} 应存活（崩溃保护）"
@@ -392,13 +392,13 @@ def test_high_concurrency() -> None:
                       train_queue_size=16, infer_queue_size=16,
                       train_workers=1, infer_workers=4, infer_timeout_s=60)
     for i in range(30):
-        registry.register(_ftask(f"t-{i}"), TaskKind.FORECAST, 0)
+        registry.register("default", _ftask(f"t-{i}"), TaskKind.FORECAST, 0)
         engine.store.save(f"t-{i}@v0", object())   # 模型全就绪 → 全走推理池
     sched.start()
     try:
         # 直接等真实不变量：30 个任务结果全部落地（别数 run_events，append 早于 put，会竞态）
         assert wait_until(
-            lambda: all(repo.latest(f"t-{i}") is not None for i in range(30)),
+            lambda: all(repo.latest("default", f"t-{i}") is not None for i in range(30)),
             10, "30 个任务全部出结果"), "高并发注入不应丢任务"
         _ok(f"30 任务全部出结果（{len(engine.run_events)} 次执行）")
     finally:

@@ -43,6 +43,7 @@ from core_client import CoreDataClient
 from data_types import HistoricalDataChunk, SequenceDataScale
 from historical_matcher import HistoricalEvent, HistoricalEventMatcher
 from patchtst_forecaster import PatchTSTForecaster
+from project import scoped_key
 from task_registry import TaskKind
 from training_loop import ModelStore
 
@@ -98,10 +99,10 @@ class AnalysisEngine:
             "anomaly_ok": 0, "anomaly_fail": 0, "anomaly_cap": 0,
             "forecast_ok": 0, "forecast_fail": 0,
         }
-        # per-task 窗口水位 {task_id: 上次处理的窗口最新时间 ms}。
+        # per-task 窗口水位 {scoped_key: 上次处理的窗口最新时间 ms}。
         # slide_step_ms 节流靠它判定"窗口推进了多少新数据"（防同一窗口重复检测）。
         self._anomaly_watermarks: dict[str, int] = {}
-        # 预测任务动态运行间隔（负责人 08-13 定）：{task_id: 下次预测到期 epoch ms}。
+        # 预测任务动态运行间隔（负责人 08-13 定）：{scoped_key: 下次预测到期 epoch ms}。
         # 每次成功预测轮按 interval_ms = horizon × interval_percent × step_ms 排下一次
         # （step_ms = 实时窗口相邻时间戳差，frequency = 1/step_ms，即「步数 × 百分比 ÷
         # 频率」）；数据不足/不支持/失败轮不设 → 保持立即到期（默认周期重试）。
@@ -111,7 +112,7 @@ class AnalysisEngine:
         self._forecast_due_lock = threading.Lock()
         fm = self.cfg.get("forecast_model", {})
         self._forecast_interval_percent = float(fm.get("interval_percent", 0.7))
-        # 异常任务动态检测间隔（与预测同构，负责人 08-13 定）：{task_id: 下次到期 epoch ms}。
+        # 异常任务动态检测间隔（与预测同构，负责人 08-13 定）：{scoped_key: 下次到期 epoch ms}。
         # interval = window_size × recheck_fraction ÷ 频率（frequency = 1/step_ms）——
         # 一次检测吃一个窗口，所以按"检测窗口的百分比"定间隔：无异常 → 等一整个新窗口
         # （recheck_fraction_normal=1.0）；有异常 → 等 5% 窗口（recheck_fraction_hot=0.05）
@@ -119,8 +120,8 @@ class AnalysisEngine:
         # 数据不足/窗口未推进/失败轮不设 → 保持立即到期（默认周期重试）。
         self._anomaly_due: dict[str, int] = {}
         self._anomaly_due_lock = threading.Lock()
-        self._anomaly_clean_streak: dict[str, int] = {}   # {task_id: 热状态中连续无异常轮数}
-        self._anomaly_hot: dict[str, bool] = {}           # {task_id: 是否处于热节奏（盯事件）}
+        self._anomaly_clean_streak: dict[str, int] = {}   # {scoped_key: 热状态中连续无异常轮数}
+        self._anomaly_hot: dict[str, bool] = {}           # {scoped_key: 是否处于热节奏（盯事件）}
         am = self.cfg.get("anomaly", {})
         self._window_size = int(self.cfg.get("inference", {}).get("window_size", 100))
         self._anomaly_recheck_fraction_normal = float(am.get("recheck_fraction_normal", 1.0))
@@ -145,7 +146,9 @@ class AnalysisEngine:
             # ① 查 C 数据规模，够不够训练（目标 + 特征全列）
             all_ids = list(dict.fromkeys(
                 list(task.target_sequence_ids) + list(task.feature_sequence_ids)))
-            scales = {s.sequence_id: s for s in self.core.get_sequence_data_scale(all_ids)}
+            scales = {s.sequence_id: s
+                      for s in self.core.get_sequence_data_scale(
+                          all_ids, project_id=task.project_id)}
             need = self._min_train_points(task)
             counts = {sid: scales.get(sid).point_count if sid in scales else 0
                       for sid in all_ids}
@@ -164,7 +167,8 @@ class AnalysisEngine:
             # ③ 取实时窗口（对齐成矩阵）预测未来。训练才用历史，推理一律实时窗口
             ctx = self._context_length(task)
             _t = time.perf_counter()
-            window = self.core.get_aligned_real_time_window(all_ids)
+            window = self.core.get_aligned_real_time_window(
+                all_ids, project_id=task.project_id)
             fetch_ms = (time.perf_counter() - _t) * 1e3
             times = window.timestamps_ms[-ctx:]
             matrix = self._clean_matrix(np.array(window.values[-ctx:], dtype=np.float32))
@@ -180,7 +184,7 @@ class AnalysisEngine:
             out_ts = [last_ts + step_ms * (i + 1) for i in range(horizon)]
             # 预测成功 → 按「horizon × interval_percent ÷ 频率」排下一次预测的到期时间
             # （动态间隔，只对成功预测轮生效；数据不足/失败轮不设，保持默认周期）
-            self._record_forecast_due(task.task_id, now, horizon, step_ms)
+            self._record_forecast_due(task.project_id, task.task_id, now, horizon, step_ms)
             logger.info(f"[engine] ③预测 {target} 未来 {horizon} 步，前 3 个值 {[round(v,2) for v in preds[:3]]}")
 
             # ④ 调 C 约束检查（把预测值包成 AlignedWindowData 传给 C）
@@ -190,7 +194,8 @@ class AnalysisEngine:
             aligned = self._build_aligned(target, out_ts, preds)
             _t = time.perf_counter()
             satisfied, violations = self.core.check_constraints(
-                constraint_ids, aligned_data=aligned)
+                constraint_ids, aligned_data=aligned,
+                project_id=task.project_id)
             check_ms = (time.perf_counter() - _t) * 1e3
             logger.info(f"[engine] ④调 C 约束检查：satisfied={satisfied}，违规 {len(violations)} 条")
 
@@ -199,6 +204,7 @@ class AnalysisEngine:
             if not satisfied and violations:
                 ok = self.sender.send_event(
                     task_id=task.task_id,
+                    project_id=task.project_id,
                     event_type=pb.ANOMALY_EVENT_TYPE_WARNING,
                     event_time_ms=out_ts[0],
                     sequence_ids=[target],
@@ -235,25 +241,25 @@ class AnalysisEngine:
 
     # ================= 预测任务动态运行间隔（next_due）=================
 
-    def forecast_due_epoch(self, task_id: str) -> int:
+    def forecast_due_epoch(self, project_id: str, task_id: str) -> int:
         """任务下一次预测的到期时间（epoch ms）。0 = 立即到期。
 
         新任务 / 未设（数据不足、失败轮）/ 异常任务 → 返回 0，调度器不门控。
         """
         with self._forecast_due_lock:
-            return self._forecast_due.get(task_id, 0)
+            return self._forecast_due.get(scoped_key(project_id, task_id), 0)
 
-    def reset_forecast_due(self, task_id: str) -> None:
+    def reset_forecast_due(self, project_id: str, task_id: str) -> None:
         """解除预测门控：模型需重训/版本变化 → 任务立即恢复可运行。
 
         调度器在 needs_training 为 True 时调用，保证重训完成立刻出新一轮预测，
         不等旧的动态间隔（否则新配置/新知识要等一个周期才生效）。
         """
         with self._forecast_due_lock:
-            self._forecast_due.pop(task_id, None)
+            self._forecast_due.pop(scoped_key(project_id, task_id), None)
 
-    def _record_forecast_due(self, task_id: str, now_ms: int, horizon: int,
-                             step_ms: int) -> None:
+    def _record_forecast_due(self, project_id: str, task_id: str, now_ms: int,
+                             horizon: int, step_ms: int) -> None:
         """成功预测后按「预测周期 × 百分比」排下一次运行。
 
         interval_ms = horizon × interval_percent × step_ms（step_ms 每步毫秒数，
@@ -264,27 +270,28 @@ class AnalysisEngine:
         if horizon > 0 and step_ms and step_ms > 0:
             interval_ms = int(horizon * self._forecast_interval_percent * step_ms)
             with self._forecast_due_lock:
-                self._forecast_due[task_id] = now_ms + interval_ms
+                self._forecast_due[scoped_key(project_id, task_id)] = now_ms + interval_ms
 
     # ================= 异常任务动态检测间隔（next_due）=================
 
-    def anomaly_due_epoch(self, task_id: str) -> int:
+    def anomaly_due_epoch(self, project_id: str, task_id: str) -> int:
         """任务下一次异常检测的到期时间（epoch ms）。0 = 立即到期。
 
         新任务 / 未设（数据不足、失败轮）/ 预测任务 → 返回 0，调度器不门控。
         """
         with self._anomaly_due_lock:
-            return self._anomaly_due.get(task_id, 0)
+            return self._anomaly_due.get(scoped_key(project_id, task_id), 0)
 
-    def reset_anomaly_due(self, task_id: str) -> None:
+    def reset_anomaly_due(self, project_id: str, task_id: str) -> None:
         """解除异常门控：模型需重训/版本变化 → 任务立即恢复可运行（同步清干净轮数与热标记）。"""
         with self._anomaly_due_lock:
-            self._anomaly_due.pop(task_id, None)
-            self._anomaly_clean_streak.pop(task_id, None)
-            self._anomaly_hot.pop(task_id, None)
+            key = scoped_key(project_id, task_id)
+            self._anomaly_due.pop(key, None)
+            self._anomaly_clean_streak.pop(key, None)
+            self._anomaly_hot.pop(key, None)
 
-    def _record_anomaly_due(self, task_id: str, now_ms: int, n_findings: int,
-                            step_ms: int) -> None:
+    def _record_anomaly_due(self, project_id: str, task_id: str, now_ms: int,
+                            n_findings: int, step_ms: int) -> None:
         """按「检测窗口 × 百分比」排下一次异常检测（与预测同构）。
 
         interval_ms = window_size × recheck_fraction × step_ms（一次检测吃一个窗口）：
@@ -296,19 +303,20 @@ class AnalysisEngine:
         """
         if not (step_ms and step_ms > 0):
             return
+        key = scoped_key(project_id, task_id)
         if n_findings > 0:
             # 有异常 → 热节奏盯住；任务进入热状态（标记用于防抖确认）
-            self._anomaly_hot[task_id] = True
-            self._anomaly_clean_streak.pop(task_id, None)
+            self._anomaly_hot[key] = True
+            self._anomaly_clean_streak.pop(key, None)
             fraction = self._anomaly_recheck_fraction_hot
-        elif self._anomaly_hot.get(task_id):
+        elif self._anomaly_hot.get(key):
             # 热状态中连续干净 → 计数；达到确认轮数 → 回正常节奏（确认恢复防抖动）。
             # 从未热过的任务不走这里 → 直接正常节奏（不把"新任务首轮"当热后恢复）。
-            streak = self._anomaly_clean_streak.get(task_id, 0) + 1
-            self._anomaly_clean_streak[task_id] = streak
+            streak = self._anomaly_clean_streak.get(key, 0) + 1
+            self._anomaly_clean_streak[key] = streak
             if streak >= self._anomaly_hot_confirm_clean_runs:
-                self._anomaly_hot.pop(task_id, None)
-                self._anomaly_clean_streak.pop(task_id, None)
+                self._anomaly_hot.pop(key, None)
+                self._anomaly_clean_streak.pop(key, None)
                 fraction = self._anomaly_recheck_fraction_normal
             else:
                 fraction = self._anomaly_recheck_fraction_hot
@@ -316,7 +324,7 @@ class AnalysisEngine:
             fraction = self._anomaly_recheck_fraction_normal
         interval_ms = int(self._window_size * fraction * step_ms)
         with self._anomaly_due_lock:
-            self._anomaly_due[task_id] = now_ms + interval_ms
+            self._anomaly_due[key] = now_ms + interval_ms
 
     # ================= PatchTST 预测模型复用 =================
 
@@ -373,15 +381,15 @@ class AnalysisEngine:
             return ctx
         return int(self.cfg.get("forecast_model", {}).get("context_length", 96))
 
-    def _forecast_key(self, task_id: str, ver: int,
+    def _forecast_key(self, task, ver: int,
                       knowledge_version: str = "") -> str:
-        """预测模型缓存 key：版本 + 语义知识版本进 key，任一变 → key 变 → 必然重训。"""
-        return f"{task_id}@v{ver}{self._kv_part(knowledge_version)}"
+        """预测模型缓存 key：项目 + 版本 + 语义知识版本进 key，任一变 → 必然重训。"""
+        return f"{scoped_key(task.project_id, task.task_id)}@v{ver}{self._kv_part(knowledge_version)}"
 
-    def _anomaly_key(self, task_id: str, method: str, ver: int,
+    def _anomaly_key(self, task, method: str, ver: int,
                      knowledge_version: str = "") -> str:
-        """异常模型缓存 key：版本 + 语义知识版本进 key，任一变 → key 变 → 必然重训。"""
-        return f"{task_id}:{method}@v{ver}{self._kv_part(knowledge_version)}"
+        """异常模型缓存 key：项目 + 版本 + 语义知识版本进 key，任一变 → 必然重训。"""
+        return f"{scoped_key(task.project_id, task.task_id)}:{method}@v{ver}{self._kv_part(knowledge_version)}"
 
     @staticmethod
     def _kv_part(knowledge_version: str) -> str:
@@ -410,7 +418,7 @@ class AnalysisEngine:
         天然免疫「旧版本在飞训练覆盖新版本 key」的竞态。同 key 并发到达时
         拿 per-task 锁 double-check，只训一次。
         """
-        key = self._forecast_key(task.task_id, config_version,
+        key = self._forecast_key(task, config_version,
                                  self._knowledge_version(task))
         model = self.store.get(key)
         if model is not None:
@@ -431,7 +439,8 @@ class AnalysisEngine:
                          if s.end_time_ms is not None)
             cut_ms = start_ms + int((end_ms - start_ms)
                                     * self.cfg["training"]["train_ratio"])
-            chunk = self.core.get_history(all_ids, end_time_ms=cut_ms)
+            chunk = self.core.get_history(all_ids, end_time_ms=cut_ms,
+                                         project_id=task.project_id)
 
             # 数据推断路由（#6）：先看原始取值类型再转 float——chunk.values 保留
             # C 端原始 Python 类型（int/bool/float/string），缺失=NaN，类型不丢。
@@ -496,16 +505,18 @@ class AnalysisEngine:
                 self._train_locks[key] = lock
             return lock
 
-    def invalidate_task(self, task_id: str, keep_version: int | None = None) -> None:
-        """清理任务的旧版本模型（保留最近 2 版，见 ModelStore.invalidate_task）。
+    def invalidate_task(self, project_id: str, task_id: str,
+                        keep_version: int | None = None) -> None:
+        """清理任务旧版本模型（保留最近 2 版，见 ModelStore.invalidate_task）。
 
         keep_version=None 全删（任务删除）。顺带 prune _train_locks，
-        防其随版本数缓慢增长。
+        防其随版本数缓慢增长。复合键前缀只清本 project 的任务，不误伤他项目。
         """
-        self.store.invalidate_task(task_id, keep_version)
+        self.store.invalidate_task(project_id, task_id, keep_version)
         with self._train_locks_lock:
+            prefix = scoped_key(project_id, task_id)
             stale = [k for k in self._train_locks
-                     if k.startswith(f"{task_id}:") or k.startswith(f"{task_id}@v")]
+                     if k.startswith(f"{prefix}:") or k.startswith(f"{prefix}@v")]
             for k in stale:
                 self._train_locks.pop(k, None)
 
@@ -536,16 +547,17 @@ class AnalysisEngine:
             kv = self._knowledge_version(task)
             if model_methods:
                 if any(not self.store.is_ready(
-                        self._anomaly_key(task.task_id, m, config_version, kv))
+                        self._anomaly_key(task, m, config_version, kv))
                         for m in model_methods):
                     all_ids = list(task.sequence_ids)
                     scales = {s.sequence_id: s
-                              for s in self.core.get_sequence_data_scale(all_ids)}
+                              for s in self.core.get_sequence_data_scale(
+                                  all_ids, project_id=task.project_id)}
                     counts = {sid: scales.get(sid).point_count if sid in scales else 0
                               for sid in all_ids}
                     for m in model_methods:
                         if self.store.is_ready(
-                                self._anomaly_key(task.task_id, m, config_version, kv)):
+                                self._anomaly_key(task, m, config_version, kv)):
                             run_methods.append(m)        # 已就绪：只检测，不卡门槛
                             continue
                         if m == "HISTORICAL_MATCH":
@@ -592,7 +604,8 @@ class AnalysisEngine:
                         finding.detected_time_ms = f["time"]
                     findings.append(finding)
                 # 本轮真实跑了检测 → 按「检测窗口 × 百分比」排下一次（有异常→热节奏盯住）
-                self._record_anomaly_due(task.task_id, now, len(findings), step_ms)
+                self._record_anomaly_due(task.project_id, task.task_id, now,
+                                         len(findings), step_ms)
 
             # ③ 逐点写异常（老师确认 08-10）：一个异常点一个事件，不聚合。
             #    每个点用自己的时间戳（模型取 index→窗口时间，兜底 now）。
@@ -608,6 +621,7 @@ class AnalysisEngine:
                 ts = getattr(f, "detected_time_ms", None) or now
                 ok = self.sender.send_event(
                     task_id=task.task_id,
+                    project_id=task.project_id,
                     event_type=pb.ANOMALY_EVENT_TYPE_ANOMALY,
                     event_time_ms=ts,
                     sequence_ids=list(task.sequence_ids),
@@ -653,7 +667,8 @@ class AnalysisEngine:
             slide_ms = int(getattr(task, "slide_step_ms", 0) or 0)
             if slide_ms > 0:
                 with self._anomaly_due_lock:
-                    self._anomaly_due[task.task_id] = now + slide_ms
+                    self._anomaly_due[scoped_key(task.project_id, task.task_id)] = \
+                        now + slide_ms
             logger.info("[engine] 任务 %s %s（本轮跳过）", task.task_id, e)
             return pb.AnomalyResult(
                 task_id=task.task_id, run_id=f"run-{now}",
@@ -678,14 +693,14 @@ class AnalysisEngine:
         kv = self._knowledge_version(task)
         if kind == TaskKind.FORECAST:
             return not self.store.is_ready(
-                self._forecast_key(task.task_id, config_version, kv))
+                self._forecast_key(task, config_version, kv))
         methods = list(task.methods) or DEFAULT_METHODS
         model_methods = [m for m in methods
                          if m != "CONSTRAINT_CHECK" and m in KNOWN_METHODS]
         if not model_methods:
             return False
         return any(not self.store.is_ready(
-            self._anomaly_key(task.task_id, m, config_version, kv))
+            self._anomaly_key(task, m, config_version, kv))
             for m in model_methods)
 
     def _anomaly_min_points(self, task: pb.AnomalyTaskConfig, method: str) -> int:
@@ -777,7 +792,8 @@ class AnalysisEngine:
         corr_prior = None
         if target_id and source_ids:
             try:
-                corr_prior = self._get_correlation_prior(target_id, source_ids, seq_ids)
+                corr_prior = self._get_correlation_prior(task.project_id,
+                                                         target_id, source_ids, seq_ids)
             except Exception as e:
                 logger.info(f"[engine] 拿相关性先验失败，降级为不用先验：{e}")
         # 语义关系图先验（技术方案 [42]）：source→target 关联指向因变量的列当 GCAD 候选
@@ -790,7 +806,7 @@ class AnalysisEngine:
         ready: dict[str, object] = {}
         to_train: list[str] = []
         for method in model_methods:
-            key = self._anomaly_key(task.task_id, method, config_version, kv)
+            key = self._anomaly_key(task, method, config_version, kv)
             model = self.store.get(key)
             if model is not None:
                 ready[method] = model
@@ -828,8 +844,10 @@ class AnalysisEngine:
 
         # ③ 拉数据：训练用历史矩阵；检测用实时窗口对齐矩阵（统一 [时间×序列]）。
         #    C 不可达/无数据 → 异常向上抛，run_anomaly 报 FAILED（而不是"没检出"）。
-        history = self._clean_matrix(self._get_history_matrix(seq_ids)) if to_train else None
-        window = self.core.get_aligned_real_time_window(seq_ids)
+        history = self._clean_matrix(self._get_history_matrix(task.project_id,
+                                                              seq_ids)) if to_train else None
+        window = self.core.get_aligned_real_time_window(seq_ids,
+                                                        project_id=task.project_id)
         ws = int(self.cfg["inference"]["window_size"])
         matrix = self._clean_matrix(np.array(window.values[-ws:], dtype=np.float32))
         times = window.timestamps_ms[-ws:]
@@ -845,11 +863,12 @@ class AnalysisEngine:
         slide_ms = int(getattr(task, "slide_step_ms", 0) or 0)
         if slide_ms > 0 and times:
             latest = times[-1]
-            prev = self._anomaly_watermarks.get(task.task_id)
+            wm_key = scoped_key(task.project_id, task.task_id)
+            prev = self._anomaly_watermarks.get(wm_key)
             if prev is not None and latest - prev < slide_ms:
                 raise _SlideNotAdvanced(
                     f"窗口最新时间推进 {latest - prev}ms < slide_step_ms={slide_ms}ms")
-            self._anomaly_watermarks[task.task_id] = latest
+            self._anomaly_watermarks[wm_key] = latest
 
         # ④ 逐模型训练/检测：单模型异常不影响其他模型
         for method, model in ready.items():
@@ -864,12 +883,11 @@ class AnalysisEngine:
                                     method)
                         continue
                     self.store.save(
-                        self._anomaly_key(task.task_id, method, config_version, kv),
+                        self._anomaly_key(task, method, config_version, kv),
                         model)
                     logger.info("[engine] 首训异常模型 %s（key=%s）",
                                 method,
-                                self._anomaly_key(task.task_id, method,
-                                                  config_version, kv))
+                                self._anomaly_key(task, method, config_version, kv))
                 detected = model.detect(matrix)
                 for f in detected:
                     idx = f.get("index")
@@ -978,10 +996,12 @@ class AnalysisEngine:
                 pairs.add(tuple(sorted((seq_index[src], seq_index[tgt]))))
         return sorted(pairs)
 
-    def _get_correlation_prior(self, target_id: str, source_ids: list[str],
+    def _get_correlation_prior(self, project_id: str, target_id: str,
+                               source_ids: list[str],
                                seq_ids: list[str]) -> dict[int, float] | None:
         """调 C computeBasicStatistics 拿相关性先验，转成 {列索引: 系数}。"""
-        by_id = self.core.get_correlation_vector(target_id, source_ids)
+        by_id = self.core.get_correlation_vector(target_id, source_ids,
+                                                 project_id=project_id)
         if not by_id:
             return None
         seq_index = {sid: i for i, sid in enumerate(seq_ids)}
@@ -1014,9 +1034,10 @@ class AnalysisEngine:
             prior[seq_index[src]] = float(getattr(r, "confidence", 0.0) or 0.0)
         return prior
 
-    def _get_history_matrix(self, seq_ids: list[str]) -> np.ndarray:
+    def _get_history_matrix(self, project_id: str,
+                            seq_ids: list[str]) -> np.ndarray:
         """从 C 拉历史数据，转成 [time, seq_count] 矩阵。"""
-        chunk = self.core.get_history(seq_ids)
+        chunk = self.core.get_history(seq_ids, project_id=project_id)
         return np.array(chunk.values, dtype=float)
 
     # ================= 工具 =================

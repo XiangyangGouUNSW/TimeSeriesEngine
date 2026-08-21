@@ -43,44 +43,44 @@ def _ok(name: str) -> None:
 def test_registry() -> None:
     print("\n[TaskRegistry]")
     reg = TaskRegistry()
-    rec = reg.register(types.SimpleNamespace(task_id="t-1"), TaskKind.ANOMALY)
+    rec = reg.register("default", types.SimpleNamespace(task_id="t-1"), TaskKind.ANOMALY)
     assert rec.status == TaskStatus.ENABLED, "新建任务应默认 ENABLED"
     _ok("新建任务默认 ENABLED")
 
     # 更新配置（同 task_id 再注册）→ 保留原状态，不复活
-    reg.set_status("t-1", TaskStatus.DISABLED)
-    reg.register(types.SimpleNamespace(task_id="t-1"), TaskKind.ANOMALY)
-    assert reg.get("t-1").status == TaskStatus.DISABLED, "更新配置不应复活 DISABLED 任务"
+    reg.set_status("default", "t-1", TaskStatus.DISABLED)
+    reg.register("default", types.SimpleNamespace(task_id="t-1"), TaskKind.ANOMALY)
+    assert reg.get("default", "t-1").status == TaskStatus.DISABLED, "更新配置不应复活 DISABLED 任务"
     _ok("更新配置保留原状态")
 
     assert all(r.task_id != "t-1" for r in reg.enabled_tasks()), "DISABLED 不进 enabled_tasks"
     _ok("DISABLED 不进 enabled_tasks")
 
-    reg.set_status("t-1", TaskStatus.ENABLED)
+    reg.set_status("default", "t-1", TaskStatus.ENABLED)
     assert any(r.task_id == "t-1" for r in reg.enabled_tasks())
     _ok("ENABLED 恢复调度")
 
-    assert reg.set_status("t-1", TaskStatus.DELETED)
-    assert reg.get("t-1") is None, "DELETED 后应移除"
+    assert reg.set_status("default", "t-1", TaskStatus.DELETED)
+    assert reg.get("default", "t-1") is None, "DELETED 后应移除"
     _ok("DELETED 移除")
 
-    assert not reg.set_status("t-not-exist", TaskStatus.DISABLED), "任务不存在返回 False"
+    assert not reg.set_status("default", "t-not-exist", TaskStatus.DISABLED), "任务不存在返回 False"
     _ok("任务不存在返回 False")
 
     # config_version：register 更新版本、保留启停状态；is_enabled 反映实时状态
-    rec = reg.register(types.SimpleNamespace(task_id="t-ver"), TaskKind.FORECAST,
+    rec = reg.register("default", types.SimpleNamespace(task_id="t-ver"), TaskKind.FORECAST,
                        config_version=1)
-    assert rec.config_version == 1 and reg.get("t-ver").config_version == 1, \
+    assert rec.config_version == 1 and reg.get("default", "t-ver").config_version == 1, \
         "register 应记录 config_version"
-    reg.set_status("t-ver", TaskStatus.DISABLED)
-    reg.register(types.SimpleNamespace(task_id="t-ver"), TaskKind.FORECAST,
+    reg.set_status("default", "t-ver", TaskStatus.DISABLED)
+    reg.register("default", types.SimpleNamespace(task_id="t-ver"), TaskKind.FORECAST,
                  config_version=2)
-    assert reg.get("t-ver").config_version == 2, "版本更新应覆盖旧版本"
-    assert reg.get("t-ver").status == TaskStatus.DISABLED, "版本更新保留启停状态"
-    assert not reg.is_enabled("t-ver"), "is_enabled 应反映 DISABLED"
-    reg.set_status("t-ver", TaskStatus.ENABLED)
-    assert reg.is_enabled("t-ver"), "is_enabled 应反映 ENABLED"
-    assert not reg.is_enabled("t-not-exist"), "不存在任务 is_enabled=False"
+    assert reg.get("default", "t-ver").config_version == 2, "版本更新应覆盖旧版本"
+    assert reg.get("default", "t-ver").status == TaskStatus.DISABLED, "版本更新保留启停状态"
+    assert not reg.is_enabled("default", "t-ver"), "is_enabled 应反映 DISABLED"
+    reg.set_status("default", "t-ver", TaskStatus.ENABLED)
+    assert reg.is_enabled("default", "t-ver"), "is_enabled 应反映 ENABLED"
+    assert not reg.is_enabled("default", "t-not-exist"), "不存在任务 is_enabled=False"
     _ok("config_version 记录/更新 + is_enabled")
 
 
@@ -97,11 +97,11 @@ class FakeCore:
     def __init__(self):
         self.constraint_calls = 0
 
-    def check_constraints(self, constraint_ids, aligned_data=None):
+    def check_constraints(self, constraint_ids, aligned_data=None, project_id=""):
         self.constraint_calls += 1
         return True, []
 
-    def get_sequence_data_scale(self, sequence_ids):
+    def get_sequence_data_scale(self, sequence_ids, project_id=""):
         return [SequenceDataScale(sequence_id=sid, point_count=1000)
                 for sid in sequence_ids]
 
@@ -206,14 +206,14 @@ def test_repository() -> None:
     print("\n[ResultRepository]")
     repo = ResultRepository(maxlen=3)
     for i in range(5):
-        repo.put("t-1", i)
-    assert repo.latest("t-1") == 4, "latest 应取最近一条"
+        repo.put("default", "t-1", i)
+    assert repo.latest("default", "t-1") == 4, "latest 应取最近一条"
     _ok("put/latest")
-    assert repo.history("t-1") == [2, 3, 4], "超 maxlen 应丢最旧，留最近 3 条"
+    assert repo.history("default", "t-1") == [2, 3, 4], "超 maxlen 应丢最旧，留最近 3 条"
     _ok("超 maxlen 丢最旧")
-    assert repo.history("t-1", limit=2) == [3, 4], "limit 应限最近 N 条"
+    assert repo.history("default", "t-1", limit=2) == [3, 4], "limit 应限最近 N 条"
     _ok("history limit")
-    assert repo.latest("t-none") is None and repo.history("t-none") == []
+    assert repo.latest("default", "t-none") is None and repo.history("default", "t-none") == []
     _ok("无结果任务返回空")
 
 

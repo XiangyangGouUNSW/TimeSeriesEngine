@@ -92,34 +92,34 @@ def test_record_due_logic() -> None:
     hot_ms = int(_WINDOW * _HOT * _STEP_MS)           # 100 × 0.05 × 3.6e6
 
     # 无异常 → 正常间隔；连续干净保持正常
-    eng._record_anomaly_due(tid, now, 0, _STEP_MS)
-    assert eng.anomaly_due_epoch(tid) == now + normal_ms, "无异常 → 正常间隔"
-    eng._record_anomaly_due(tid, now, 0, _STEP_MS)
-    assert eng.anomaly_due_epoch(tid) == now + normal_ms, "连续无异常 → 维持正常间隔"
+    eng._record_anomaly_due("default", tid, now, 0, _STEP_MS)
+    assert eng.anomaly_due_epoch("default", tid) == now + normal_ms, "无异常 → 正常间隔"
+    eng._record_anomaly_due("default", tid, now, 0, _STEP_MS)
+    assert eng.anomaly_due_epoch("default", tid) == now + normal_ms, "连续无异常 → 维持正常间隔"
     _ok(f"无异常 → next_due = now + window×{_NORMAL}×step = +{normal_ms}ms")
 
     # 有异常 → 热间隔
-    eng._record_anomaly_due(tid, now, 3, _STEP_MS)
-    assert eng.anomaly_due_epoch(tid) == now + hot_ms, "有异常 → 热间隔"
+    eng._record_anomaly_due("default", tid, now, 3, _STEP_MS)
+    assert eng.anomaly_due_epoch("default", tid) == now + hot_ms, "有异常 → 热间隔"
     _ok(f"有异常 → next_due = now + window×{_HOT}×step = +{hot_ms}ms（盯住事件）")
 
     # 热后 1 轮干净（streak=1 < confirm=2）仍热；第 2 轮干净 → 回正常
-    eng._record_anomaly_due(tid, now, 0, _STEP_MS)
-    assert eng.anomaly_due_epoch(tid) == now + hot_ms, \
+    eng._record_anomaly_due("default", tid, now, 0, _STEP_MS)
+    assert eng.anomaly_due_epoch("default", tid) == now + hot_ms, \
         "热后第 1 轮干净仍按热节奏（防抖动确认中）"
-    eng._record_anomaly_due(tid, now, 0, _STEP_MS)
-    assert eng.anomaly_due_epoch(tid) == now + normal_ms, \
+    eng._record_anomaly_due("default", tid, now, 0, _STEP_MS)
+    assert eng.anomaly_due_epoch("default", tid) == now + normal_ms, \
         f"连续 {_CONFIRM} 轮干净 → 回正常节奏"
     _ok(f"热后连续 {_CONFIRM} 轮干净 → 回正常节奏（防抖动）")
 
     # step_ms=0（窗口不足）→ 不设到期
-    eng._record_anomaly_due(tid, now, 0, 0)
-    assert eng.anomaly_due_epoch(tid) == now + normal_ms, \
+    eng._record_anomaly_due("default", tid, now, 0, 0)
+    assert eng.anomaly_due_epoch("default", tid) == now + normal_ms, \
         "step_ms=0 不应改到期（保持上一轮的值）"
-    eng.reset_anomaly_due(tid)
-    assert eng.anomaly_due_epoch(tid) == 0, "reset → 立即到期"
-    eng._record_anomaly_due(tid, now, 5, 0)
-    assert eng.anomaly_due_epoch(tid) == 0, "step_ms=0 → 不设到期（不节流）"
+    eng.reset_anomaly_due("default", tid)
+    assert eng.anomaly_due_epoch("default", tid) == 0, "reset → 立即到期"
+    eng._record_anomaly_due("default", tid, now, 5, 0)
+    assert eng.anomaly_due_epoch("default", tid) == 0, "step_ms=0 → 不设到期（不节流）"
     _ok("step_ms=0（窗口不足）→ 不设到期；reset → 立即到期")
 
 
@@ -130,7 +130,7 @@ def test_engine_full_path() -> None:
     eng = _engine()
     res = eng.run_anomaly(_atask("t-full"), config_version=0)
     assert res.status == pb.ANALYSIS_STATUS_SUCCESS, f"检测应成功：{res.status}"
-    due = eng.anomaly_due_epoch("t-full")
+    due = eng.anomaly_due_epoch("default", "t-full")
     now0 = int(time.time() * 1000)
     assert due > now0, "成功跑完检测 → 应设了未来到期"
     assert due - now0 <= int(_WINDOW * _NORMAL * _STEP_MS) + 2_000, \
@@ -142,7 +142,7 @@ def test_engine_full_path() -> None:
     res2 = eng2.run_anomaly(_atask("t-nodata", minimum_points=10 ** 9),
                             config_version=0)
     assert res2.status == pb.ANALYSIS_STATUS_DATA_NOT_READY, res2.status
-    assert eng2.anomaly_due_epoch("t-nodata") == 0, \
+    assert eng2.anomaly_due_epoch("default", "t-nodata") == 0, \
         "数据不足 → 不设到期（保持立即到期重试）"
     _ok("数据不足（DATA_NOT_READY）→ 不设到期（数据到位后立即重试）")
 
@@ -158,12 +158,12 @@ def test_slide_skip_sets_due() -> None:
     res = eng.run_anomaly(_atask(tid, slide_step_ms=slide_ms), config_version=0)
     assert res.status == pb.ANALYSIS_STATUS_SUCCESS, res.status
     # 隔离：清掉首跑的到期，模拟"下一轮到点但窗口没推进"
-    eng.reset_anomaly_due(tid)
+    eng.reset_anomaly_due("default", tid)
     res2 = eng.run_anomaly(_atask(tid, slide_step_ms=slide_ms), config_version=0)
     assert res2.status == pb.ANALYSIS_STATUS_SUCCESS, \
         "slide 跳过是正常结果（非失败）"
     assert res2.message and "未推进" in res2.message, res2.message
-    due = eng.anomaly_due_epoch(tid)
+    due = eng.anomaly_due_epoch("default", tid)
     now0 = int(time.time() * 1000)
     assert 0 < due - now0 <= slide_ms, \
         f"slide 跳过 → 应排到 slide 步长后：due-now={due - now0}ms"
@@ -185,16 +185,16 @@ class GateEngine:
     def needs_training(self, task, kind, config_version: int = 0) -> bool:
         return self.needs_train
 
-    def forecast_due_epoch(self, task_id: str) -> int:
+    def forecast_due_epoch(self, project_id: str, task_id: str) -> int:
         return 0
 
-    def reset_forecast_due(self, task_id: str) -> None:
+    def reset_forecast_due(self, project_id: str, task_id: str) -> None:
         self.reset_calls += 1
 
-    def anomaly_due_epoch(self, task_id: str) -> int:
+    def anomaly_due_epoch(self, project_id: str, task_id: str) -> int:
         return self.a_due
 
-    def reset_anomaly_due(self, task_id: str) -> None:
+    def reset_anomaly_due(self, project_id: str, task_id: str) -> None:
         self.reset_calls += 1
         self.a_due = 0.0
 
@@ -214,7 +214,7 @@ def _make_sched(engine):
     sched = Scheduler(engine, registry, repo, interval_seconds=0.1,
                       train_queue_size=8, infer_queue_size=8,
                       train_workers=1, infer_workers=1)
-    registry.register(pb.AnomalyTaskConfig(task_id="t-a", sequence_ids=["OT"],
+    registry.register("default", pb.AnomalyTaskConfig(task_id="t-a", sequence_ids=["OT"],
                                            methods=["TREND_SHIFT"]),
                       TaskKind.ANOMALY, 0)
     return sched, registry

@@ -50,18 +50,18 @@ class StubCore(CoreDataClient):
         """C 端新数据到达：窗口最新时间往后推 n_ms。"""
         self.ts.append(self.ts[-1] + n_ms)
 
-    def get_sequence_data_scale(self, sequence_ids):
+    def get_sequence_data_scale(self, sequence_ids, project_id=""):
         return [SequenceDataScale(sequence_id=sid, point_count=len(self.ts))
                 for sid in sequence_ids]
 
-    def get_history(self, sequence_ids, start_time_ms=None, end_time_ms=None):
+    def get_history(self, sequence_ids, start_time_ms=None, end_time_ms=None, project_id=""):
         return HistoricalDataChunk(
             timestamps_ms=list(self.ts),
             sequence_ids=list(sequence_ids),
             values=[[1.0] * len(sequence_ids)] * len(self.ts),
             is_last_chunk=True)
 
-    def get_aligned_real_time_window(self, sequence_ids):
+    def get_aligned_real_time_window(self, sequence_ids, project_id=""):
         return AlignedWindow(
             timestamps_ms=list(self.ts),
             sequence_ids=list(sequence_ids),
