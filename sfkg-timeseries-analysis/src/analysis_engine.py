@@ -432,15 +432,17 @@ class AnalysisEngine:
                 logger.info(f"[engine] ②等待后命中缓存 task_id={key}，跳过训练")
                 return model
 
-            # 拉多元历史训练（前 train_ratio）
+            # 拉多元历史训练（前 train_ratio，再按 max_train_points 截最近 N 点）
             start_ms = min(s.start_time_ms for s in scales.values()
                            if s.start_time_ms is not None)
             end_ms = max(s.end_time_ms for s in scales.values()
                          if s.end_time_ms is not None)
             cut_ms = start_ms + int((end_ms - start_ms)
                                     * self.cfg["training"]["train_ratio"])
-            chunk = self.core.get_history(all_ids, end_time_ms=cut_ms,
-                                         project_id=task.project_id)
+            start_ms = self._cap_train_start(start_ms, cut_ms, scales)
+            chunk = self.core.get_history(all_ids, start_time_ms=start_ms,
+                                          end_time_ms=cut_ms,
+                                          project_id=task.project_id)
 
             # 数据推断路由（#6）：先看原始取值类型再转 float——chunk.values 保留
             # C 端原始 Python 类型（int/bool/float/string），缺失=NaN，类型不丢。
@@ -1036,9 +1038,46 @@ class AnalysisEngine:
 
     def _get_history_matrix(self, project_id: str,
                             seq_ids: list[str]) -> np.ndarray:
-        """从 C 拉历史数据，转成 [time, seq_count] 矩阵。"""
-        chunk = self.core.get_history(seq_ids, project_id=project_id)
+        """从 C 拉历史数据，转成 [time, seq_count] 矩阵。
+
+        按 training.max_train_points 截最近 N 点（防全量历史把 gRPC 消息撑爆，
+        与预测训练取数同口径）；上限 0 = 不截。
+        """
+        scales = {s.sequence_id: s
+                  for s in self.core.get_sequence_data_scale(seq_ids,
+                                                             project_id=project_id)}
+        starts = [s.start_time_ms for s in scales.values()
+                  if s.start_time_ms is not None]
+        ends = [s.end_time_ms for s in scales.values()
+                if s.end_time_ms is not None]
+        if not starts or not ends:
+            chunk = self.core.get_history(seq_ids, project_id=project_id)
+            return np.array(chunk.values, dtype=float)
+        start_ms = self._cap_train_start(min(starts), max(ends), scales)
+        chunk = self.core.get_history(seq_ids, start_time_ms=start_ms,
+                                      end_time_ms=max(ends), project_id=project_id)
         return np.array(chunk.values, dtype=float)
+
+    def _cap_train_start(self, start_ms: int, end_ms: int,
+                         scales: dict) -> int:
+        """训练取数点数上限：把起点往后抬，只取最近 max_train_points 点。
+
+        用最细采样间隔换算时间窗（窗口偏小 → 点数偏少，宁可少取也别超上限）；
+        无上限（max_train_points=0）或无采样间隔可推断 → 原样返回 start_ms。
+        """
+        max_pts = int(self.cfg.get("training", {}).get("max_train_points", 0) or 0)
+        if max_pts <= 0:
+            return start_ms
+        intervals = [
+            (s.end_time_ms - s.start_time_ms) / (s.point_count - 1)
+            for s in scales.values()
+            if s.point_count and s.point_count > 1
+            and s.start_time_ms is not None and s.end_time_ms is not None
+        ]
+        if not intervals:
+            return start_ms
+        step_ms = min(intervals)   # 最细间隔 → 时间窗最小 → 最保守点数
+        return max(start_ms, end_ms - int(max_pts * step_ms))
 
     # ================= 工具 =================
 

@@ -128,8 +128,6 @@ class Scheduler(threading.Thread):
                                                                 rec.task_id):
                     # 预测任务动态间隔：成功预测轮按「horizon × percent ÷ 频率」排了
                     # next_due，未到期 → 本轮跳过推理（省推理成本）
-                    logger.debug("[scheduler] 任务 %s 未到预测到期时间，本轮跳过",
-                                 rec.task_id)
                     skip_due += 1
                 elif rec.kind == TaskKind.ANOMALY and \
                         now_ms < self.engine.anomaly_due_epoch(rec.project_id,
@@ -137,8 +135,6 @@ class Scheduler(threading.Thread):
                     # 异常任务动态间隔：每次真检测按「窗口 × recheck_fraction ÷ 频率」
                     # 排 next_due（有异常→热节奏盯住，无→等整个新窗口）。未到期跳过；
                     # 数据不足/失败轮不设 due → 维持固定周期重试。
-                    logger.debug("[scheduler] 任务 %s 未到异常检测到期时间，本轮跳过",
-                                 rec.task_id)
                     skip_due += 1
                 else:
                     if self._enqueue(self._infer_queue, self._infer_inflight,
@@ -146,10 +142,10 @@ class Scheduler(threading.Thread):
                         enq_infer += 1
             except Exception:
                 logger.exception("[scheduler] tick 中任务 %s 分派失败", rec.task_id)
-        # 心跳：每秒一行（interval_seconds 粒度），联调看全局吞吐——
-        # 本轮入队率 + 队列积压（满 = 吞吐跟不上）+ 动态间隔跳过数。
-        if n:
-            logger.info("[scheduler] tick：任务 %d 个，本轮入队 train=%d / infer=%d，"
+        # 心跳：仅在本轮真正入队时打印（联调看「何时真的跑了」），
+        # 避免每个 tick 的「动态间隔跳过」刷屏；队列积压随入队行一起看。
+        if enq_train or enq_infer:
+            logger.info("[scheduler] tick：任务 %d 个，入队 train=%d / infer=%d，"
                         "动态间隔跳过 %d，train_q=%d/%d infer_q=%d/%d",
                         n, enq_train, enq_infer, skip_due,
                         self._train_queue.qsize(), self._train_queue.maxsize,

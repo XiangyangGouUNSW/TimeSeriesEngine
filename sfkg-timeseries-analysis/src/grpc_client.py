@@ -33,10 +33,11 @@ class CoreDataException(Exception):
 class GrpcCoreDataClient(CoreDataClient):
     def __init__(self, address: str = "localhost", port: int = 50051,
                  timeout_seconds: float = 30.0):
-        # 调大接收上限：历史数据一次可能很大（ETTm1 约 30MB）
+        # 调大接收上限：历史数据一次可能很大（真 C 端全量历史实测 >130MB）。
+        # 512MB 是「顶住当前 + 留余量」的临时值；根治要限幅取数（见 engine 训练取数）。
         channel = grpc.insecure_channel(
             f"{address}:{port}",
-            options=[("grpc.max_receive_message_length", 64 * 1024 * 1024)],
+            options=[("grpc.max_receive_message_length", 512 * 1024 * 1024)],
         )
         self._stub = pb_grpc.TimeseriesCoreServiceStub(channel)
         self._timeout = timeout_seconds

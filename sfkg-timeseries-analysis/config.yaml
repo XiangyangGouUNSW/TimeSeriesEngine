@@ -34,6 +34,9 @@ data:
 
 training:
   train_ratio: 0.8             # 用前 80% 的数据训练（训练门槛看任务 minimum_points）
+  max_train_points: 100000     # 训练取数点数上限（每序列）：只取最近 N 点，防全量历史
+                               #   把 gRPC 消息撑爆（真 C 端全量历史实测 >130MB）。
+                               #   0 = 不截。点数换算时间窗用最细采样间隔（保守偏少）。
 
 forecast_model:
   type: "patchtst"             # 预测模型：PatchTST（SOTA Transformer 类）
