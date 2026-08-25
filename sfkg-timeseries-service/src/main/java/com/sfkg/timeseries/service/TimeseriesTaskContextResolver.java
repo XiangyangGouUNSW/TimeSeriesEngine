@@ -43,6 +43,64 @@ public class TimeseriesTaskContextResolver {
         return features;
     }
 
+    /**
+     * 判断约束是否被 Anomaly 任务引用：任务显式 constraintIds 引用，或按
+     * 「sequenceId→categoryId→constraint」自动发现（复用 collectConstraintIds 的匹配逻辑）。
+     * previousConstraint 用于覆盖约束被修改、新旧 variableMapping 不同的场景。
+     */
+    public boolean isConstraintReferencedByAnomalyTask(
+            TimeseriesAnomalyTask task, String constraintId, TimeseriesConstraint previousConstraint) {
+        if (task == null || constraintId == null) {
+            return false;
+        }
+        if (task.getConstraintIds() != null && task.getConstraintIds().contains(constraintId)) {
+            return true;
+        }
+        List<String> seqIds = task.getSequenceIds() != null
+                ? new ArrayList<>(task.getSequenceIds()) : List.of();
+        Set<String> contextSeqIds = new HashSet<>(seqIds);
+        expandFeatureSequences(task.getProjectId(), seqIds).stream()
+                .map(TimeseriesInstanceConfig::getSequenceId)
+                .filter(id -> id != null && !id.isBlank())
+                .forEach(contextSeqIds::add);
+        TimeseriesConstraint current = memoryCache.getConstraint(task.getProjectId(), constraintId).orElse(null);
+        return appliesToTaskContext(current, seqIds, contextSeqIds)
+                || appliesToTaskContext(previousConstraint, seqIds, contextSeqIds);
+    }
+
+    /**
+     * 判断约束是否被 Forecast 任务引用，逻辑同 Anomaly。
+     */
+    public boolean isConstraintReferencedByForecastTask(
+            TimeseriesForecastTask task, String constraintId, TimeseriesConstraint previousConstraint) {
+        if (task == null || constraintId == null) {
+            return false;
+        }
+        if (task.getConstraintIds() != null && task.getConstraintIds().contains(constraintId)) {
+            return true;
+        }
+        List<String> targetIds = task.getForecastObjects() != null
+                ? new ArrayList<>(task.getForecastObjects()) : List.of();
+        Set<String> contextSeqIds = new HashSet<>(targetIds);
+        contextSeqIds.addAll(resolveForecastFeatureIds(task));
+        TimeseriesConstraint current = memoryCache.getConstraint(task.getProjectId(), constraintId).orElse(null);
+        return appliesToTaskContext(current, targetIds, contextSeqIds)
+                || appliesToTaskContext(previousConstraint, targetIds, contextSeqIds);
+    }
+
+    /**
+     * 约束规则是否适用于任务序列（自动发现路径，不做激活状态过滤，
+     * 以便约束被禁用时也能把已失效的任务重新推给 P端 清除旧快照）。
+     */
+    private boolean appliesToTaskContext(TimeseriesConstraint constraint,
+            Collection<String> targetSeqIds, Collection<String> contextSeqIds) {
+        if (constraint == null) {
+            return false;
+        }
+        return !constraintExpansionResolver.expandConstraintIdsForContext(
+                constraint, targetSeqIds, contextSeqIds, false).isEmpty();
+    }
+
     // ── resolve methods ──────────────────────────────────────────────
 
     public SemanticContext resolveAnomalyContext(TimeseriesAnomalyTask task) {

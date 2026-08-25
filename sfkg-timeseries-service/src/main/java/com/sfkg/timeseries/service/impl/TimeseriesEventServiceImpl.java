@@ -4,7 +4,6 @@ import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.BeanUtils;
@@ -14,6 +13,7 @@ import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.common.SemanticId;
 import com.sfkg.timeseries.dto.EventQueryRequest;
 import com.sfkg.timeseries.dto.EventSaveRequest;
 import com.sfkg.timeseries.entity.TimeseriesEvent;
@@ -71,7 +71,7 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
         }
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
         String eventId = request.getEventId() == null
-                ? generateEventId()
+                ? generateEventId(request.getEventType(), request.getEventName())
                 : request.getEventId();
 
         TimeseriesEvent entity = memoryCache.computeEvent(
@@ -112,7 +112,7 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
         String eventId = entity.getEventId() != null
                 ? entity.getEventId()
-                : generateEventId();
+                : generateEventId(entity.getEventType(), entity.getEventName());
 
         TimeseriesEvent merged = memoryCache.computeEvent(entity.getProjectId(), eventId, existing -> {
             TimeseriesEvent e = existing != null ? existing : new TimeseriesEvent();
@@ -152,8 +152,8 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
         // TODO: Restore graph synchronization here.
     }
 
-    private String generateEventId() {
-        return UUID.randomUUID().toString();
+    private String generateEventId(String eventType, String eventName) {
+        return SemanticId.generate(eventType, eventName);
     }
 
     private EventListVO toListVO(TimeseriesEvent entity) {

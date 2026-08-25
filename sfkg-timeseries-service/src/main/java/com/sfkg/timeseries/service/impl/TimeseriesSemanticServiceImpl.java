@@ -7,7 +7,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.UUID;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.BeanUtils;
@@ -20,6 +19,7 @@ import com.sfkg.timeseries.client.AnomalyGrpcClient;
 import com.sfkg.timeseries.client.ForecastGrpcClient;
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.common.SemanticId;
 import com.sfkg.timeseries.dto.CategoryQueryRequest;
 import com.sfkg.timeseries.dto.CategorySaveRequest;
 import com.sfkg.timeseries.dto.CategoryStatusUpdateRequest;
@@ -39,6 +39,7 @@ import com.sfkg.timeseries.mapper.TimeseriesCategoryMapper;
 import com.sfkg.timeseries.mapper.TimeseriesConstraintMapper;
 import com.sfkg.timeseries.mapper.TimeseriesRelationMapper;
 import com.sfkg.timeseries.service.TimeseriesSemanticService;
+import com.sfkg.timeseries.service.TimeseriesTaskContextResolver;
 import com.sfkg.timeseries.vo.CategoryVO;
 import com.sfkg.timeseries.vo.ConstraintVO;
 import com.sfkg.timeseries.vo.RelationVO;
@@ -54,6 +55,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
     private final TimeseriesCoreGrpcClient coreGrpcClient;
     private final AnomalyGrpcClient anomalyGrpcClient;
     private final ForecastGrpcClient forecastGrpcClient;
+    private final TimeseriesTaskContextResolver contextResolver;
 
     public TimeseriesSemanticServiceImpl(
             TimeseriesCategoryMapper categoryMapper,
@@ -63,7 +65,8 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             TimeseriesCacheManager cacheManager,
             TimeseriesCoreGrpcClient coreGrpcClient,
             AnomalyGrpcClient anomalyGrpcClient,
-            ForecastGrpcClient forecastGrpcClient) {
+            ForecastGrpcClient forecastGrpcClient,
+            TimeseriesTaskContextResolver contextResolver) {
         this.categoryMapper = categoryMapper;
         this.constraintMapper = constraintMapper;
         this.relationMapper = relationMapper;
@@ -72,6 +75,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         this.coreGrpcClient = coreGrpcClient;
         this.anomalyGrpcClient = anomalyGrpcClient;
         this.forecastGrpcClient = forecastGrpcClient;
+        this.contextResolver = contextResolver;
     }
 
     @Override
@@ -116,7 +120,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         }
         cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
         String categoryId = request.getCategoryId() == null
-                ? generateId()
+                ? SemanticId.generate(request.getCategoryName())
                 : request.getCategoryId();
 
         TimeseriesCategory entity = memoryCache.computeCategory(
@@ -210,8 +214,16 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         }
         cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
         String constraintId = request == null || request.getConstraintId() == null
-                ? generateId()
+                ? SemanticId.generate(
+                        request != null ? request.getConstraintName() : null,
+                        request != null && request.getVariableMapping() != null
+                                && !request.getVariableMapping().isEmpty()
+                                ? request.getVariableMapping().values().iterator().next() : null)
                 : request.getConstraintId();
+
+        TimeseriesConstraint previous = snapshotConstraint(
+                memoryCache.getConstraint(
+                        request != null ? request.getProjectId() : null, constraintId).orElse(null));
 
         TimeseriesConstraint entity = memoryCache.computeConstraint(
                 request != null ? request.getProjectId() : null, constraintId, existing -> {
@@ -249,6 +261,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
 
         constraintMapper.insert(entity);
         syncSemanticToCore(entity.getProjectId(), constraintId);
+        reSyncTasksForConstraint(entity.getProjectId(), constraintId, previous);
         return constraintId;
     }
 
@@ -326,7 +339,13 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         validateRelationConfig(request);
         cacheManager.ensureTableLoaded(CachedTable.RELATION);
         String relationId = request == null || request.getRelationId() == null
-                ? generateId()
+                ? SemanticId.generate(
+                        request != null ? request.getRelationName() : null,
+                        request != null && request.getSourceSequences() != null
+                                && !request.getSourceSequences().isEmpty()
+                                ? request.getSourceSequences().get(0) : null,
+                        request != null ? request.getTargetSequenceId() : null,
+                        request != null ? request.getRelationType() : null)
                 : request.getRelationId();
 
         TimeseriesRelation entity = memoryCache.computeRelation(
@@ -355,6 +374,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
 
         relationMapper.insert(entity);
         syncSemanticToCore(entity.getProjectId(), relationId);
+        reSyncTasksForRelation(entity.getProjectId(), relationId);
         return relationId;
     }
 
@@ -525,8 +545,29 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         memoryCache.getRelation(projectId, semanticId).ifPresent(coreGrpcClient::syncRelationConfig);
     }
 
-    private String generateId() {
-        return UUID.randomUUID().toString();
+    /**
+     * 约束快照：computeConstraint 会原地修改缓存中的已有对象，
+     * 因此捕获「变更前」状态时必须拷贝，避免与新值同引用。
+     */
+    private TimeseriesConstraint snapshotConstraint(TimeseriesConstraint source) {
+        if (source == null) {
+            return null;
+        }
+        TimeseriesConstraint snapshot = new TimeseriesConstraint();
+        snapshot.setProjectId(source.getProjectId());
+        snapshot.setConstraintId(source.getConstraintId());
+        snapshot.setConstraintName(source.getConstraintName());
+        snapshot.setConstraintDescription(source.getConstraintDescription());
+        snapshot.setConstraintExpression(source.getConstraintExpression());
+        snapshot.setLowerBound(source.getLowerBound());
+        snapshot.setUpperBound(source.getUpperBound());
+        snapshot.setEffectiveStatus(source.getEffectiveStatus());
+        snapshot.setConfirmStatus(source.getConfirmStatus());
+        snapshot.setVariableMapping(source.getVariableMapping() != null
+                ? new java.util.LinkedHashMap<>(source.getVariableMapping()) : null);
+        snapshot.setTerms(source.getTerms() != null
+                ? new java.util.ArrayList<>(source.getTerms()) : null);
+        return snapshot;
     }
 
     private CategoryVO toCategoryVO(TimeseriesCategory entity) {
@@ -641,18 +682,23 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
     }
 
     private void reSyncTasksForConstraint(String projectId, String constraintId) {
+        reSyncTasksForConstraint(projectId, constraintId, null);
+    }
+
+    private void reSyncTasksForConstraint(String projectId, String constraintId,
+            TimeseriesConstraint previousConstraint) {
         if (constraintId == null) return;
         cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
         cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
         for (TimeseriesAnomalyTask task : memoryCache.listAnomalyTasks()) {
             if (Objects.equals(projectId, task.getProjectId())
-                    && task.getConstraintIds() != null && task.getConstraintIds().contains(constraintId)) {
+                    && contextResolver.isConstraintReferencedByAnomalyTask(task, constraintId, previousConstraint)) {
                 anomalyGrpcClient.syncAnomalyTask(task);
             }
         }
         for (TimeseriesForecastTask task : memoryCache.listForecastTasks()) {
             if (Objects.equals(projectId, task.getProjectId())
-                    && task.getConstraintIds() != null && task.getConstraintIds().contains(constraintId)) {
+                    && contextResolver.isConstraintReferencedByForecastTask(task, constraintId, previousConstraint)) {
                 forecastGrpcClient.syncForecastTask(task);
             }
         }

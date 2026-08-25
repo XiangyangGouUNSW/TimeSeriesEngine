@@ -5,7 +5,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import java.util.UUID;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.BeanUtils;
@@ -16,6 +15,7 @@ import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.AnomalyGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.common.SemanticId;
 import com.sfkg.timeseries.dto.AnomalyTaskSaveRequest;
 import com.sfkg.timeseries.dto.TaskQueryRequest;
 import com.sfkg.timeseries.dto.TaskStatusUpdateRequest;
@@ -71,7 +71,7 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
         }
         cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
         String taskId = request == null || request.getTaskId() == null
-                ? generateTaskId()
+                ? generateTaskId(request)
                 : request.getTaskId();
 
         TimeseriesAnomalyTask entity = memoryCache.computeAnomalyTask(
@@ -225,8 +225,11 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
         memoryCache.getAnomalyTask(taskId).ifPresent(anomalyGrpcClient::syncAnomalyTask);
     }
 
-    private String generateTaskId() {
-        return UUID.randomUUID().toString();
+    private String generateTaskId(AnomalyTaskSaveRequest request) {
+        return SemanticId.generate(
+                request == null ? null : request.getTaskName(),
+                request != null && request.getSequenceIds() != null && !request.getSequenceIds().isEmpty()
+                        ? request.getSequenceIds().get(0) : null);
     }
 
     private AnomalyTaskVO toVO(TimeseriesAnomalyTask entity) {

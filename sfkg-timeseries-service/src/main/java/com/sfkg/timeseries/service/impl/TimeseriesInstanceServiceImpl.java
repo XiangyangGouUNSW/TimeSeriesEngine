@@ -4,7 +4,6 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import java.util.UUID;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.BeanUtils;
@@ -15,6 +14,7 @@ import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.common.SemanticId;
 import com.sfkg.timeseries.dto.InstanceConfigQueryRequest;
 import com.sfkg.timeseries.dto.InstanceConfigSaveRequest;
 import com.sfkg.timeseries.entity.TimeseriesCategory;
@@ -89,7 +89,7 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
         validateCategory(request.getProjectId(), request.getCategoryId());
         cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
         String sequenceId = request.getSequenceId() == null
-                ? generateSequenceId()
+                ? generateSequenceId(request)
                 : request.getSequenceId();
 
         TimeseriesInstanceConfig entity = memoryCache.computeInstanceConfig(
@@ -178,7 +178,14 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
 
     @Override
     public String generateSequenceId() {
-        return UUID.randomUUID().toString();
+        return SemanticId.generate("sequence");
+    }
+
+    private String generateSequenceId(InstanceConfigSaveRequest request) {
+        return SemanticId.generate(
+                request == null ? null : request.getCategoryId(),
+                request == null ? null : request.getDeviceInstanceId(),
+                request == null ? null : request.getExternalSequenceId());
     }
 
     @Override

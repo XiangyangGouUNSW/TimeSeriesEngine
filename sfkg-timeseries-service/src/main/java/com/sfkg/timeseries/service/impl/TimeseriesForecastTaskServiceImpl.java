@@ -4,7 +4,6 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import java.util.UUID;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.BeanUtils;
@@ -15,6 +14,7 @@ import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.ForecastGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.common.SemanticId;
 import com.sfkg.timeseries.dto.ForecastTaskSaveRequest;
 import com.sfkg.timeseries.dto.TaskQueryRequest;
 import com.sfkg.timeseries.dto.TaskStatusUpdateRequest;
@@ -69,7 +69,7 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
         validateForecastHorizon(request.getForecastHorizon());
         cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
         String taskId = request.getTaskId() == null
-                ? generateTaskId()
+                ? generateTaskId(request)
                 : request.getTaskId();
 
         TimeseriesForecastTask entity = memoryCache.computeForecastTask(
@@ -231,8 +231,11 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
         memoryCache.getForecastTask(taskId).ifPresent(forecastGrpcClient::syncForecastTask);
     }
 
-    private String generateTaskId() {
-        return UUID.randomUUID().toString();
+    private String generateTaskId(ForecastTaskSaveRequest request) {
+        return SemanticId.generate(
+                request == null ? null : request.getTaskName(),
+                request != null && request.getForecastObjects() != null && !request.getForecastObjects().isEmpty()
+                        ? request.getForecastObjects().get(0) : null);
     }
 
     private ForecastTaskVO toVO(TimeseriesForecastTask entity) {
