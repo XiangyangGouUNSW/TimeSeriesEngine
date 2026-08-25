@@ -317,7 +317,7 @@ def test_needs_training_edges() -> None:
 
     task_empty = pb.AnomalyTaskConfig(task_id="t-e", sequence_ids=["a"], methods=[])
     assert engine.needs_training(task_empty, TaskKind.ANOMALY, 0) is True
-    _ok("空 methods → 默认 CAUSAL_PATTERN → 需训练")
+    _ok("空 methods → 默认三类(模式/离群/趋势) → 需训练")
 
     task_forecast = _ftask("t-f")
     assert engine.needs_training(task_forecast, TaskKind.FORECAST, 0) is True

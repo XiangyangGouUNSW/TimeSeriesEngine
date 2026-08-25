@@ -120,19 +120,6 @@ class GrpcCoreDataClient(CoreDataClient):
             is_last_chunk=True,
         )
 
-    def get_real_time_window(self, sequence_ids: list[str],
-                             project_id: str = "") -> pb.WindowData:
-        """调 C 的 queryWindowData 取实时窗口（检测/预测的模型输入）。
-
-        返回 C 的 WindowData（按序列组织的原始点，未对齐）。
-        """
-        resp = self._call(
-            self._stub.queryWindowData,
-            pb.QueryWindowDataRequest(sequence_ids=list(sequence_ids),
-                                      project_id=project_id),
-        )
-        return resp.data
-
     def get_aligned_real_time_window(
         self,
         sequence_ids: list[str],

@@ -147,12 +147,14 @@ def test_methods_parsing() -> None:
     assert seen == [["CAUSAL_PATTERN"]]
     _ok("只模型：不调约束检查")
 
-    # 空 methods → 默认只跑模型（DEFAULT_METHODS 已去掉 CONSTRAINT_CHECK）
+    # 空 methods → 默认三类全跑（DEFAULT_METHODS 已去掉 CONSTRAINT_CHECK；
+    # 2026-08-26 起含模式偏移/离群点/趋势异常）
     eng, seen = _parse_engine()
     eng.run_anomaly(_anomaly_task("t-empty", []))
     assert eng.core.constraint_calls == 0
-    assert seen == [["CAUSAL_PATTERN"]], "空 methods 应默认走 CAUSAL_PATTERN"
-    _ok("空 methods → 默认 CAUSAL_PATTERN")
+    assert seen == [["CAUSAL_PATTERN", "DISCRETE_OUTLIER", "TREND_SHIFT"]], \
+        f"空 methods 应默认三类，实际 {seen}"
+    _ok("空 methods → 默认 CAUSAL_PATTERN/DISCRETE_OUTLIER/TREND_SHIFT")
 
 
 def test_unknown_method() -> None:

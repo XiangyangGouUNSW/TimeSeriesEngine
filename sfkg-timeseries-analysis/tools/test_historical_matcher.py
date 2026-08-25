@@ -31,6 +31,7 @@ for _p in (str(ROOT / "src"), str(ROOT / "generated")):
 import timeseries_analysis_pb2 as pb
 from analysis_engine import AnalysisEngine
 from anomaly_models import KNOWN_METHODS, build_anomaly_model
+from data_types import SequenceDataScale
 from historical_matcher import HistoricalEvent, HistoricalEventMatcher
 from task_registry import TaskKind
 from training_loop import ModelStore
@@ -138,8 +139,10 @@ class FakeCore:
             values=[[float(v)] for v in np.arange(200, dtype=float).reshape(-1, 1)[:, 0]])
 
     def get_sequence_data_scale(self, seq_ids, project_id=""):
-        # 数据规模 200 点 ≥ 默认门槛 100，不触发数据门槛（门槛专项见 test_anomaly_data_gate）
-        return [SimpleNamespace(sequence_id=sid, point_count=200) for sid in seq_ids]
+        # 数据规模 200 点 ≥ 默认门槛 100，不触发数据门槛（门槛专项见 test_anomaly_data_gate）。
+        # 用真 SequenceDataScale（含 start_time_ms/end_time_ms 字段，访问不报错）——
+        # 引擎历史取数路径会读这两个字段，SimpleNamespace 缺字段会崩（2026-08-26 修复）。
+        return [SequenceDataScale(sequence_id=sid, point_count=200) for sid in seq_ids]
 
 
 def _cfg():

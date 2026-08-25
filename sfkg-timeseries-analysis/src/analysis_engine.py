@@ -49,8 +49,10 @@ from training_loop import ModelStore
 
 logger = logging.getLogger(__name__)
 
-# 异常检测类型：methods 空时的默认组合（实时约束检查已迁 C，默认只做模式偏移检测）
-DEFAULT_METHODS = ["CAUSAL_PATTERN"]
+# 异常检测类型：methods 空时的默认组合。实时约束检查已迁 C（P 不参与）；
+# 2026-08-26 起默认三类全跑——模式偏移(GCAD)/离群点(DBSCAN)/趋势异常(TrendShift)，
+# 对应合同验收「三类异常」口径（S 不配置 methods 时三类都检测）。
+DEFAULT_METHODS = ["CAUSAL_PATTERN", "DISCRETE_OUTLIER", "TREND_SHIFT"]
 
 # S 端 relation_type 规范取值（2026-08-13 定）：CAUSE / CAUSAL / CORRELATION /
 # ASSOCIATION。因果型（有方向的因果边）用于 GCAD 候选结构门和互耦双向识别；

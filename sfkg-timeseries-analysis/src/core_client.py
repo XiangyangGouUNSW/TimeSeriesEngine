@@ -260,10 +260,3 @@ class MockCoreDataClient(CoreDataClient):
             sequence_ids=sequence_ids,
             values=rows,
         )
-
-    # ---- 演示专用：取某时刻之后的真实值（用来和预测对比） ----
-
-    def get_values_after(self, sequence_id: str, after_time_ms: int, count: int) -> list[float]:
-        name = self._col(sequence_id)
-        idx = [i for i, ts in enumerate(self._timestamps_ms) if ts > after_time_ms]
-        return [self._columns[name][i] for i in idx[:count]]
