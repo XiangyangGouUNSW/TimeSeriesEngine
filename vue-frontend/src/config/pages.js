@@ -27,7 +27,7 @@ export const pages = {
     ],
     queryFields: [
       { name: 'projectId', label: '项目ID', type: 'text' },
-      { name: 'sequenceId', label: '序列ID', type: 'text' },
+      { name: 'sequenceId', label: '序列ID', type: 'ref', refType: 'instance' },
       { name: 'categoryId', label: '类别ID', type: 'ref', refType: 'category' },
       { name: 'deviceInstanceId', label: '设备实例ID', type: 'text' },
       { name: 'accessStatus', label: '接入状态', type: 'select', options: EFFECTIVE_STATUS },
@@ -61,7 +61,7 @@ export const pages = {
     ],
     queryFields: [
       { name: 'projectId', label: '项目ID', type: 'text' },
-      { name: 'categoryId', label: '类别ID', type: 'text' },
+      { name: 'categoryId', label: '类别ID', type: 'ref', refType: 'category' },
       { name: 'keyword', label: '关键字', type: 'text' },
     ],
     statusUpdate: {
@@ -118,7 +118,7 @@ export const pages = {
     ],
     queryFields: [
       { name: 'projectId', label: '项目ID', type: 'text' },
-      { name: 'constraintId', label: '约束ID', type: 'text' },
+      { name: 'constraintId', label: '约束ID', type: 'ref', refType: 'constraint' },
       { name: 'keyword', label: '关键字', type: 'text' },
     ],
     statusUpdate: {
@@ -160,7 +160,7 @@ export const pages = {
     ],
     queryFields: [
       { name: 'projectId', label: '项目ID', type: 'text' },
-      { name: 'relationId', label: '关系ID', type: 'text' },
+      { name: 'relationId', label: '关系ID', type: 'ref', refType: 'relation' },
       { name: 'keyword', label: '关键字', type: 'text' },
     ],
     statusUpdate: {
@@ -205,7 +205,7 @@ export const pages = {
     ],
     queryFields: [
       { name: 'projectId', label: '项目ID', type: 'text' },
-      { name: 'taskId', label: '任务ID', type: 'text' },
+      { name: 'taskId', label: '任务ID', type: 'ref', refType: 'anomalyTask' },
       { name: 'keyword', label: '关键字', type: 'text' },
     ],
     statusUpdate: {
@@ -247,7 +247,7 @@ export const pages = {
     ],
     queryFields: [
       { name: 'projectId', label: '项目ID', type: 'text' },
-      { name: 'taskId', label: '任务ID', type: 'text' },
+      { name: 'taskId', label: '任务ID', type: 'ref', refType: 'forecastTask' },
       { name: 'keyword', label: '关键字', type: 'text' },
     ],
     statusUpdate: {
@@ -293,6 +293,7 @@ export const pages = {
     ],
     queryFields: [
       { name: 'projectId', label: '项目ID', type: 'text' },
+      { name: 'eventId', label: '事件ID', type: 'ref', refType: 'event' },
       { name: 'eventType', label: '事件类型', type: 'select', options: ['ANOMALY', 'WARNING'] },
       { name: 'eventSource', label: '事件来源', type: 'text' },
       { name: 'eventLevel', label: '事件级别', type: 'select', options: EVENT_LEVEL },

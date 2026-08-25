@@ -7,6 +7,8 @@ public interface TimeseriesForecastTaskMapper {
 
     void insert(TimeseriesForecastTask entity);
 
+    void replaceLocal(List<TimeseriesForecastTask> entities);
+
     void updateById(TimeseriesForecastTask entity);
 
     TimeseriesForecastTask selectById(String taskId);

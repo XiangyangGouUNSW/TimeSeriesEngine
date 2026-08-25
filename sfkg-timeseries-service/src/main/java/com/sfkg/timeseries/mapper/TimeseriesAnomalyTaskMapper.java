@@ -7,6 +7,8 @@ public interface TimeseriesAnomalyTaskMapper {
 
     void insert(TimeseriesAnomalyTask entity);
 
+    void replaceLocal(List<TimeseriesAnomalyTask> entities);
+
     void updateById(TimeseriesAnomalyTask entity);
 
     TimeseriesAnomalyTask selectById(String taskId);

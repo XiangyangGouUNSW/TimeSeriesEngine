@@ -1,9 +1,19 @@
 <script setup>
 import { reactive, ref, watch } from 'vue'
 import { api } from '../api/timeseries'
+import RefInput from '../components/RefInput.vue'
 import ResultViewer from '../components/ResultViewer.vue'
 import { toastError } from '../composables/toast'
+import { useRefOptions } from '../composables/refOptions'
 import { projectContext, withCurrentProject } from '../stores/project'
+
+const { refOptions, loadTypes } = useRefOptions()
+loadTypes(['task', 'instance'])
+
+watch(
+  () => projectContext.currentProjectId.value,
+  () => loadTypes(['task', 'instance']),
+)
 
 const tab = ref('anomaly')
 const loading = ref(false)
@@ -103,7 +113,10 @@ watch(
   <div>
     <div class="page-title">
       <h2>结果查询</h2>
-      <button class="primary" :disabled="loading" @click="listAll">查询全部</button>
+      <div>
+        <button :disabled="loading" @click="loadTypes(['task', 'instance'])">刷新下拉选项</button>
+        <button class="primary" style="margin-left: 8px" :disabled="loading" @click="listAll">查询全部</button>
+      </div>
     </div>
 
     <div class="card">
@@ -116,8 +129,14 @@ watch(
         <h3>异常结果查询 (POST /api/timeseries/anomaly-results/query)</h3>
         <div class="grid">
           <div class="field"><label>项目ID</label><input v-model="anomaly.projectId" /></div>
-          <div class="field"><label>任务ID</label><input v-model="anomaly.taskId" /></div>
-          <div class="field"><label>序列ID</label><input v-model="anomaly.sequenceId" /></div>
+          <div class="field">
+            <label>任务ID</label>
+            <RefInput :field="{ name: 'taskId', placeholder: '按子串匹配选择任务' }" :options="refOptions.task || []" v-model="anomaly.taskId" />
+          </div>
+          <div class="field">
+            <label>序列ID</label>
+            <RefInput :field="{ name: 'sequenceId', placeholder: '按子串匹配选择实例' }" :options="refOptions.instance || []" v-model="anomaly.sequenceId" />
+          </div>
           <div class="field"><label>开始时间</label><input type="datetime-local" v-model="anomaly.startTime" /></div>
           <div class="field"><label>结束时间</label><input type="datetime-local" v-model="anomaly.endTime" /></div>
           <div class="field">
@@ -155,8 +174,14 @@ watch(
         <h3>预测结果查询 (POST /api/timeseries/forecast-results/query)</h3>
         <div class="grid">
           <div class="field"><label>项目ID</label><input v-model="forecast.projectId" /></div>
-          <div class="field"><label>任务ID</label><input v-model="forecast.taskId" /></div>
-          <div class="field"><label>序列ID</label><input v-model="forecast.sequenceId" /></div>
+          <div class="field">
+            <label>任务ID</label>
+            <RefInput :field="{ name: 'taskId', placeholder: '按子串匹配选择任务' }" :options="refOptions.task || []" v-model="forecast.taskId" />
+          </div>
+          <div class="field">
+            <label>序列ID</label>
+            <RefInput :field="{ name: 'sequenceId', placeholder: '按子串匹配选择实例' }" :options="refOptions.instance || []" v-model="forecast.sequenceId" />
+          </div>
           <div class="field"><label>开始时间</label><input type="datetime-local" v-model="forecast.startTime" /></div>
           <div class="field"><label>结束时间</label><input type="datetime-local" v-model="forecast.endTime" /></div>
         </div>

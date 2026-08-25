@@ -1,6 +1,7 @@
 package com.sfkg.timeseries.mapper;
 
 import com.sfkg.timeseries.dto.TaskQueryRequest;
+import com.sfkg.timeseries.dataingest.DataIngestPersistenceService;
 import com.sfkg.timeseries.entity.TimeseriesForecastTask;
 import java.util.List;
 import java.util.Objects;
@@ -12,18 +13,32 @@ import org.springframework.stereotype.Repository;
 public class TimeseriesForecastTaskFileMapper implements TimeseriesForecastTaskMapper {
 
     private final LocalJsonTableStore<TimeseriesForecastTask> store;
+    private final DataIngestPersistenceService dataIngestPersistenceService;
 
     public TimeseriesForecastTaskFileMapper(
-            @Value("${timeseries.local-store-dir:data}") String storeDir) {
+            @Value("${timeseries.local-store-dir:data}") String storeDir,
+            DataIngestPersistenceService dataIngestPersistenceService) {
         this.store = new LocalJsonTableStore<>(
                 storeDir,
                 "timeseries-forecast-task.json",
                 TimeseriesForecastTask.class);
+        this.dataIngestPersistenceService = dataIngestPersistenceService;
     }
 
     @Override
     public void insert(TimeseriesForecastTask entity) {
         store.upsert(item -> sameBusinessKey(entity, item), entity);
+        if (entity != null) {
+            dataIngestPersistenceService.submitRecord(
+                    "timeseries_forecast_task", entity.getTaskId(), entity);
+        }
+    }
+
+    @Override
+    public void replaceLocal(List<TimeseriesForecastTask> entities) {
+        if (entities != null && !entities.isEmpty()) {
+            store.writeAll(entities);
+        }
     }
 
     @Override

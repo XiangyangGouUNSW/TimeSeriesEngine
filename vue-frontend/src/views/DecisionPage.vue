@@ -1,9 +1,16 @@
 <script setup>
 import { reactive, ref, watch } from 'vue'
 import { api } from '../api/timeseries'
+import RefInput from '../components/RefInput.vue'
 import { toastError } from '../composables/toast'
+import { useRefOptions } from '../composables/refOptions'
 import ResultViewer from '../components/ResultViewer.vue'
 import { projectContext, withCurrentProject } from '../stores/project'
+
+const { refOptions, loadTypes } = useRefOptions()
+loadTypes(['event'])
+
+const eventField = { name: 'eventId', placeholder: '按子串匹配选择事件' }
 
 const loading = ref(false)
 const response = ref(null)
@@ -40,6 +47,7 @@ watch(
     suggestion.projectId = projectId
     feedback.projectId = projectId
     response.value = null
+    loadTypes(['event'])
   },
 )
 
@@ -77,13 +85,19 @@ async function doFeedback() {
 
 <template>
   <div>
-    <div class="page-title"><h2>决策辅助</h2></div>
+    <div class="page-title">
+      <h2>决策辅助</h2>
+      <button :disabled="loading" @click="loadTypes(['event'])">刷新下拉选项</button>
+    </div>
 
     <div class="card">
       <h3>事件诊断 (POST /api/timeseries/decision/diagnosis)</h3>
       <div class="grid">
         <div class="field"><label>项目ID</label><input v-model="diagnosis.projectId" placeholder="留空 = 默认项目" /></div>
-        <div class="field"><label>事件ID *</label><input v-model="diagnosis.eventId" placeholder="如 event_xxx" /></div>
+        <div class="field">
+          <label>事件ID *</label>
+          <RefInput :field="eventField" :options="refOptions.event || []" v-model="diagnosis.eventId" />
+        </div>
       </div>
       <div class="actions">
         <button class="primary" :disabled="loading" @click="doDiagnosis">诊断</button>
@@ -94,7 +108,10 @@ async function doFeedback() {
       <h3>处置建议 (POST /api/timeseries/decision/suggestion)</h3>
       <div class="grid">
         <div class="field"><label>项目ID</label><input v-model="suggestion.projectId" placeholder="留空 = 默认项目" /></div>
-        <div class="field"><label>事件ID *</label><input v-model="suggestion.eventId" /></div>
+        <div class="field">
+          <label>事件ID *</label>
+          <RefInput :field="eventField" :options="refOptions.event || []" v-model="suggestion.eventId" />
+        </div>
       </div>
       <div class="actions">
         <button class="primary" :disabled="loading" @click="doSuggestion">获取建议</button>
@@ -105,7 +122,10 @@ async function doFeedback() {
       <h3>处置反馈 (PATCH /api/timeseries/decision/feedback)</h3>
       <div class="grid">
         <div class="field"><label>项目ID</label><input v-model="feedback.projectId" placeholder="留空 = 默认项目" /></div>
-        <div class="field"><label>事件ID *</label><input v-model="feedback.eventId" /></div>
+        <div class="field">
+          <label>事件ID *</label>
+          <RefInput :field="eventField" :options="refOptions.event || []" v-model="feedback.eventId" />
+        </div>
         <div class="field">
           <label>处理状态</label>
           <select v-model="feedback.handleStatus">

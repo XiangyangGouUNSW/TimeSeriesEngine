@@ -1,9 +1,17 @@
 <script setup>
 import { reactive, ref, watch } from 'vue'
 import { api } from '../api/timeseries'
+import RefInput from '../components/RefInput.vue'
 import { toastError } from '../composables/toast'
+import { useRefOptions } from '../composables/refOptions'
 import ResultViewer from '../components/ResultViewer.vue'
 import { projectContext, withCurrentProject } from '../stores/project'
+
+const { refOptions, loadTypes } = useRefOptions()
+loadTypes(['instance'])
+
+const seqSingleField = { name: 'sequenceId', placeholder: '按子串匹配选择实例' }
+const seqMultiField = { name: 'sequenceIds', placeholder: '输入后回车/逗号或选择候选，可多选' }
 
 const loading = ref(false)
 const response = ref(null)
@@ -130,13 +138,17 @@ watch(
     overview.projectId = projectId
     windowQ.projectId = projectId
     response.value = null
+    loadTypes(['instance'])
   },
 )
 </script>
 
 <template>
   <div>
-    <div class="page-title"><h2>数据管理</h2></div>
+    <div class="page-title">
+      <h2>数据管理</h2>
+      <button :disabled="loading" @click="loadTypes(['instance'])">刷新下拉选项</button>
+    </div>
 
     <div class="card">
       <h3>数据写入 (POST /api/timeseries/data/ingest)</h3>
@@ -166,8 +178,14 @@ watch(
       <h3>历史数据查询 (POST /api/timeseries/data/history/query)</h3>
       <div class="grid">
         <div class="field"><label>项目ID</label><input v-model="history.projectId" /></div>
-        <div class="field"><label>序列ID（单个）</label><input v-model="history.sequenceId" /></div>
-        <div class="field full"><label>序列ID列表（逗号分隔，与单个二选一）</label><input v-model="history.sequenceIds" /></div>
+        <div class="field">
+          <label>序列ID（单个）</label>
+          <RefInput :field="seqSingleField" :options="refOptions.instance || []" v-model="history.sequenceId" />
+        </div>
+        <div class="field full">
+          <label>序列ID列表（与单个二选一）</label>
+          <RefInput :field="seqMultiField" :options="refOptions.instance || []" multiple v-model="history.sequenceIds" />
+        </div>
         <div class="field"><label>开始时间</label><input type="datetime-local" v-model="history.startTime" /></div>
         <div class="field"><label>结束时间</label><input type="datetime-local" v-model="history.endTime" /></div>
         <div class="field"><label>粒度 granularity</label><input v-model="history.granularity" placeholder="如 1m / 1h / 1d" /></div>
@@ -181,7 +199,10 @@ watch(
       <h3>历史数据概览 (POST /api/timeseries/data/history/overview)</h3>
       <div class="grid">
         <div class="field"><label>项目ID</label><input v-model="overview.projectId" /></div>
-        <div class="field full"><label>序列ID（逗号分隔）</label><input v-model="overview.sequenceIds" /></div>
+        <div class="field full">
+          <label>序列ID（可多选）</label>
+          <RefInput :field="seqMultiField" :options="refOptions.instance || []" multiple v-model="overview.sequenceIds" />
+        </div>
         <div class="field"><label>开始时间</label><input type="datetime-local" v-model="overview.startTime" /></div>
         <div class="field"><label>结束时间</label><input type="datetime-local" v-model="overview.endTime" /></div>
       </div>
@@ -194,7 +215,10 @@ watch(
       <h3>窗口数据查询 (POST /api/timeseries/data/window/query)</h3>
       <div class="grid">
         <div class="field"><label>项目ID</label><input v-model="windowQ.projectId" /></div>
-        <div class="field full"><label>序列ID（逗号分隔）</label><input v-model="windowQ.sequenceIds" /></div>
+        <div class="field full">
+          <label>序列ID（可多选）</label>
+          <RefInput :field="seqMultiField" :options="refOptions.instance || []" multiple v-model="windowQ.sequenceIds" />
+        </div>
         <div class="field"><label>开始时间</label><input type="datetime-local" v-model="windowQ.startTime" /></div>
         <div class="field"><label>结束时间</label><input type="datetime-local" v-model="windowQ.endTime" /></div>
       </div>

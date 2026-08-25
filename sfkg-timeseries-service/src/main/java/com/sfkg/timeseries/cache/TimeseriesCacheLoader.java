@@ -186,6 +186,30 @@ public class TimeseriesCacheLoader {
         }
     }
 
+    public List<TimeseriesAnomalyTask> loadAnomalyTasksFromGStore(String projectId, String databaseName) {
+        return dataIngestRecordLoader.load(
+                projectId, databaseName, CachedTable.ANOMALY_TASK.getTableName(), TimeseriesAnomalyTask.class);
+    }
+
+    public void persistLocalAnomalyTasks(List<TimeseriesAnomalyTask> entities) {
+        TimeseriesAnomalyTaskMapper mapper = anomalyTaskMapper.getIfAvailable();
+        if (mapper != null) {
+            mapper.replaceLocal(entities);
+        }
+    }
+
+    public List<TimeseriesForecastTask> loadForecastTasksFromGStore(String projectId, String databaseName) {
+        return dataIngestRecordLoader.load(
+                projectId, databaseName, CachedTable.FORECAST_TASK.getTableName(), TimeseriesForecastTask.class);
+    }
+
+    public void persistLocalForecastTasks(List<TimeseriesForecastTask> entities) {
+        TimeseriesForecastTaskMapper mapper = forecastTaskMapper.getIfAvailable();
+        if (mapper != null) {
+            mapper.replaceLocal(entities);
+        }
+    }
+
     private <T> List<T> emptyIfNull(List<T> records) {
         return records == null ? List.of() : records;
     }

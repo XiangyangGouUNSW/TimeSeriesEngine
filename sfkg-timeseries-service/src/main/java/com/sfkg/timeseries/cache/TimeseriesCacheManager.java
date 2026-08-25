@@ -1,14 +1,21 @@
 package com.sfkg.timeseries.cache;
 
 import com.sfkg.timeseries.config.DataIngestProperties;
+import com.sfkg.timeseries.entity.TimeseriesAnomalyTask;
 import com.sfkg.timeseries.entity.TimeseriesCategory;
 import com.sfkg.timeseries.entity.TimeseriesConstraint;
 import com.sfkg.timeseries.entity.TimeseriesEvent;
+import com.sfkg.timeseries.entity.TimeseriesForecastTask;
 import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.entity.TimeseriesProject;
 import com.sfkg.timeseries.entity.TimeseriesRelation;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.function.BiFunction;
+import java.util.function.Function;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
@@ -89,19 +96,61 @@ public class TimeseriesCacheManager {
         cacheLoader.persistLocalRelations(relations);
         cacheLoader.persistLocalEvents(events);
 
+        // 任务已写入 gStore：按项目从 gStore 加载，合并本地遗留（兼容升级前的旧数据）
+        List<TimeseriesAnomalyTask> anomalyTasks = loadTasksFromGStoreWithLocalFallback(
+                projects,
+                cacheLoader::loadAnomalyTasksFromGStore,
+                cacheLoader::loadAnomalyTasks,
+                TimeseriesAnomalyTask::getProjectId,
+                TimeseriesAnomalyTask::getTaskId);
+        List<TimeseriesForecastTask> forecastTasks = loadTasksFromGStoreWithLocalFallback(
+                projects,
+                cacheLoader::loadForecastTasksFromGStore,
+                cacheLoader::loadForecastTasks,
+                TimeseriesForecastTask::getProjectId,
+                TimeseriesForecastTask::getTaskId);
+        cacheLoader.persistLocalAnomalyTasks(anomalyTasks);
+        cacheLoader.persistLocalForecastTasks(forecastTasks);
+
         memoryCache.replaceInstanceConfigs(instanceConfigs);
         memoryCache.replaceCategories(categories);
         memoryCache.replaceConstraints(constraints);
         memoryCache.replaceRelations(relations);
         memoryCache.replaceEvents(events);
+        memoryCache.replaceAnomalyTasks(anomalyTasks);
+        memoryCache.replaceForecastTasks(forecastTasks);
 
-        // Tasks, results, sync logs and raw points are not currently written to gStore.
-        memoryCache.replaceAnomalyTasks(cacheLoader.loadAnomalyTasks());
-        memoryCache.replaceForecastTasks(cacheLoader.loadForecastTasks());
+        // 结果、同步日志与原始点位未写入 gStore，仍从本地加载。
         memoryCache.replaceAnomalyResults(cacheLoader.loadAnomalyResults());
         memoryCache.replaceForecastResults(cacheLoader.loadForecastResults());
         memoryCache.replaceSyncLogs(cacheLoader.loadSyncLogs());
         return projects;
+    }
+
+    /**
+     * 从 gStore 按项目加载任务，并合并本地文件中 gStore 没有的旧记录
+     * （升级前任务只落本地文件，避免切到 gStore 读取后丢失）。
+     */
+    private <T> List<T> loadTasksFromGStoreWithLocalFallback(
+            List<TimeseriesProject> projects,
+            BiFunction<String, String, List<T>> gStoreLoader,
+            Supplier<List<T>> localLoader,
+            Function<T, String> projectIdOf,
+            Function<T, String> taskIdOf) {
+        List<T> fromGStore = loadForProjects(projects, gStoreLoader);
+        Set<String> keys = fromGStore.stream()
+                .map(task -> taskKey(projectIdOf.apply(task), taskIdOf.apply(task)))
+                .collect(Collectors.toSet());
+        List<T> localLeftover = localLoader.get().stream()
+                .filter(task -> !keys.contains(taskKey(projectIdOf.apply(task), taskIdOf.apply(task))))
+                .toList();
+        List<T> merged = new ArrayList<>(fromGStore);
+        merged.addAll(localLeftover);
+        return merged;
+    }
+
+    private static String taskKey(String projectId, String taskId) {
+        return (projectId == null ? "" : projectId) + "::" + (taskId == null ? "" : taskId);
     }
 
     private <T> List<T> loadForProjects(
