@@ -4,6 +4,7 @@ import static com.sfkg.timeseries.common.JsonSuccessResponse.returnSuccess;
 
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
 import com.sfkg.timeseries.common.ApiResult;
+import com.sfkg.timeseries.common.BusinessException;
 import com.sfkg.timeseries.dto.WindowConfigSaveRequest;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -23,6 +24,9 @@ public class TimeseriesWindowConfigController {
 
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ApiResult<Void> syncWindowConfig(@RequestBody WindowConfigSaveRequest request) {
+        if (request == null || request.getWindowSizeMs() <= 0) {
+            throw new BusinessException("windowSizeMs must be positive");
+        }
         coreGrpcClient.syncWindowConfig(request.getProjectId(), request.getWindowSizeMs());
         return returnSuccess("window config sync success");
     }

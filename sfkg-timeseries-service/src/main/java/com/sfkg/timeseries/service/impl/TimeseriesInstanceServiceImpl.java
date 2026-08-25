@@ -3,6 +3,7 @@ package com.sfkg.timeseries.service.impl;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -26,6 +27,8 @@ import com.sfkg.timeseries.vo.InstanceConfigVO;
 
 @Service
 public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService {
+
+    private static final Set<String> VALID_DATA_TYPES = Set.of("double", "int64", "bool", "string");
 
     private final TimeseriesInstanceConfigMapper instanceConfigMapper;
     private final TimeseriesMemoryCache memoryCache;
@@ -64,16 +67,28 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
     }
 
     private String doSaveInstanceConfig(InstanceConfigSaveRequest request) {
-        if (request != null) {
-            if (request.getSequenceId() != null && request.getSequenceId().isBlank()) {
-                throw new BusinessException("sequenceId must not be blank");
-            }
-            if (request.getCategoryId() != null) {
-                validateCategory(request.getProjectId(), request.getCategoryId());
-            }
+        if (request == null) {
+            throw new BusinessException("instance config request must not be null");
         }
+        if (request.getSequenceId() != null && request.getSequenceId().isBlank()) {
+            throw new BusinessException("sequenceId must not be blank");
+        }
+        if (request.getInstanceName() == null || request.getInstanceName().isBlank()) {
+            throw new BusinessException("instanceName must not be empty");
+        }
+        if (request.getCategoryId() == null || request.getCategoryId().isBlank()) {
+            throw new BusinessException("categoryId must not be empty");
+        }
+        if (request.getDataType() == null || request.getDataType().isBlank()) {
+            throw new BusinessException("dataType must not be empty");
+        }
+        if (!VALID_DATA_TYPES.contains(request.getDataType().trim().toLowerCase())) {
+            throw new BusinessException("unsupported dataType: " + request.getDataType()
+                    + " (expected double/int64/bool/string)");
+        }
+        validateCategory(request.getProjectId(), request.getCategoryId());
         cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
-        String sequenceId = request == null || request.getSequenceId() == null
+        String sequenceId = request.getSequenceId() == null
                 ? generateSequenceId()
                 : request.getSequenceId();
 

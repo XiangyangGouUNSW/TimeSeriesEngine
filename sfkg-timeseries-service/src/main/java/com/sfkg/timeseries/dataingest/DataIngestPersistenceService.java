@@ -58,7 +58,7 @@ public class DataIngestPersistenceService {
                     response.getMessage());
             registerProject(projectId);
         } catch (RuntimeException exception) {
-            LOG.warn("DataIngest dual-write failed: table={} key={} reason={}",
+            LOG.warn("DataIngest upsert failed: table={} key={} reason={}",
                     tableName, businessKey, exception.getMessage());
             throw exception;
         }

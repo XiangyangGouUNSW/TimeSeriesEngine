@@ -6,6 +6,6 @@
   "categoryId": "temperature",
   "deviceInstanceId": "device-3001",
   "dataSourceId": "source-a",
-  "dataType": "continuous",
+  "dataType": "double",
   "accessStatus": "ENABLE"
 }

@@ -6,7 +6,9 @@
     "ETTh1_OT"
   ],
   "methods": [
-    "DISCRETE_OUTLIER"
+    "CONSTRAINT_CHECK",
+    "MODEL_ANOMALY_DETECTION",
+    "DISCRETE_OUTLIER","CAUSAL_PATTERN"
   ],
   "warningRule": "OT > 38",
   "contextLength": 96,

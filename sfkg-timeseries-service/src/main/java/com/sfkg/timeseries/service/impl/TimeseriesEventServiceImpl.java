@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
+import com.sfkg.timeseries.common.BusinessException;
 import com.sfkg.timeseries.dto.EventQueryRequest;
 import com.sfkg.timeseries.dto.EventSaveRequest;
 import com.sfkg.timeseries.entity.TimeseriesEvent;
@@ -56,8 +57,20 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
 
     @Override
     public String saveEvent(EventSaveRequest request) {
+        if (request == null) {
+            throw new BusinessException("event request must not be null");
+        }
+        if (request.getEventName() == null || request.getEventName().isBlank()) {
+            throw new BusinessException("eventName must not be empty");
+        }
+        if (request.getEventType() == null || request.getEventType().isBlank()) {
+            throw new BusinessException("eventType must not be empty");
+        }
+        if (request.getEventLevel() == null || request.getEventLevel().isBlank()) {
+            throw new BusinessException("eventLevel must not be empty");
+        }
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
-        String eventId = request == null || request.getEventId() == null
+        String eventId = request.getEventId() == null
                 ? generateEventId()
                 : request.getEventId();
 
@@ -152,6 +165,7 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
     private EventDetailVO toDetailVO(TimeseriesEvent entity) {
         EventDetailVO vo = new EventDetailVO();
         vo.setEventId(entity.getEventId());
+        vo.setProjectId(entity.getProjectId());
         vo.setEventName(entity.getEventName());
         vo.setEventDescription(entity.getEventDescription());
         vo.setSemanticContext(buildSemanticContext(entity));

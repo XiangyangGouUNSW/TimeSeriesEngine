@@ -21,8 +21,8 @@ timeseries:
   local-store-dir: ${TIMESERIES_LOCAL_STORE_DIR:data}
   local-data-file: ${TIMESERIES_LOCAL_DATA_FILE:data/timeseries-data.jsonl}
   data-ingest:
-    enabled: ${TIMESERIES_DATA_INGEST_ENABLED:true}
-    read-from-gstore: ${TIMESERIES_READ_FROM_GSTORE:true}
+    enabled: ${TIMESERIES_DATA_INGEST_ENABLED:false}
+    read-from-gstore: ${TIMESERIES_READ_FROM_GSTORE:false}
     fallback-to-local: ${TIMESERIES_GSTORE_FALLBACK_TO_LOCAL:true}
     endpoint: ${TIMESERIES_DATA_INGEST_ENDPOINT:http://127.0.0.1:8006}
     database: ${TIMESERIES_DATA_INGEST_DATABASE:ett-system}

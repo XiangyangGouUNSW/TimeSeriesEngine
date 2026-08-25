@@ -101,8 +101,21 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
     }
 
     private String doSaveCategory(CategorySaveRequest request) {
+        if (request == null) {
+            throw new BusinessException("category request must not be null");
+        }
+        if (request.getCategoryName() == null || request.getCategoryName().isBlank()) {
+            throw new BusinessException("categoryName must not be empty");
+        }
+        if (request.getDataType() == null || request.getDataType().isBlank()) {
+            throw new BusinessException("dataType must not be empty");
+        }
+        if (!VALID_DATA_TYPES.contains(request.getDataType().trim().toLowerCase())) {
+            throw new BusinessException("unsupported dataType: " + request.getDataType()
+                    + " (expected double/int64/bool/string)");
+        }
         cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
-        String categoryId = request == null || request.getCategoryId() == null
+        String categoryId = request.getCategoryId() == null
                 ? generateId()
                 : request.getCategoryId();
 
@@ -390,6 +403,8 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
     }
 
     private static final Set<String> VALID_RELATION_TYPES = Set.of("CAUSE", "CAUSAL", "CORRELATION", "ASSOCIATION");
+
+    private static final Set<String> VALID_DATA_TYPES = Set.of("double", "int64", "bool", "string");
 
     @Override
     public void validateConstraintExpression(String expression) {
