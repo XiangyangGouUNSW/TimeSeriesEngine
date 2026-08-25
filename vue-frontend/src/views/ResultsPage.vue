@@ -1,7 +1,9 @@
 <script setup>
-import { reactive, ref } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import { api } from '../api/timeseries'
 import ResultViewer from '../components/ResultViewer.vue'
+import { toastError } from '../composables/toast'
+import { projectContext, withCurrentProject } from '../stores/project'
 
 const tab = ref('anomaly')
 const loading = ref(false)
@@ -10,7 +12,7 @@ const error = ref('')
 const rows = ref([])
 
 const anomaly = reactive({
-  projectId: '',
+  projectId: projectContext.currentProjectId.value,
   taskId: '',
   sequenceId: '',
   startTime: '',
@@ -19,7 +21,7 @@ const anomaly = reactive({
 })
 
 const forecast = reactive({
-  projectId: '',
+  projectId: projectContext.currentProjectId.value,
   taskId: '',
   sequenceId: '',
   startTime: '',
@@ -31,8 +33,8 @@ function dt(v) {
 }
 
 function buildPayload(src, extra) {
-  const payload = {}
-  if (src.projectId) payload.projectId = src.projectId
+  const payload = withCurrentProject({ projectId: src.projectId || undefined })
+  if (!payload) return null
   if (src.taskId) payload.taskId = src.taskId
   if (src.sequenceId) payload.sequenceId = src.sequenceId
   const s = dt(src.startTime)
@@ -62,18 +64,39 @@ async function run(promise, collect) {
 async function queryAnomaly() {
   const extra = {}
   if (anomaly.eventLevel) extra.eventLevel = anomaly.eventLevel
-  await run(api.queryAnomalyResults(buildPayload(anomaly, extra)), true)
+  const payload = buildPayload(anomaly, extra)
+  if (!payload) {
+    toastError('请先选择当前项目，且请求项目必须与当前项目一致')
+    return
+  }
+  await run(api.queryAnomalyResults(payload), true)
 }
 
 async function queryForecast() {
-  await run(api.queryForecastResults(buildPayload(forecast, {})), true)
+  const payload = buildPayload(forecast, {})
+  if (!payload) {
+    toastError('请先选择当前项目，且请求项目必须与当前项目一致')
+    return
+  }
+  await run(api.queryForecastResults(payload), true)
 }
 
 async function listAll() {
   rows.value = []
-  if (tab.value === 'anomaly') await run(api.listAnomalyResults(), true)
-  else await run(api.listForecastResults(), true)
+  const projectId = projectContext.currentProjectId.value
+  if (!projectId) return
+  if (tab.value === 'anomaly') await run(api.listAnomalyResults(projectId), true)
+  else await run(api.listForecastResults(projectId), true)
 }
+
+watch(
+  () => projectContext.currentProjectId.value,
+  (projectId) => {
+    anomaly.projectId = projectId
+    forecast.projectId = projectId
+    rows.value = []
+  },
+)
 </script>
 
 <template>

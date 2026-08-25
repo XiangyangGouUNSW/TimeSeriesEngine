@@ -9,4 +9,6 @@ public interface TimeseriesStatisticsService {
     TimeseriesStatisticsResult computeAndStore(StatisticsQueryRequest request);
 
     List<TimeseriesStatisticsResult> listResults();
+
+    List<TimeseriesStatisticsResult> listResults(String projectId);
 }

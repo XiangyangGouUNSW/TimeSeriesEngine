@@ -61,6 +61,7 @@ import com.sfkg.timeseries.grpc.VariableRole;
 import com.sfkg.timeseries.grpc.WindowData;
 import com.sfkg.timeseries.service.TimeseriesConstraintExpansionResolver;
 import com.sfkg.timeseries.service.TimeseriesConstraintExpansionResolver.ExpandedConstraintRule;
+import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.vo.HistoryDataVO;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
@@ -271,10 +272,11 @@ public class TimeseriesCoreGrpcClient {
     // ── window config ──────────────────────────────────────────────────
 
     public SyncResult syncWindowConfig(long windowSizeMs) {
-        return syncWindowConfig(null, windowSizeMs);
+        throw new IllegalArgumentException("projectId is required for syncWindowConfig");
     }
 
     public SyncResult syncWindowConfig(String projectId, long windowSizeMs) {
+        projectId = ProjectIdValidator.require(projectId);
         String address = grpcClientProperties.getCoreAddress();
         if (isBlank(address)) {
             return notConfigured("syncWindowConfig");
@@ -293,6 +295,10 @@ public class TimeseriesCoreGrpcClient {
     // ── derived series config ──────────────────────────────────────────
 
     public SyncResult syncDerivedSeriesConfigs(DerivedSeriesConfigSaveRequest request) {
+        if (request == null) {
+            return SyncResult.fail("derived series request is null");
+        }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
         String address = grpcClientProperties.getCoreAddress();
         if (isBlank(address)) {
             return notConfigured("syncDerivedSeriesConfigs");

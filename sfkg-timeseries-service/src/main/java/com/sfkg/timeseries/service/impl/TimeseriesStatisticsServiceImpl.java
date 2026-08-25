@@ -5,6 +5,7 @@ import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.dto.StatisticsQueryRequest;
 import com.sfkg.timeseries.entity.TimeseriesRelation;
 import com.sfkg.timeseries.entity.TimeseriesStatisticsResult;
@@ -50,6 +51,10 @@ public class TimeseriesStatisticsServiceImpl implements TimeseriesStatisticsServ
 
     @Override
     public TimeseriesStatisticsResult computeAndStore(StatisticsQueryRequest request) {
+        if (request == null) {
+            throw new BusinessException("statistics request must not be null");
+        }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
         List<String> sequenceIds = request != null && request.getSequenceIds() != null
                 ? request.getSequenceIds()
                 : List.of();
@@ -77,6 +82,16 @@ public class TimeseriesStatisticsServiceImpl implements TimeseriesStatisticsServ
     @Override
     public List<TimeseriesStatisticsResult> listResults() {
         return resultMapper.selectAll();
+    }
+
+    @Override
+    public List<TimeseriesStatisticsResult> listResults(String projectId) {
+        if (projectId == null || projectId.isBlank()) {
+            return List.of();
+        }
+        return resultMapper.selectAll().stream()
+                .filter(result -> projectId.equals(result.getProjectId()))
+                .toList();
     }
 
     private List<String> resolveRelationIds(StatisticsQueryRequest request, List<String> sequenceIds) {

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sfkg.timeseries.config.DataIngestProperties;
+import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.entity.TimeseriesProject;
 import com.sfkg.timeseries.mapper.TimeseriesProjectMapper;
 import java.time.LocalDateTime;
@@ -37,13 +38,16 @@ public class DataIngestPersistenceService {
     }
 
     public void submitRecord(String tableName, String businessKey, Object entity) {
-        if (!dataIngestClient.isEnabled() || entity == null || businessKey == null || businessKey.isBlank()) {
+        if (entity == null) {
             return;
         }
         try {
             Map<String, Object> rawFields = toRawFields(entity);
-            String projectId = rawFields.get("projectId") == null
-                    ? null : String.valueOf(rawFields.get("projectId"));
+            String projectId = ProjectIdValidator.require(
+                    rawFields.get("projectId") == null ? null : String.valueOf(rawFields.get("projectId")));
+            if (!dataIngestClient.isEnabled() || businessKey == null || businessKey.isBlank()) {
+                return;
+            }
             DataIngestInsertPayload payload = newInsertPayload();
             payload.setDbName(properties.databaseForProject(projectId));
             payload.getEntities().add(toEntityPayload(tableName, businessKey, rawFields));

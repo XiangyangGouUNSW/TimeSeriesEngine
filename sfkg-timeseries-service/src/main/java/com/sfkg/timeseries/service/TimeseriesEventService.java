@@ -13,6 +13,8 @@ public interface TimeseriesEventService {
 
     EventDetailVO getEventDetail(String eventId);
 
+    EventDetailVO getEventDetail(String projectId, String eventId);
+
     String saveEvent(EventSaveRequest request);
 
     String saveEventEntity(TimeseriesEvent entity);

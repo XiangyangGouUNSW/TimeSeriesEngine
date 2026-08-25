@@ -6,6 +6,7 @@ import { toastError } from '../composables/toast'
 import FieldInput from './FieldInput.vue'
 import RefInput from './RefInput.vue'
 import ResultViewer from './ResultViewer.vue'
+import { projectContext, withCurrentProject } from '../stores/project'
 
 // 配置驱动的通用 CRUD 页面：
 //   config.base         基础路径，如 /api/timeseries/instances
@@ -43,13 +44,13 @@ initFormDefaults()
 
 // ── 引用型字段（ref/refs）的选项：从后端已有实体列表加载 ─────────────
 const REF_SOURCES = {
-  category: { loader: () => api.listCategories(), idKey: 'categoryId', labelKey: 'categoryName' },
-  instance: { loader: () => api.listInstances(), idKey: 'sequenceId', labelKey: 'instanceName' },
-  constraint: { loader: () => api.listConstraints(), idKey: 'constraintId', labelKey: 'constraintName' },
-  relation: { loader: () => api.listRelations(), idKey: 'relationId', labelKey: 'relationName' },
-  event: { loader: () => api.listEvents(), idKey: 'eventId', labelKey: 'eventName' },
-  anomalyTask: { loader: () => api.listAnomalyTasks(), idKey: 'taskId', labelKey: 'taskName' },
-  forecastTask: { loader: () => api.listForecastTasks(), idKey: 'taskId', labelKey: 'taskName' },
+  category: { loader: (projectId) => api.queryCategories({ projectId }), idKey: 'categoryId', labelKey: 'categoryName' },
+  instance: { loader: (projectId) => api.queryInstances({ projectId }), idKey: 'sequenceId', labelKey: 'instanceName' },
+  constraint: { loader: (projectId) => api.queryConstraints({ projectId }), idKey: 'constraintId', labelKey: 'constraintName' },
+  relation: { loader: (projectId) => api.queryRelations({ projectId }), idKey: 'relationId', labelKey: 'relationName' },
+  event: { loader: (projectId) => api.queryEvents({ projectId }), idKey: 'eventId', labelKey: 'eventName' },
+  anomalyTask: { loader: (projectId) => api.queryAnomalyTasks({ projectId }), idKey: 'taskId', labelKey: 'taskName' },
+  forecastTask: { loader: (projectId) => api.queryForecastTasks({ projectId }), idKey: 'taskId', labelKey: 'taskName' },
   task: { loader: null, idKey: 'taskId', labelKey: 'taskName' }, // 异常+预测任务合并
 }
 const refOptions = reactive({})
@@ -69,7 +70,15 @@ async function loadRefOptions() {
     try {
       let list = []
       if (type === 'task') {
-        const [a, b] = await Promise.all([api.listAnomalyTasks(), api.listForecastTasks()])
+        const projectId = projectContext.currentProjectId.value
+        if (!projectId) {
+          refOptions[type] = []
+          continue
+        }
+        const [a, b] = await Promise.all([
+          api.queryAnomalyTasks({ projectId }),
+          api.queryForecastTasks({ projectId }),
+        ])
         const seen = new Set()
         for (const t of [...(a.data || []), ...(b.data || [])]) {
           if (!t || seen.has(t.taskId)) continue
@@ -77,7 +86,12 @@ async function loadRefOptions() {
           list.push(t)
         }
       } else {
-        const res = await REF_SOURCES[type].loader()
+        const projectId = projectContext.currentProjectId.value
+        if (!projectId) {
+          refOptions[type] = []
+          continue
+        }
+        const res = await REF_SOURCES[type].loader(projectId)
         list = res.data || []
       }
       const { idKey, labelKey } = REF_SOURCES[type]
@@ -108,6 +122,14 @@ watch(
     jsonText.value = ''
     editing.value = false
     initFormDefaults()
+    const projectId = projectContext.currentProjectId.value
+    if ((props.config.fields || []).some((field) => field.name === 'projectId')) {
+      form.projectId = projectId
+    }
+    if ((props.config.queryFields || []).some((field) => field.name === 'projectId')) {
+      query.projectId = projectId
+    }
+    if (props.config.statusUpdate) statusForm.projectId = projectId
     loadRefOptions()
   }
 )
@@ -200,7 +222,7 @@ function checkRequired(fields, src) {
 
 async function create() {
   if (!checkRequired(props.config.fields, form)) return
-  const payload = buildPayload(props.config.fields, form)
+  const payload = scopePayload(buildPayload(props.config.fields, form))
   if (payload === null) return
   const res = await run('post', base.value, payload)
   if (res && res.success !== false) {
@@ -212,7 +234,7 @@ async function create() {
 
 async function update() {
   if (!checkRequired(props.config.fields, form)) return
-  const payload = buildPayload(props.config.fields, form)
+  const payload = scopePayload(buildPayload(props.config.fields, form))
   if (payload === null) return
   const res = await run('put', base.value, payload)
   if (res && res.success !== false) {
@@ -222,15 +244,29 @@ async function update() {
 }
 
 async function loadAll() {
-  const res = await run('get', base.value)
+  const projectId = projectContext.currentProjectId.value
+  if (!projectId) {
+    rows.value = []
+    return
+  }
+  const res = await run('post', `${base.value}/query`, { projectId })
   rows.value = (res && res.data) || []
 }
 
 async function doQuery() {
-  const payload = buildPayload(props.config.queryFields || [], query)
+  const payload = scopePayload(buildPayload(props.config.queryFields || [], query))
   if (payload === null) return
   const res = await run('post', `${base.value}/query`, payload)
   rows.value = (res && res.data) || []
+}
+
+function scopePayload(payload) {
+  if (payload === null) return null
+  const scoped = withCurrentProject(payload)
+  if (scoped === null) {
+    toastError('请先选择当前项目，且请求项目必须与当前项目一致')
+  }
+  return scoped
 }
 
 async function doStatus() {
@@ -245,7 +281,9 @@ async function doStatus() {
     const v = statusForm[f.name]
     if (v !== '' && v !== undefined && v !== null) payload[f.name] = v
   }
-  const res = await run('patch', `${base.value}${su.path}`, payload)
+  const scopedPayload = scopePayload(payload)
+  if (scopedPayload === null) return
+  const res = await run('patch', `${base.value}${su.path}`, scopedPayload)
   if (res && res.success !== false) await loadAll()
 }
 
@@ -257,7 +295,9 @@ async function sendRaw(method) {
     toastError('JSON 解析失败：' + e.message)
     return
   }
-  const res = await run(method, base.value, payload)
+  const scopedPayload = scopePayload(payload)
+  if (scopedPayload === null) return
+  const res = await run(method, base.value, scopedPayload)
   if (res && res.success !== false) await loadAll()
 }
 
@@ -326,6 +366,23 @@ function clearForm() {
   for (const k of Object.keys(form)) delete form[k]
   editing.value = false
 }
+
+watch(
+  () => projectContext.currentProjectId.value,
+  (projectId) => {
+    if ((props.config.fields || []).some((field) => field.name === 'projectId')) {
+      form.projectId = projectId
+    }
+    if ((props.config.queryFields || []).some((field) => field.name === 'projectId')) {
+      query.projectId = projectId
+    }
+    if (props.config.statusUpdate) statusForm.projectId = projectId
+    rows.value = []
+    loadAll()
+    loadRefOptions()
+  },
+  { immediate: true },
+)
 
 function cellText(row, col) {
   const v = col.accessor ? col.accessor(row) : row[col.key]

@@ -7,6 +7,8 @@ sfkg-timeseries-service 的管理前端，覆盖**全部配置输入**与请求�
 - Vue 3 + Vite 5 + vue-router 4（hash 路由）
 - axios（后端统一返回 `ApiResult<T> = { success, message, data }`）
 
+页面顶部提供项目列表和创建项目入口。选择当前项目后，CRUD 列表、引用下拉和自定义数据/任务请求都会自动携带该项目的 `projectId`，切换项目会清空并重新加载当前页面数据。
+
 ## 启动
 
 ```bash

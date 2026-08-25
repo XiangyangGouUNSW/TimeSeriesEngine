@@ -1,8 +1,9 @@
 <script setup>
-import { reactive, ref } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import { api } from '../api/timeseries'
 import { toastError } from '../composables/toast'
 import ResultViewer from '../components/ResultViewer.vue'
+import { projectContext, withCurrentProject } from '../stores/project'
 
 const loading = ref(false)
 const response = ref(null)
@@ -36,7 +37,7 @@ function dt(v) {
 
 // ── 数据写入 ──────────────────────────────────────────────
 const ingest = reactive({
-  projectId: '',
+  projectId: projectContext.currentProjectId.value,
   returnResolvedData: 'true',
   pointsJson: '[\n  {\n    "sequenceId": "ETTh1_HUFL",\n    "time": "2024-01-01T00:00:00",\n    "doubleValue": 5.827\n  }\n]',
 })
@@ -49,15 +50,18 @@ async function doIngest() {
     toastError('points JSON 解析失败：' + e.message)
     return
   }
-  const payload = { points }
-  if (ingest.projectId) payload.projectId = ingest.projectId
+  const payload = withCurrentProject({ points, projectId: ingest.projectId || undefined })
+  if (!payload) {
+    toastError('请先选择当前项目，且请求项目必须与当前项目一致')
+    return
+  }
   if (ingest.returnResolvedData) payload.returnResolvedData = ingest.returnResolvedData === 'true'
   await run(api.ingestData(payload))
 }
 
 // ── 历史数据查询 ──────────────────────────────────────────
 const history = reactive({
-  projectId: '',
+  projectId: projectContext.currentProjectId.value,
   sequenceId: '',
   sequenceIds: '',
   startTime: '',
@@ -66,8 +70,11 @@ const history = reactive({
 })
 
 async function doHistoryQuery() {
-  const payload = {}
-  if (history.projectId) payload.projectId = history.projectId
+  const payload = withCurrentProject({ projectId: history.projectId || undefined })
+  if (!payload) {
+    toastError('请先选择当前项目，且请求项目必须与当前项目一致')
+    return
+  }
   if (history.sequenceId) payload.sequenceId = history.sequenceId
   const ids = parseIds(history.sequenceIds)
   if (ids.length) payload.sequenceIds = ids
@@ -80,11 +87,14 @@ async function doHistoryQuery() {
 }
 
 // ── 历史数据概览 ──────────────────────────────────────────
-const overview = reactive({ projectId: '', sequenceIds: '', startTime: '', endTime: '' })
+const overview = reactive({ projectId: projectContext.currentProjectId.value, sequenceIds: '', startTime: '', endTime: '' })
 
 async function doOverview() {
-  const payload = {}
-  if (overview.projectId) payload.projectId = overview.projectId
+  const payload = withCurrentProject({ projectId: overview.projectId || undefined })
+  if (!payload) {
+    toastError('请先选择当前项目，且请求项目必须与当前项目一致')
+    return
+  }
   const ids = parseIds(overview.sequenceIds)
   if (ids.length) payload.sequenceIds = ids
   const s = dt(overview.startTime)
@@ -95,11 +105,14 @@ async function doOverview() {
 }
 
 // ── 窗口数据查询 ──────────────────────────────────────────
-const windowQ = reactive({ projectId: '', sequenceIds: '', startTime: '', endTime: '' })
+const windowQ = reactive({ projectId: projectContext.currentProjectId.value, sequenceIds: '', startTime: '', endTime: '' })
 
 async function doWindowQuery() {
-  const payload = {}
-  if (windowQ.projectId) payload.projectId = windowQ.projectId
+  const payload = withCurrentProject({ projectId: windowQ.projectId || undefined })
+  if (!payload) {
+    toastError('请先选择当前项目，且请求项目必须与当前项目一致')
+    return
+  }
   const ids = parseIds(windowQ.sequenceIds)
   if (ids.length) payload.sequenceIds = ids
   const s = dt(windowQ.startTime)
@@ -108,6 +121,17 @@ async function doWindowQuery() {
   if (e) payload.endTime = e
   await run(api.queryWindow(payload))
 }
+
+watch(
+  () => projectContext.currentProjectId.value,
+  (projectId) => {
+    ingest.projectId = projectId
+    history.projectId = projectId
+    overview.projectId = projectId
+    windowQ.projectId = projectId
+    response.value = null
+  },
+)
 </script>
 
 <template>

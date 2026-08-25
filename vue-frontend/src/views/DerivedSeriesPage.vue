@@ -1,8 +1,9 @@
 <script setup>
-import { reactive, ref } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import { api } from '../api/timeseries'
 import { toastError } from '../composables/toast'
 import ResultViewer from '../components/ResultViewer.vue'
+import { projectContext, withCurrentProject } from '../stores/project'
 
 const mode = ref('linear') // linear | expression | raw
 const loading = ref(false)
@@ -11,7 +12,7 @@ const error = ref('')
 
 // 线性组合模式
 const linear = reactive({
-  projectId: '',
+  projectId: projectContext.currentProjectId.value,
   derivedSequenceId: '',
   enabled: 'true',
   termsJson: '[\n  { "sequenceId": "ETTh1_HUFL", "coefficient": 1.0 }\n]',
@@ -20,7 +21,7 @@ const linear = reactive({
 
 // 表达式模式
 const expr = reactive({
-  projectId: '',
+  projectId: projectContext.currentProjectId.value,
   derivedSequenceId: '',
   enabled: 'true',
   expressionJson:
@@ -32,12 +33,26 @@ const rawJson = ref(
   '{\n  "projectId": "",\n  "items": [\n    {\n      "derivedSequenceId": "ETTh1_HUFL_d",\n      "enabled": true,\n      "linearCombination": {\n        "terms": [ { "sequenceId": "ETTh1_HUFL", "coefficient": 1.0 } ],\n        "bias": 0.0\n      }\n    }\n  ]\n}'
 )
 
+watch(
+  () => projectContext.currentProjectId.value,
+  (projectId) => {
+    linear.projectId = projectId
+    expr.projectId = projectId
+    response.value = null
+  },
+)
+
 async function send(payload) {
+  const scopedPayload = withCurrentProject(payload)
+  if (!scopedPayload) {
+    toastError('请先选择当前项目，且请求项目必须与当前项目一致')
+    return
+  }
   loading.value = true
   response.value = null
   error.value = ''
   try {
-    const res = await api.syncDerivedSeries(payload)
+    const res = await api.syncDerivedSeries(scopedPayload)
     response.value = res
     if (res && res.success === false) error.value = res.message || '请求失败'
   } catch (e) {

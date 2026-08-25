@@ -10,6 +10,7 @@ import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.DecisionGrpcClient;
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
+import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.dto.DecisionContext;
 import com.sfkg.timeseries.dto.DisposalFeedbackRequest;
 import com.sfkg.timeseries.entity.TimeseriesEvent;
@@ -92,6 +93,7 @@ public class TimeseriesDecisionServiceImpl implements TimeseriesDecisionService 
         if (request == null || request.getEventId() == null) {
             return;
         }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
         TimeseriesEvent entity = memoryCache.computeEvent(request.getProjectId(), request.getEventId(), existing -> {
             TimeseriesEvent e = existing != null ? existing : new TimeseriesEvent();

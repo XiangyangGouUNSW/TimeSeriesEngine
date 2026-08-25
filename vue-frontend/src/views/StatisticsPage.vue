@@ -1,7 +1,9 @@
 <script setup>
-import { reactive, ref } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import { api } from '../api/timeseries'
 import ResultViewer from '../components/ResultViewer.vue'
+import { toastError } from '../composables/toast'
+import { projectContext, withCurrentProject } from '../stores/project'
 
 const loading = ref(false)
 const response = ref(null)
@@ -9,7 +11,7 @@ const error = ref('')
 const rows = ref([])
 
 const form = reactive({
-  projectId: '',
+  projectId: projectContext.currentProjectId.value,
   sequenceIds: '',
   dependentSequenceId: '',
   relationIds: '',
@@ -45,8 +47,11 @@ async function run(promise, collect) {
 }
 
 async function compute() {
-  const payload = {}
-  if (form.projectId) payload.projectId = form.projectId
+  const payload = withCurrentProject({ projectId: form.projectId || undefined })
+  if (!payload) {
+    toastError('请先选择当前项目，且请求项目必须与当前项目一致')
+    return
+  }
   const seqIds = parseIds(form.sequenceIds)
   if (seqIds.length) payload.sequenceIds = seqIds
   if (form.dependentSequenceId) payload.dependentSequenceId = form.dependentSequenceId
@@ -60,8 +65,21 @@ async function compute() {
 }
 
 async function loadAll() {
-  await run(api.listStatistics(), true)
+  const projectId = projectContext.currentProjectId.value
+  if (!projectId) {
+    rows.value = []
+    return
+  }
+  await run(api.listStatistics(projectId), true)
 }
+
+watch(
+  () => projectContext.currentProjectId.value,
+  (projectId) => {
+    form.projectId = projectId
+    rows.value = []
+  },
+)
 </script>
 
 <template>

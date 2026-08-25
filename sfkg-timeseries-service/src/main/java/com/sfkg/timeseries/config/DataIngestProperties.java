@@ -69,9 +69,12 @@ public class DataIngestProperties {
      */
     public String databaseForProject(String projectId) {
         if (projectId == null || projectId.isBlank()) {
-            return database;
+            throw new IllegalArgumentException("projectId must not be blank when resolving a gStore database");
         }
-        String normalized = projectId.trim().replaceAll("[^A-Za-z0-9_-]", "_");
+        String normalized = projectId.trim();
+        if (!normalized.matches("[A-Za-z0-9][A-Za-z0-9_-]{0,127}")) {
+            throw new IllegalArgumentException("projectId contains unsupported characters: " + projectId);
+        }
         return database + "_" + normalized;
     }
 

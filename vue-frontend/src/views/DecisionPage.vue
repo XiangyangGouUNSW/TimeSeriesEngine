@@ -1,8 +1,9 @@
 <script setup>
-import { reactive, ref } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import { api } from '../api/timeseries'
 import { toastError } from '../composables/toast'
 import ResultViewer from '../components/ResultViewer.vue'
+import { projectContext, withCurrentProject } from '../stores/project'
 
 const loading = ref(false)
 const response = ref(null)
@@ -23,28 +24,42 @@ async function run(promise) {
   }
 }
 
-const diagnosis = reactive({ projectId: '', eventId: '' })
-const suggestion = reactive({ projectId: '', eventId: '' })
+const diagnosis = reactive({ projectId: projectContext.currentProjectId.value, eventId: '' })
+const suggestion = reactive({ projectId: projectContext.currentProjectId.value, eventId: '' })
 const feedback = reactive({
-  projectId: '',
+  projectId: projectContext.currentProjectId.value,
   eventId: '',
   disposalResult: '',
   handleStatus: '',
 })
 
+watch(
+  () => projectContext.currentProjectId.value,
+  (projectId) => {
+    diagnosis.projectId = projectId
+    suggestion.projectId = projectId
+    feedback.projectId = projectId
+    response.value = null
+  },
+)
+
 function eventPayload(src) {
-  const payload = {}
-  if (src.projectId) payload.projectId = src.projectId
+  const payload = withCurrentProject({ projectId: src.projectId || undefined })
+  if (!payload) return null
   if (src.eventId) payload.eventId = src.eventId
   return payload
 }
 
 async function doDiagnosis() {
-  await run(api.diagnosis(eventPayload(diagnosis)))
+  const payload = eventPayload(diagnosis)
+  if (!payload) return
+  await run(api.diagnosis(payload))
 }
 
 async function doSuggestion() {
-  await run(api.suggestion(eventPayload(suggestion)))
+  const payload = eventPayload(suggestion)
+  if (!payload) return
+  await run(api.suggestion(payload))
 }
 
 async function doFeedback() {
@@ -53,6 +68,7 @@ async function doFeedback() {
     return
   }
   const payload = eventPayload(feedback)
+  if (!payload) return
   if (feedback.disposalResult) payload.disposalResult = feedback.disposalResult
   if (feedback.handleStatus) payload.handleStatus = feedback.handleStatus
   await run(api.feedback(payload))

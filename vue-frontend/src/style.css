@@ -459,3 +459,52 @@ tr.clickable {
   line-height: 1.6;
 }
 
+.project-bar {
+  display: flex;
+  align-items: end;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 0 0 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.project-current,
+.project-create {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-bar label {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.project-bar select,
+.project-bar input {
+  width: 180px;
+}
+
+.project-create input {
+  width: 150px;
+}
+
+.project-error {
+  color: var(--fail);
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .project-current,
+  .project-create {
+    width: 100%;
+  }
+
+  .project-bar select,
+  .project-bar input {
+    flex: 1;
+    width: auto;
+  }
+}

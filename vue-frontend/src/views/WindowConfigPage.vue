@@ -1,21 +1,33 @@
 <script setup>
-import { reactive, ref } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import { api } from '../api/timeseries'
 import { toastError } from '../composables/toast'
 import ResultViewer from '../components/ResultViewer.vue'
+import { projectContext, withCurrentProject } from '../stores/project'
 
-const form = reactive({ projectId: '', windowSizeMs: '' })
+const form = reactive({ projectId: projectContext.currentProjectId.value, windowSizeMs: '' })
 const loading = ref(false)
 const response = ref(null)
 const error = ref('')
+
+watch(
+  () => projectContext.currentProjectId.value,
+  (projectId) => {
+    form.projectId = projectId
+    response.value = null
+  },
+)
 
 async function submit() {
   if (form.windowSizeMs === '' || form.windowSizeMs === null) {
     toastError('请填写必填字段：窗口大小 windowSizeMs（毫秒）')
     return
   }
-  const payload = {}
-  if (form.projectId) payload.projectId = form.projectId
+  const payload = withCurrentProject({ projectId: form.projectId || undefined })
+  if (!payload) {
+    toastError('请先选择当前项目，且请求项目必须与当前项目一致')
+    return
+  }
   if (form.windowSizeMs !== '' && form.windowSizeMs !== null) {
     payload.windowSizeMs = Number(form.windowSizeMs)
     if (Number.isNaN(payload.windowSizeMs)) {

@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -24,8 +25,13 @@ public class TimeseriesAnomalyResultController {
     }
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<AnomalyResultVO> queryAnomalyResults() {
-        AnomalyResultVO data = anomalyResultService.queryAnomalyResults(null);
+    public ApiResult<AnomalyResultVO> queryAnomalyResults(
+            @RequestParam(required = false) String projectId) {
+        AnomalyResultQueryRequest request = projectId == null || projectId.isBlank()
+                ? null
+                : new AnomalyResultQueryRequest();
+        if (request != null) request.setProjectId(projectId);
+        AnomalyResultVO data = anomalyResultService.queryAnomalyResults(request);
         return returnSuccess("anomaly result query success", data);
     }
 

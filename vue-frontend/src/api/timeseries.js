@@ -2,6 +2,10 @@ import http from './http'
 
 // 所有接口封装，返回 Promise<ApiResult<T>>
 export const api = {
+  // ── 项目 ─────────────────────────────────────────────────
+  createProject: (d) => http.post('/api/timeseries/projects', d),
+  listProjects: () => http.get('/api/timeseries/projects'),
+
   // ── 实例配置 ──────────────────────────────────────────────
   createInstance: (d) => http.post('/api/timeseries/instances', d),
   updateInstance: (d) => http.put('/api/timeseries/instances', d),
@@ -65,9 +69,9 @@ export const api = {
   updateEvent: (d) => http.put('/api/timeseries/events', d),
 
   // ── 结果查询 ──────────────────────────────────────────────
-  listAnomalyResults: () => http.get('/api/timeseries/anomaly-results'),
+  listAnomalyResults: (projectId) => http.get('/api/timeseries/anomaly-results', { params: { projectId } }),
   queryAnomalyResults: (d) => http.post('/api/timeseries/anomaly-results/query', d),
-  listForecastResults: () => http.get('/api/timeseries/forecast-results'),
+  listForecastResults: (projectId) => http.get('/api/timeseries/forecast-results', { params: { projectId } }),
   queryForecastResults: (d) => http.post('/api/timeseries/forecast-results/query', d),
 
   // ── 决策辅助 ──────────────────────────────────────────────
@@ -77,7 +81,7 @@ export const api = {
 
   // ── 相关性统计 ────────────────────────────────────────────
   computeStatistics: (d) => http.post('/api/timeseries/statistics/compute', d),
-  listStatistics: () => http.get('/api/timeseries/statistics'),
+  listStatistics: (projectId) => http.get('/api/timeseries/statistics', { params: { projectId } }),
 
   // ── 缓存管理 ──────────────────────────────────────────────
   cacheWarmUp: () => http.post('/api/timeseries/cache/warm-up'),

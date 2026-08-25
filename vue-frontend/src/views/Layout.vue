@@ -1,5 +1,6 @@
 <script setup>
 import { useRoute } from 'vue-router'
+import ProjectBar from '../components/ProjectBar.vue'
 
 const route = useRoute()
 
@@ -37,6 +38,7 @@ const nav = [
       </nav>
     </aside>
     <main class="content">
+      <ProjectBar />
       <router-view :key="route.path" />
     </main>
   </div>

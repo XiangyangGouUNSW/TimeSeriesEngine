@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -24,8 +25,13 @@ public class TimeseriesForecastResultController {
     }
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<ForecastResultVO> queryForecastResults() {
-        ForecastResultVO data = forecastResultService.queryForecastResults(null);
+    public ApiResult<ForecastResultVO> queryForecastResults(
+            @RequestParam(required = false) String projectId) {
+        ForecastResultQueryRequest request = projectId == null || projectId.isBlank()
+                ? null
+                : new ForecastResultQueryRequest();
+        if (request != null) request.setProjectId(projectId);
+        ForecastResultVO data = forecastResultService.queryForecastResults(request);
         return returnSuccess("forecast result query success", data);
     }
 

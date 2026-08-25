@@ -5,6 +5,7 @@ import static com.sfkg.timeseries.common.JsonSuccessResponse.returnSuccess;
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
 import com.sfkg.timeseries.common.ApiResult;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.dto.DerivedSeriesConfigSaveRequest;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -27,6 +28,7 @@ public class TimeseriesDerivedSeriesController {
         if (request == null || request.getItems() == null || request.getItems().isEmpty()) {
             throw new BusinessException("derived series items must not be empty");
         }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
         for (DerivedSeriesConfigSaveRequest.DerivedSeriesConfigItem item : request.getItems()) {
             if (item.getDerivedSequenceId() == null || item.getDerivedSequenceId().isBlank()) {
                 throw new BusinessException("derivedSequenceId must not be empty");

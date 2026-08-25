@@ -14,6 +14,7 @@ import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.common.SemanticId;
 import com.sfkg.timeseries.dto.InstanceConfigQueryRequest;
 import com.sfkg.timeseries.dto.InstanceConfigSaveRequest;
@@ -70,6 +71,7 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
         if (request == null) {
             throw new BusinessException("instance config request must not be null");
         }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
         if (request.getSequenceId() != null && request.getSequenceId().isBlank()) {
             throw new BusinessException("sequenceId must not be blank");
         }
@@ -149,7 +151,11 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
     @Override
     public List<InstanceConfigVO> queryInstanceConfigs(InstanceConfigQueryRequest request) {
         cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
-        return memoryCache.listInstanceConfigs().stream()
+        List<TimeseriesInstanceConfig> source = request != null && request.getProjectId() != null
+                && !request.getProjectId().isBlank()
+                ? memoryCache.listInstanceConfigs(request.getProjectId())
+                : memoryCache.listInstanceConfigs();
+        return source.stream()
                 .filter(entity -> matches(request, entity))
                 .map(this::toVO)
                 .collect(Collectors.toList());

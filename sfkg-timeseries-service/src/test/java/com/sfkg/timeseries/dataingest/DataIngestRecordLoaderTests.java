@@ -75,7 +75,7 @@ class DataIngestRecordLoaderTests {
     @Test
     void successfulWriteRegistersProjectDatabaseMapping() throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.createContext("/insert", exchange -> {
+        server.createContext("/update", exchange -> {
             byte[] body = """
                     {"success":true,"db_name":"ett_system_project-a","entities":1,
                      "relations":0,"triples":4,"message":"ok"}

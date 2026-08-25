@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import com.sfkg.timeseries.client.IngestBufferPool;
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.dto.HistoryDataQueryRequest;
 import com.sfkg.timeseries.dto.TimeseriesDataSaveRequest;
 import com.sfkg.timeseries.monitor.IngestThroughputMonitor;
@@ -38,12 +39,21 @@ public class TimeseriesDataServiceImpl implements TimeseriesDataService {
         if (request == null || request.getPoints() == null || request.getPoints().isEmpty()) {
             throw new BusinessException("ingest points are required");
         }
+        String projectId = ProjectIdValidator.require(request.getProjectId());
+        request.setProjectId(projectId);
 
         // Route each point through the hash-partitioned buffer pool
         int pointCount = request.getPoints().size();
         for (TimeseriesDataSaveRequest.IngestPointDTO point : request.getPoints()) {
-            if (point.getProjectId() == null) {
-                point.setProjectId(request.getProjectId());
+            if (point == null) {
+                throw new BusinessException("ingest point must not be null");
+            }
+            if (point.getProjectId() == null || point.getProjectId().isBlank()) {
+                point.setProjectId(projectId);
+            } else if (!projectId.equals(ProjectIdValidator.require(point.getProjectId()))) {
+                throw new BusinessException("all ingest points must belong to projectId: " + projectId);
+            } else {
+                point.setProjectId(projectId);
             }
             int partition = ingestBufferPool.partition(point.getProjectId(), point.getSequenceId());
             ingestBufferPool.offer(point, partition);

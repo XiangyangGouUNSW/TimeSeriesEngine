@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -42,14 +43,20 @@ public class TimeseriesEventController {
     }
 
     @GetMapping(value = "/{eventId}", produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<EventDetailVO> getEventDetail(@PathVariable String eventId) {
-        EventDetailVO data = eventService.getEventDetail(eventId);
+    public ApiResult<EventDetailVO> getEventDetail(
+            @PathVariable String eventId,
+            @RequestParam(required = false) String projectId) {
+        EventDetailVO data = projectId == null || projectId.isBlank()
+                ? eventService.getEventDetail(eventId)
+                : eventService.getEventDetail(projectId, eventId);
         return returnSuccess("event detail query success", data);
     }
 
     @PostMapping(value = "/detail", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
     public ApiResult<EventDetailVO> getEventDetailByJson(@RequestBody EventDetailQueryRequest request) {
-        EventDetailVO data = eventService.getEventDetail(request.getEventId());
+        EventDetailVO data = request.getProjectId() == null || request.getProjectId().isBlank()
+                ? eventService.getEventDetail(request.getEventId())
+                : eventService.getEventDetail(request.getProjectId(), request.getEventId());
         return returnSuccess("event detail query success", data);
     }
 

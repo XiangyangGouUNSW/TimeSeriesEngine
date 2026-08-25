@@ -299,7 +299,7 @@ export const pages = {
       { name: 'confirmStatus', label: '确认状态', type: 'select', options: CONFIRM_STATUS },
       { name: 'handleStatus', label: '处理状态', type: 'select', options: HANDLE_STATUS },
     ],
-    detailGet: (row) => `/api/timeseries/events/${encodeURIComponent(row.eventId)}`,
+    detailGet: (row) => `/api/timeseries/events/${encodeURIComponent(row.eventId)}?projectId=${encodeURIComponent(row.projectId || '')}`,
     columns: [
       { key: 'eventId', label: '事件ID' },
       { key: 'projectId', label: '项目ID' },

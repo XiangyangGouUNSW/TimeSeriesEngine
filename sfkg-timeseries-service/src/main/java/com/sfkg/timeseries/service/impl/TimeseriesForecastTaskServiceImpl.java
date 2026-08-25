@@ -14,6 +14,7 @@ import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.ForecastGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.common.SemanticId;
 import com.sfkg.timeseries.dto.ForecastTaskSaveRequest;
 import com.sfkg.timeseries.dto.TaskQueryRequest;
@@ -65,6 +66,7 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
         if (request == null) {
             throw new BusinessException("forecast task request must not be null");
         }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
         validateForecastObjects(request);
         validateForecastHorizon(request.getForecastHorizon());
         cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
@@ -108,7 +110,11 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
     @Override
     public List<ForecastTaskVO> listForecastTasks(TaskQueryRequest request) {
         cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
-        return memoryCache.listForecastTasks().stream()
+        List<TimeseriesForecastTask> source = request != null && request.getProjectId() != null
+                && !request.getProjectId().isBlank()
+                ? memoryCache.listForecastTasks(request.getProjectId())
+                : memoryCache.listForecastTasks();
+        return source.stream()
                 .filter(entity -> matches(request, entity))
                 .map(this::toVO)
                 .collect(Collectors.toList());
@@ -119,6 +125,7 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
         if (request == null || request.getTaskId() == null) {
             return;
         }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
         cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
         TimeseriesForecastTask entity = memoryCache.computeForecastTask(
                 request.getProjectId(), request.getTaskId(), existing -> {

@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -31,7 +32,11 @@ public class TimeseriesStatisticsController {
     }
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResult<List<TimeseriesStatisticsResult>> list() {
-        return returnSuccess("statistics list success", statisticsService.listResults());
+    public ApiResult<List<TimeseriesStatisticsResult>> list(
+            @RequestParam(required = false) String projectId) {
+        List<TimeseriesStatisticsResult> data = projectId == null || projectId.isBlank()
+                ? statisticsService.listResults()
+                : statisticsService.listResults(projectId);
+        return returnSuccess("statistics list success", data);
     }
 }

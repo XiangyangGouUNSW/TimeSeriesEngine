@@ -41,7 +41,11 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
     @Override
     public AnomalyResultVO queryAnomalyResults(AnomalyResultQueryRequest request) {
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
-        return memoryCache.listEvents().stream()
+        List<TimeseriesEvent> source = request != null && request.getProjectId() != null
+                && !request.getProjectId().isBlank()
+                ? memoryCache.listEvents(request.getProjectId())
+                : memoryCache.listEvents();
+        return source.stream()
                 .filter(event -> matches(request, event))
                 .findFirst()
                 .map(event -> toVO(request, event))

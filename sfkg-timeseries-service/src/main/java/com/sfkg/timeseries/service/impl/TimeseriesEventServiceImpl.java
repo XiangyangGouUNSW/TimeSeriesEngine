@@ -13,6 +13,7 @@ import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.common.SemanticId;
 import com.sfkg.timeseries.dto.EventQueryRequest;
 import com.sfkg.timeseries.dto.EventSaveRequest;
@@ -41,7 +42,11 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
     @Override
     public List<EventListVO> listEvents(EventQueryRequest request) {
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
-        return memoryCache.listEvents().stream()
+        List<TimeseriesEvent> source = request != null && request.getProjectId() != null
+                && !request.getProjectId().isBlank()
+                ? memoryCache.listEvents(request.getProjectId())
+                : memoryCache.listEvents();
+        return source.stream()
                 .filter(entity -> matches(request, entity))
                 .map(this::toListVO)
                 .collect(Collectors.toList());
@@ -56,10 +61,19 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
     }
 
     @Override
+    public EventDetailVO getEventDetail(String projectId, String eventId) {
+        cacheManager.ensureTableLoaded(CachedTable.EVENT);
+        return memoryCache.getEvent(projectId, eventId)
+                .map(this::toDetailVO)
+                .orElseGet(EventDetailVO::new);
+    }
+
+    @Override
     public String saveEvent(EventSaveRequest request) {
         if (request == null) {
             throw new BusinessException("event request must not be null");
         }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
         if (request.getEventName() == null || request.getEventName().isBlank()) {
             throw new BusinessException("eventName must not be empty");
         }
@@ -109,6 +123,7 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
         if (entity == null) {
             return null;
         }
+        entity.setProjectId(ProjectIdValidator.require(entity.getProjectId()));
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
         String eventId = entity.getEventId() != null
                 ? entity.getEventId()
