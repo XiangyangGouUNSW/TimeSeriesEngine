@@ -68,6 +68,9 @@ public class DataIngestPersistenceService {
             Map<String, Object> rawFields = toRawFields(entity);
             String projectId = ProjectIdValidator.require(
                     rawFields.get("projectId") == null ? null : String.valueOf(rawFields.get("projectId")));
+            // 项目目录注册不依赖 gStore 开关：即使 DataIngest 关闭，
+            // 也要保证 /api/timeseries/projects 能返回该项目（否则前端项目栏缺失）。
+            registerProject(projectId);
             if (!dataIngestClient.isEnabled() || businessKey == null || businessKey.isBlank()) {
                 return;
             }
@@ -84,7 +87,6 @@ public class DataIngestPersistenceService {
                     response.getRelations(),
                     response.getTriples(),
                     response.getMessage());
-            registerProject(projectId);
         } catch (RuntimeException exception) {
             LOG.warn("DataIngest upsert failed: table={} key={} reason={}",
                     tableName, businessKey, exception.getMessage());

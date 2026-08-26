@@ -16,14 +16,18 @@ export async function loadProjects() {
     if (response?.success === false) {
       throw new Error(response.message || '项目列表查询失败')
     }
-    projectContext.projects.value = response?.data || []
-    const exists = projectContext.projects.value.some(
-      (project) => project.projectId === projectContext.currentProjectId.value,
-    )
-    if (!exists) {
-      projectContext.currentProjectId.value = projectContext.projects.value[0]?.projectId || ''
+    const projects = response?.data || []
+    const current = projectContext.currentProjectId.value
+    const exists = projects.some((project) => project.projectId === current)
+    if (!exists && current) {
+      // 后端项目目录可能滞后（DataIngest 关闭时新项目未自动注册）：
+      // 保留本地选择并补进下拉选项，避免被静默切到其他项目导致查询无数据。
+      projects.push({ projectId: current, databaseName: '', status: 'ACTIVE' })
+    } else if (!current && projects.length) {
+      projectContext.currentProjectId.value = projects[0].projectId
       persistCurrentProject()
     }
+    projectContext.projects.value = projects
     return response
   } finally {
     projectContext.loading.value = false
