@@ -4,12 +4,23 @@ import axios from 'axios'
 const http = axios.create({
   baseURL: '',
   timeout: 60000,
+  withCredentials: true,
+  xsrfCookieName: 'XSRF-TOKEN',
+  xsrfHeaderName: 'X-XSRF-TOKEN',
+})
+
+http.interceptors.request.use((config) => {
+  config.withCredentials = true
+  return config
 })
 
 // 后端统一返回 ApiResult<T> = { success, message, data }
 http.interceptors.response.use(
   (response) => response.data,
   (error) => {
+    if (error.response?.status === 401 && window.location.hash !== '#/login') {
+      window.location.hash = '#/login'
+    }
     const detail =
       error.response && error.response.data
         ? error.response.data.message || JSON.stringify(error.response.data)

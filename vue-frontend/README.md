@@ -19,6 +19,10 @@ npm run dev
 
 浏览器访问 http://localhost:5173
 
+首次启动后可使用默认管理员登录：用户名 `admin`，密码 `admin123`。登录成功后，浏览器通过 `JSESSIONID` Cookie 维持服务端 Session；前端请求已开启 `withCredentials`，不需要手动把用户信息放入业务请求参数。
+
+系统支持三种权限：`HISTORY_DATA`（历史数据）、`CONFIG_INFO`（配置和项目）、`TASK_INFO`（任务、结果、事件和决策）。没有登录会跳转到登录页，没有对应权限的页面不会显示，直接请求接口时服务端返回 `401` 或 `403`。
+
 开发模式下 Vite 将 `/api` 代理转发到 Java 后端 `http://localhost:8080`（可用环境变量 `BACKEND_URL` 覆盖）：
 
 ```bash

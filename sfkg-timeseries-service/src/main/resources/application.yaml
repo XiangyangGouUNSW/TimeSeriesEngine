@@ -4,6 +4,13 @@ spring:
 
 server:
   port: 8080
+  servlet:
+    session:
+      timeout: ${TIMESERIES_SESSION_TIMEOUT:30m}
+      cookie:
+        http-only: true
+        secure: ${TIMESERIES_SESSION_COOKIE_SECURE:false}
+        same-site: lax
 
   # ── Explicit REST (Tomcat) capacity configuration ──────────────
   # These are Spring Boot native properties — 100% reliable.
@@ -28,6 +35,10 @@ timeseries:
     database: ${TIMESERIES_DATA_INGEST_DATABASE:ett-system}
     timeout-millis: ${TIMESERIES_DATA_INGEST_TIMEOUT_MILLIS:1500}
   project-catalog-file: ${TIMESERIES_PROJECT_CATALOG_FILE:data/timeseries-projects.json}
+  auth:
+    user-file: ${TIMESERIES_AUTH_USER_FILE:data/timeseries-users.json}
+    bootstrap-username: ${TIMESERIES_AUTH_BOOTSTRAP_USERNAME:admin}
+    bootstrap-password: ${TIMESERIES_AUTH_BOOTSTRAP_PASSWORD:admin123}
   grpc:
     server-port: ${TIMESERIES_GRPC_SERVER_PORT:9105}
     analysis-receiver-port: ${TIMESERIES_GRPC_ANALYSIS_RECEIVER_PORT:9106}

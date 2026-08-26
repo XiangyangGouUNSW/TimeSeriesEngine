@@ -2,6 +2,12 @@ import http from './http'
 
 // 所有接口封装，返回 Promise<ApiResult<T>>
 export const api = {
+  // ── 登录鉴权 ─────────────────────────────────────────────
+  login: (d) => http.post('/api/auth/login', d),
+  currentUser: () => http.get('/api/auth/me'),
+  csrfToken: () => http.get('/api/auth/csrf'),
+  logout: () => http.post('/api/auth/logout'),
+
   // ── 项目 ─────────────────────────────────────────────────
   createProject: (d) => http.post('/api/timeseries/projects', d),
   listProjects: () => http.get('/api/timeseries/projects'),

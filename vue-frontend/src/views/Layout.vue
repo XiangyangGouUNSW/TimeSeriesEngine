@@ -1,33 +1,47 @@
 <script setup>
-import { useRoute } from 'vue-router'
+import { computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import ProjectBar from '../components/ProjectBar.vue'
+import { authStore } from '../stores/auth'
 
 const route = useRoute()
+const router = useRouter()
 
 const nav = [
-  { path: '/instances', label: '实例配置' },
-  { path: '/categories', label: '语义类别' },
-  { path: '/constraints', label: '语义约束' },
-  { path: '/relations', label: '语义关系' },
-  { path: '/data', label: '数据管理' },
-  { path: '/window-config', label: '窗口配置' },
-  { path: '/derived-series', label: '派生序列' },
-  { path: '/anomaly-tasks', label: '异常检测任务' },
-  { path: '/forecast-tasks', label: '预测任务' },
-  { path: '/events', label: '事件管理' },
-  { path: '/results', label: '结果查询' },
-  { path: '/statistics', label: '相关性统计' },
-  { path: '/decision', label: '决策辅助' },
+  { path: '/instances', label: '实例配置', permission: 'CONFIG_INFO' },
+  { path: '/categories', label: '语义类别', permission: 'CONFIG_INFO' },
+  { path: '/constraints', label: '语义约束', permission: 'CONFIG_INFO' },
+  { path: '/relations', label: '语义关系', permission: 'CONFIG_INFO' },
+  { path: '/data', label: '数据管理', permission: 'HISTORY_DATA' },
+  { path: '/window-config', label: '窗口配置', permission: 'CONFIG_INFO' },
+  { path: '/derived-series', label: '派生序列', permission: 'CONFIG_INFO' },
+  { path: '/anomaly-tasks', label: '异常检测任务', permission: 'TASK_INFO' },
+  { path: '/forecast-tasks', label: '预测任务', permission: 'TASK_INFO' },
+  { path: '/events', label: '事件管理', permission: 'TASK_INFO' },
+  { path: '/results', label: '结果查询', permission: 'TASK_INFO' },
+  { path: '/statistics', label: '相关性统计', permission: 'HISTORY_DATA' },
+  { path: '/decision', label: '决策辅助', permission: 'TASK_INFO' },
 ]
+
+const visibleNav = computed(() => nav.filter((item) => authStore.hasPermission(item.permission)))
+
+async function logout() {
+  await authStore.logout()
+  await router.replace('/login')
+}
 </script>
 
 <template>
   <div class="layout">
     <aside class="sidebar">
       <div class="brand">⏱ Timeseries</div>
+      <div class="account-bar">
+        <span>{{ authStore.user?.username }}</span>
+        <button type="button" title="退出登录" @click="logout">退出</button>
+      </div>
       <nav>
         <router-link
-          v-for="item in nav"
+          v-for="item in visibleNav"
           :key="item.path"
           :to="item.path"
           :class="{ active: route.path === item.path }"
@@ -68,6 +82,24 @@ const nav = [
   padding: 0 18px 18px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   margin-bottom: 10px;
+}
+
+.account-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 18px 14px;
+  color: var(--sidebar-text);
+  font-size: 12px;
+}
+
+.account-bar button {
+  padding: 4px 7px;
+  color: var(--sidebar-text);
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.22);
+  font-size: 11px;
 }
 
 nav {
