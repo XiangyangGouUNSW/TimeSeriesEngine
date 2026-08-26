@@ -18,7 +18,6 @@ const nav = [
   { path: '/results', label: '结果查询' },
   { path: '/statistics', label: '相关性统计' },
   { path: '/decision', label: '决策辅助' },
-  { path: '/cache', label: '缓存管理' },
 ]
 </script>
 

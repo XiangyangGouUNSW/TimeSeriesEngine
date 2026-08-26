@@ -8,7 +8,6 @@ import DerivedSeriesPage from '../views/DerivedSeriesPage.vue'
 import StatisticsPage from '../views/StatisticsPage.vue'
 import DecisionPage from '../views/DecisionPage.vue'
 import ResultsPage from '../views/ResultsPage.vue'
-import CachePage from '../views/CachePage.vue'
 
 const routes = [
   {
@@ -29,7 +28,6 @@ const routes = [
       { path: 'statistics', component: StatisticsPage },
       { path: 'decision', component: DecisionPage },
       { path: 'results', component: ResultsPage },
-      { path: 'cache', component: CachePage },
     ],
   },
 ]

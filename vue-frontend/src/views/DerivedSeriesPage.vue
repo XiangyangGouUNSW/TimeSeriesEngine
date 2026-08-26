@@ -1,7 +1,10 @@
 <script setup>
 import { reactive, ref, watch } from 'vue'
 import { api } from '../api/timeseries'
+import RefInput from '../components/RefInput.vue'
+import DerivedExprInput from '../components/DerivedExprInput.vue'
 import { toastError } from '../composables/toast'
+import { useRefOptions } from '../composables/refOptions'
 import ResultViewer from '../components/ResultViewer.vue'
 import { projectContext, withCurrentProject } from '../stores/project'
 
@@ -10,22 +13,40 @@ const loading = ref(false)
 const response = ref(null)
 const error = ref('')
 
-// 线性组合模式
+const { refOptions, loadTypes } = useRefOptions()
+loadTypes(['instance'])
+
+const seqField = { name: 'sequenceId', placeholder: '按子串匹配选择实例' }
+
+// 线性组合模式：逐行配置 序列 + 系数
 const linear = reactive({
   projectId: projectContext.currentProjectId.value,
   derivedSequenceId: '',
   enabled: 'true',
-  termsJson: '[\n  { "sequenceId": "ETTh1_HUFL", "coefficient": 1.0 }\n]',
+  terms: [{ sequenceId: '', coefficient: 1.0 }],
   bias: '',
 })
 
-// 表达式模式
+function addTerm() {
+  linear.terms.push({ sequenceId: '', coefficient: 1.0 })
+}
+
+function removeTerm(i) {
+  linear.terms.splice(i, 1)
+}
+
+// 表达式模式：结构化递归编辑
 const expr = reactive({
   projectId: projectContext.currentProjectId.value,
   derivedSequenceId: '',
   enabled: 'true',
-  expressionJson:
-    '{\n  "binary": {\n    "operator": "ADD",\n    "left": { "sequenceId": "ETTh1_HUFL" },\n    "right": { "constant": 1.0 }\n  }\n}',
+  expression: {
+    binary: {
+      operator: 'ADD',
+      left: { sequenceId: '' },
+      right: { constant: 1.0 },
+    },
+  },
 })
 
 // 原始 JSON 模式
@@ -39,6 +60,7 @@ watch(
     linear.projectId = projectId
     expr.projectId = projectId
     response.value = null
+    loadTypes(['instance'])
   },
 )
 
@@ -67,11 +89,22 @@ async function submitLinear() {
     toastError('请填写必填字段：派生序列ID')
     return
   }
-  let terms
-  try {
-    terms = JSON.parse(linear.termsJson)
-  } catch (e) {
-    toastError('terms JSON 解析失败：' + e.message)
+  const terms = linear.terms
+    .filter((t) => t.sequenceId && String(t.sequenceId).trim())
+    .map((t) => {
+      const item = { sequenceId: String(t.sequenceId).trim() }
+      if (t.coefficient !== '' && t.coefficient !== null && t.coefficient !== undefined) {
+        item.coefficient = Number(t.coefficient)
+        if (Number.isNaN(item.coefficient)) {
+          toastError('系数必须为数字')
+          return null
+        }
+      }
+      return item
+    })
+  if (terms.some((t) => t === null)) return
+  if (!terms.length) {
+    toastError('请至少添加一个序列项')
     return
   }
   const item = {
@@ -86,9 +119,21 @@ async function submitLinear() {
       return
     }
   }
-  const payload = { items: [item] }
-  if (linear.projectId) payload.projectId = linear.projectId
-  await send(payload)
+  await send({ items: [item] })
+}
+
+function expressionFilled(node) {
+  if (!node) return false
+  if (node.sequenceId !== undefined && node.sequenceId !== null && String(node.sequenceId).trim() !== '') {
+    return true
+  }
+  if (node.constant !== undefined && node.constant !== null && node.constant !== '') {
+    return true
+  }
+  if (node.binary) {
+    return expressionFilled(node.binary.left) && expressionFilled(node.binary.right)
+  }
+  return false
 }
 
 async function submitExpression() {
@@ -96,21 +141,19 @@ async function submitExpression() {
     toastError('请填写必填字段：派生序列ID')
     return
   }
-  let expression
-  try {
-    expression = JSON.parse(expr.expressionJson)
-  } catch (e) {
-    toastError('expression JSON 解析失败：' + e.message)
+  if (!expressionFilled(expr.expression)) {
+    toastError('表达式不完整：请填写序列或常数')
     return
   }
-  const item = {
-    derivedSequenceId: expr.derivedSequenceId,
-    enabled: expr.enabled === 'true',
-    expression,
-  }
-  const payload = { items: [item] }
-  if (expr.projectId) payload.projectId = expr.projectId
-  await send(payload)
+  await send({
+    items: [
+      {
+        derivedSequenceId: expr.derivedSequenceId,
+        enabled: expr.enabled === 'true',
+        expression: expr.expression,
+      },
+    ],
+  })
 }
 
 async function submitRaw() {
@@ -148,12 +191,32 @@ async function submitRaw() {
             <select v-model="linear.enabled"><option value="true">true</option><option value="false">false</option></select>
           </div>
           <div class="field full">
-            <label>terms（JSON 数组：[{sequenceId, coefficient}]）</label>
-            <textarea v-model="linear.termsJson" rows="5"></textarea>
+            <label>线性组合项（Σ 系数 × 序列 + 偏置）</label>
+            <div class="linear-terms">
+              <div v-if="linear.terms.length" class="term-head">
+                <span class="t-seq">序列ID</span>
+                <span class="t-coef">系数</span>
+                <span class="t-del-slot"></span>
+              </div>
+              <div v-for="(t, i) in linear.terms" :key="i" class="term-row">
+                <div class="t-seq">
+                  <RefInput :field="seqField" :options="refOptions.instance || []" v-model="t.sequenceId" />
+                </div>
+                <input class="t-coef" type="number" step="any" v-model="t.coefficient" placeholder="系数（如 1）" />
+                <button type="button" class="t-del" @click="removeTerm(i)">删除</button>
+              </div>
+              <button type="button" class="t-add" @click="addTerm">＋ 添加序列项</button>
+              <small class="t-hint">
+                派生序列 = Σ(系数 × 序列) + 偏置；序列从已有实例下拉选择（按子串匹配），可自由输入自定义序列；系数留空则忽略该项。
+              </small>
+            </div>
           </div>
-          <div class="field"><label>bias（偏置，可选）</label><input v-model="linear.bias" type="number" /></div>
+          <div class="field"><label>bias（偏置，可选，与序列同单位）</label><input v-model="linear.bias" type="number" step="any" /></div>
         </div>
-        <div class="actions"><button class="primary" :disabled="loading" @click="submitLinear">同步（线性组合）</button></div>
+        <div class="actions">
+          <button :disabled="loading" @click="loadTypes(['instance'])">刷新下拉选项</button>
+          <button class="primary" :disabled="loading" @click="submitLinear">同步（线性组合）</button>
+        </div>
       </template>
 
       <template v-else-if="mode === 'expression'">
@@ -165,11 +228,16 @@ async function submitRaw() {
             <select v-model="expr.enabled"><option value="true">true</option><option value="false">false</option></select>
           </div>
           <div class="field full">
-            <label>expression（JSON：{sequenceId} / {constant} / {binary:{operator,left,right}}）</label>
-            <textarea v-model="expr.expressionJson" rows="9"></textarea>
+            <label>表达式（序列 / 常数 / 二元运算 自由组合）</label>
+            <div class="expr-editor">
+              <DerivedExprInput v-model="expr.expression" :options="refOptions.instance || []" />
+            </div>
           </div>
         </div>
-        <div class="actions"><button class="primary" :disabled="loading" @click="submitExpression">同步（表达式）</button></div>
+        <div class="actions">
+          <button :disabled="loading" @click="loadTypes(['instance'])">刷新下拉选项</button>
+          <button class="primary" :disabled="loading" @click="submitExpression">同步（表达式）</button>
+        </div>
       </template>
 
       <template v-else>

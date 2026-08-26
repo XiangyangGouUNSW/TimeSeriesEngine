@@ -459,6 +459,137 @@ tr.clickable {
   line-height: 1.6;
 }
 
+/* ── 派生序列：线性组合逐行编辑 ── */
+.linear-terms .term-head,
+.linear-terms .term-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.linear-terms .term-head {
+  color: #9aa5b1;
+  font-size: 11px;
+  margin-bottom: 2px;
+}
+
+.linear-terms .t-seq {
+  flex: 2;
+  min-width: 150px;
+}
+
+.linear-terms .t-coef {
+  flex: 0.8;
+  min-width: 90px;
+  width: auto;
+}
+
+.linear-terms .t-del,
+.linear-terms .t-del-slot {
+  flex-shrink: 0;
+  width: 52px;
+}
+
+.linear-terms .t-add {
+  margin-top: 4px;
+  width: 100%;
+  color: var(--primary);
+  border-style: dashed;
+}
+
+.linear-terms .t-hint {
+  display: block;
+  margin-top: 6px;
+  color: #9aa5b1;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+/* ── 派生序列：表达式递归编辑 ── */
+.expr-editor {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: #fafbfd;
+}
+
+.expr-node {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.expr-node select {
+  width: auto;
+  min-width: 100px;
+}
+
+.expr-seq {
+  flex: 1;
+  min-width: 150px;
+}
+
+.expr-const {
+  width: 110px;
+}
+
+.expr-children {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 220px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+}
+
+/* ── 数据文件导入 ── */
+.import-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.import-row input[type='file'] {
+  width: auto;
+  flex-shrink: 0;
+}
+
+.import-row > input[type='text'] {
+  flex: 1;
+  min-width: 160px;
+}
+
+.import-time-col {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.import-time-col input {
+  width: 70px;
+}
+
+.import-preview {
+  margin-top: 8px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.import-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .project-bar {
   display: flex;
   align-items: end;

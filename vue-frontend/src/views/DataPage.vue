@@ -1,5 +1,6 @@
 <script setup>
 import { reactive, ref, watch } from 'vue'
+import * as XLSX from 'xlsx'
 import { api } from '../api/timeseries'
 import RefInput from '../components/RefInput.vue'
 import { toastError } from '../composables/toast'
@@ -64,6 +65,157 @@ async function doIngest() {
     return
   }
   if (ingest.returnResolvedData) payload.returnResolvedData = ingest.returnResolvedData === 'true'
+  await run(api.ingestData(payload))
+}
+
+// ── 文件导入（CSV / XLSX） ─────────────────────────────────
+const importOpts = reactive({
+  prefix: 'ETTh1_',
+  timeColumn: 0,
+})
+const importPreview = ref(null)
+const importedPoints = ref([])
+
+async function onFileSelected(e) {
+  const file = e.target.files && e.target.files[0]
+  e.target.value = ''
+  if (!file) return
+  try {
+    const rows = await parseImportFile(file)
+    const result = buildImportPoints(rows, file.name)
+    importedPoints.value = result.points
+    importPreview.value = result
+    if (!result.points.length) {
+      toastError('未解析出任何点位，请检查时间列与表头列名')
+    }
+  } catch (err) {
+    importedPoints.value = []
+    importPreview.value = null
+    toastError('文件解析失败：' + (err && err.message ? err.message : err))
+  }
+}
+
+function parseImportFile(file) {
+  const ext = (file.name.split('.').pop() || '').toLowerCase()
+  if (ext === 'csv') {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const text = String(reader.result || '')
+        const lines = text.split(/\r?\n/).filter((line) => line.trim() !== '')
+        resolve(lines.map(parseCsvLine))
+      }
+      reader.onerror = () => reject(reader.error || new Error('读取失败'))
+      reader.readAsText(file, 'utf-8')
+    })
+  }
+  if (ext === 'xlsx' || ext === 'xls') {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => {
+        try {
+          const workbook = XLSX.read(new Uint8Array(reader.result), { type: 'array' })
+          const sheet = workbook.Sheets[workbook.SheetNames[0]]
+          resolve(XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }))
+        } catch (err) {
+          reject(err)
+        }
+      }
+      reader.onerror = () => reject(reader.error || new Error('读取失败'))
+      reader.readAsArrayBuffer(file)
+    })
+  }
+  throw new Error('仅支持 .csv / .xlsx / .xls 文件')
+}
+
+function parseCsvLine(line) {
+  const cells = []
+  let current = ''
+  let inQuotes = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"'
+        i++
+      } else {
+        inQuotes = !inQuotes
+      }
+    } else if (ch === ',' && !inQuotes) {
+      cells.push(current)
+      current = ''
+    } else {
+      current += ch
+    }
+  }
+  cells.push(current)
+  return cells
+}
+
+function parseTimeMs(raw) {
+  const s = String(raw ?? '').trim()
+  if (!s) return null
+  if (/^\d+$/.test(s)) {
+    const n = Number(s)
+    return s.length <= 10 ? n * 1000 : n // 秒级时间戳 → 毫秒
+  }
+  const ms = new Date(s.replace(' ', 'T')).getTime()
+  return Number.isNaN(ms) ? null : ms
+}
+
+function buildImportPoints(rows, fileName) {
+  if (!rows || rows.length < 2) {
+    throw new Error('至少需要表头 + 一行数据')
+  }
+  const timeIdx = Math.max(0, Number(importOpts.timeColumn) || 0)
+  const prefix = importOpts.prefix.trim()
+  const headers = rows[0].map((h) => String(h ?? '').trim())
+  const valueCols = headers
+    .map((header, index) => ({ header, index }))
+    .filter(({ header, index }) => index !== timeIdx && header !== '')
+  if (!valueCols.length) {
+    throw new Error('未找到序列列：请确认第一行为表头且时间列之外还有序列列')
+  }
+  const points = []
+  let skipped = 0
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r]
+    if (!row) continue
+    const timeMs = parseTimeMs(row[timeIdx])
+    if (timeMs === null) {
+      skipped++
+      continue
+    }
+    for (const { header, index } of valueCols) {
+      const raw = row[index]
+      if (raw === '' || raw === undefined || raw === null) continue
+      const point = { sequenceId: prefix + header, dataSourceId: fileName, time: timeMs }
+      const text = String(raw).trim()
+      const num = Number(text)
+      if (text !== '' && !Number.isNaN(num)) point.doubleValue = num
+      else point.stringValue = text
+      points.push(point)
+    }
+  }
+  return {
+    fileName,
+    valueCols: valueCols.map((c) => prefix + c.header),
+    dataRows: rows.length - 1,
+    points,
+    skipped,
+  }
+}
+
+async function doImport() {
+  if (!importedPoints.value.length) {
+    toastError('请先选择并解析文件')
+    return
+  }
+  const payload = withCurrentProject({ points: importedPoints.value })
+  if (!payload) {
+    toastError('请先选择当前项目，且请求项目必须与当前项目一致')
+    return
+  }
   await run(api.ingestData(payload))
 }
 
@@ -168,9 +320,33 @@ watch(
           <label>points（JSON 数组，time 为 ISO 时间，值字段 doubleValue/int64Value/boolValue/stringValue）</label>
           <textarea v-model="ingest.pointsJson" rows="10"></textarea>
         </div>
+        <div class="field full">
+          <label>从文件导入（.csv / .xlsx / .xls）</label>
+          <div class="import-row">
+            <input type="file" accept=".csv,.xlsx,.xls" @change="onFileSelected" />
+            <input v-model="importOpts.prefix" placeholder="序列ID前缀，如 ETTh1_" title="序列ID = 前缀 + 列名" />
+            <label class="import-time-col">时间列
+              <input v-model.number="importOpts.timeColumn" type="number" min="0" />
+            </label>
+          </div>
+          <small class="t-hint">
+            第一行为表头；时间列默认第 0 列（支持 yyyy-MM-dd HH:mm:ss 或秒/毫秒时间戳）；
+            其余列按「序列ID = 前缀 + 列名」生成点位，数值写 doubleValue，非数值写 stringValue。
+          </small>
+          <div v-if="importPreview" class="import-preview">
+            <span class="badge ok">已解析 {{ importPreview.fileName }}</span>
+            <span class="import-meta">
+              {{ importPreview.valueCols.length }} 个序列列 ｜ {{ importPreview.dataRows }} 行数据 →
+              {{ importPreview.points.length }} 条点位（跳过 {{ importPreview.skipped }} 行）
+            </span>
+          </div>
+        </div>
       </div>
       <div class="actions">
         <button class="primary" :disabled="loading" @click="doIngest">写入数据</button>
+        <button :disabled="loading || !importedPoints.length" @click="doImport">
+          导入文件数据（{{ importedPoints.length }} 点）
+        </button>
       </div>
     </div>
 
