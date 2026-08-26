@@ -1,20 +1,29 @@
 <script setup>
+import { ref } from 'vue'
 import RefInput from './RefInput.vue'
 
-// 约束项（terms）编辑器：逐项配置 变量名 / 映射序列 / 系数 / 采样偏移
-// 变量名 → 映射序列 的对应关系会自动汇总为 variableMapping 随请求提交
+// 约束项（terms）编辑器：逐项配置 变量名 / 映射目标（实例或类别） / 系数 / 采样偏移
+// 「变量名 → 映射ID」自动汇总为 variableMapping 随请求提交；
+// 约束级别按钮：实例级（映射到具体序列）/ 类别级（映射到类别，后端自动展开为该类别下所有实例）
 const props = defineProps({
   modelValue: { type: Array, default: () => [] },
-  options: { type: Array, default: () => [] }, // 映射序列下拉选项（已有实例列表）
+  options: { type: Array, default: () => [] }, // 实例选项
+  categoryOptions: { type: Array, default: () => [] }, // 类别选项
 })
 const emit = defineEmits(['update:modelValue'])
 
-const seqField = { name: 'sequenceId', placeholder: '按子串匹配选择已有实例' }
+const level = ref('sequence') // sequence=实例级 | category=类别级
+
+function setLevel(type) {
+  level.value = type
+  // 切换级别时，统一改变所有已有行的映射类型
+  emit('update:modelValue', (props.modelValue || []).map((t) => ({ ...t, mappingType: type })))
+}
 
 function addTerm() {
   emit('update:modelValue', [
     ...(props.modelValue || []),
-    { variable: '', sequenceId: '', coefficient: 1.0, sampleOffset: 0 },
+    { variable: '', mappingType: level.value, mappingId: '', coefficient: 1.0, sampleOffset: 0 },
   ])
 }
 
@@ -33,9 +42,20 @@ function setField(i, key, value) {
 
 <template>
   <div class="terms-editor">
+    <div class="terms-level">
+      <span class="terms-level-label">约束级别</span>
+      <button type="button" :class="{ active: level === 'sequence' }" @click="setLevel('sequence')">
+        实例级（映射到具体序列）
+      </button>
+      <button type="button" :class="{ active: level === 'category' }" @click="setLevel('category')">
+        类别级（映射到类别，自动展开该类别下所有实例）
+      </button>
+    </div>
+
     <div v-if="modelValue.length" class="term-head">
       <span class="t-var">变量名</span>
-      <span class="t-seq">映射序列ID</span>
+      <span class="t-type">类型</span>
+      <span class="t-seq">映射ID</span>
       <span class="t-coef">系数（无量纲）</span>
       <span class="t-offset">采样偏移（步）</span>
       <span class="t-del-slot"></span>
@@ -49,12 +69,23 @@ function setField(i, key, value) {
         placeholder="如 x（表达式中的变量名）"
         @input="setField(i, 'variable', $event.target.value)"
       />
+      <select
+        class="t-type"
+        :value="t.mappingType || 'sequence'"
+        @change="setField(i, 'mappingType', $event.target.value)"
+      >
+        <option value="sequence">实例</option>
+        <option value="category">类别</option>
+      </select>
       <div class="t-seq">
         <RefInput
-          :field="seqField"
-          :options="options"
-          :model-value="t.sequenceId || ''"
-          @update:model-value="(v) => setField(i, 'sequenceId', v)"
+          :field="{
+            name: 'mappingId',
+            placeholder: (t.mappingType || 'sequence') === 'category' ? '按子串匹配选择已有类别' : '按子串匹配选择已有实例',
+          }"
+          :options="(t.mappingType || 'sequence') === 'category' ? categoryOptions : options"
+          :model-value="t.mappingId || ''"
+          @update:model-value="(v) => setField(i, 'mappingId', v)"
         />
       </div>
       <input
@@ -79,9 +110,9 @@ function setField(i, key, value) {
     <button type="button" class="t-add" @click="addTerm">＋ 添加约束项</button>
     <small class="t-hint">
       说明：变量名需与「约束表达式」中的变量一致（如表达式 x &lt; 40 中的 x）；
-      映射序列为改变量绑定的实例序列（按子串匹配的下拉框选择）；
+      映射目标可选「实例」（具体序列 ID）或「类别」（类别 ID，后端自动展开为该类别下所有实例）；
       每个约束项构成 系数 × 变量(t − 采样偏移) 的线性项，系数与采样偏移留空则忽略该项；
-      所有「变量名 → 映射序列」会自动生成 variableMapping 随请求提交，无需单独填写。
+      所有「变量名 → 映射ID」会自动生成 variableMapping 随请求提交，无需单独填写。
     </small>
   </div>
 </template>

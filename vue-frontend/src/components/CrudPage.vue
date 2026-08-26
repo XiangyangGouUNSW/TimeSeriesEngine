@@ -60,6 +60,7 @@ function refTypesNeeded() {
   const types = new Set()
   for (const f of [...(props.config.fields || []), ...(props.config.queryFields || [])]) {
     if (f.refType) types.add(f.refType)
+    if (f.categoryRefType) types.add(f.categoryRefType)
   }
   const su = props.config.statusUpdate
   if (su && su.refType) types.add(su.refType)
@@ -169,7 +170,7 @@ function buildPayload(fields, src) {
       v = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(v) ? v + ':00' : v
     } else if (f.type === 'terms') {
       const rows = (Array.isArray(v) ? v : []).filter(
-        (t) => t && typeof t === 'object' && (t.variable || t.sequenceId)
+        (t) => t && typeof t === 'object' && (t.variable || t.mappingId || t.sequenceId)
       )
       if (!rows.length) continue
       // terms 数组：仅包含填了变量名的行，空系数/偏移不提交
@@ -185,10 +186,11 @@ function buildPayload(fields, src) {
           }
           return item
         })
-      // 由「变量名 → 映射序列」自动生成 variableMapping
+      // 由「变量名 → 映射ID（实例或类别）」自动生成 variableMapping
       const mapping = {}
       for (const t of rows) {
-        if (t.variable && t.sequenceId) mapping[t.variable] = t.sequenceId
+        const id = t.mappingId || t.sequenceId
+        if (t.variable && id) mapping[t.variable] = id
       }
       if (Object.keys(mapping).length) payload.variableMapping = mapping
     } else if (f.type === 'json') {
@@ -342,14 +344,28 @@ function fillFromRow(row) {
     else if (f.type === 'terms') {
       // 回填：既有 terms 行，也把 variableMapping 合并成行（避免丢失旧数据的映射）
       const list = Array.isArray(v) ? v.map((t) => ({ ...t })) : []
+      for (const t of list) {
+        if (t.mappingId === undefined && t.sequenceId !== undefined) {
+          t.mappingId = t.sequenceId
+          delete t.sequenceId
+        }
+        if (!t.mappingType) t.mappingType = 'sequence'
+      }
       const mapping = row.variableMapping
       if (mapping && typeof mapping === 'object') {
-        for (const [variable, sequenceId] of Object.entries(mapping)) {
+        const categoryIds = new Set((refOptions.category || []).map((o) => o.value))
+        for (const [variable, id] of Object.entries(mapping)) {
           const t = list.find((x) => x.variable === variable)
           if (t) {
-            if (!t.sequenceId) t.sequenceId = sequenceId
+            if (!t.mappingId) t.mappingId = id
           } else {
-            list.push({ variable, sequenceId, coefficient: 1.0, sampleOffset: 0 })
+            list.push({
+              variable,
+              mappingId: id,
+              mappingType: categoryIds.has(id) ? 'category' : 'sequence',
+              coefficient: 1.0,
+              sampleOffset: 0,
+            })
           }
         }
       }
@@ -427,6 +443,7 @@ function cellText(row, col) {
             :key="f.name"
             :field="f"
             :options="f.refType ? refOptions[f.refType] || [] : []"
+            :category-options="f.categoryRefType ? refOptions[f.categoryRefType] || [] : []"
             v-model="form[f.name]"
           />
         </div>

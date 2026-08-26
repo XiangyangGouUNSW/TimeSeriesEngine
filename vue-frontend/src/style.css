@@ -403,6 +403,30 @@ tr.clickable {
 }
 
 /* ── 约束项 terms 编辑器 ── */
+.terms-editor .terms-level {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.terms-editor .terms-level-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.terms-editor .terms-level button {
+  padding: 5px 12px;
+  font-size: 12.5px;
+}
+
+.terms-editor .terms-level button.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
 .terms-editor .term-head {
   display: flex;
   gap: 6px;
@@ -425,6 +449,12 @@ tr.clickable {
 
 .terms-editor .t-var {
   flex: 1.2;
+}
+
+.terms-editor .t-type {
+  flex: 0.55;
+  min-width: 70px;
+  width: auto;
 }
 
 .terms-editor .t-seq {

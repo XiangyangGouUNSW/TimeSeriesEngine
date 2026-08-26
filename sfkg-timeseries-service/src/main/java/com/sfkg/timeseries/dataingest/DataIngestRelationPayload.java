@@ -5,7 +5,7 @@ public class DataIngestRelationPayload {
     private String source;
     private String type;
     private String target;
-    private String description;
+    private String description = "";
 
     public String getSource() {
         return source;

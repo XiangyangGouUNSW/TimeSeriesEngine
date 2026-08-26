@@ -6,6 +6,7 @@ const props = defineProps({
   field: { type: Object, required: true },
   modelValue: { type: [String, Number, Boolean, Array, Object], default: '' },
   options: { type: Array, default: () => [] },
+  categoryOptions: { type: Array, default: () => [] },
 })
 const emit = defineEmits(['update:modelValue'])
 
@@ -43,6 +44,7 @@ function onInput(e) {
     <TermsEditor
       v-else-if="field.type === 'terms'"
       :options="options"
+      :category-options="categoryOptions"
       :model-value="modelValue"
       @update:model-value="(v) => $emit('update:modelValue', v)"
     />
