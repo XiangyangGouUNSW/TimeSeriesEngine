@@ -1,5 +1,6 @@
 #pragma once
 
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -131,6 +132,11 @@ public:
         const ProjectId& project_id,
         const WindowQuery& query) const;
     WindowQueryResult queryWindowData(const WindowQuery& query) const;
+    WindowStatisticsResult queryWindowStatistics(
+        const ProjectId& project_id,
+        const std::vector<SequenceId>& sequence_ids) const;
+    WindowStatisticsResult queryWindowStatistics(
+        const std::vector<SequenceId>& sequence_ids) const;
 
 private:
     struct SequenceExecutor;
@@ -149,6 +155,15 @@ private:
         std::map<Timestamp, RawTimeseriesPoint> late_points;
         std::size_t active_begin{0};
         std::optional<Timestamp> latest_time;
+        // Ordered appends and left-edge eviction maintain these in O(1)
+        // amortized time. Rare corrections invalidate the cache and trigger
+        // one rebuild when statistics are next requested.
+        bool statistics_valid{true};
+        std::size_t statistics_count{0};
+        std::size_t statistics_non_numeric_count{0};
+        long double statistics_sum{0.0L};
+        std::deque<std::pair<Timestamp, double>> statistics_minimum;
+        std::deque<std::pair<Timestamp, double>> statistics_maximum;
 
         bool empty() const {
             return active_begin >= points.size() && late_points.empty();
@@ -163,6 +178,14 @@ private:
         std::vector<RawTimeseriesPoint> incoming);
     static void flushLatePoints(SequenceWindow& sequence);
     static void compactSequence(SequenceWindow& sequence);
+    static void resetStatistics(SequenceWindow& sequence);
+    static void appendStatistic(
+        SequenceWindow& sequence,
+        const RawTimeseriesPoint& point);
+    static void removeStatistic(
+        SequenceWindow& sequence,
+        const RawTimeseriesPoint& point);
+    static void rebuildStatistics(SequenceWindow& sequence);
 
     OperationResult updateWindow(
         const ProjectId& project_id,

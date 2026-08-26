@@ -634,9 +634,13 @@ OperationResult withConstraintNotificationFailure(
             converted.rule.project_id = project_id;
             snapshot.items.push_back(std::move(converted));
         }
-        conversion::toProto(
-            config_registry_.upsertConstraints(snapshot),
-            response->mutable_operation());
+        const auto configured =
+            config_registry_.upsertConstraints(snapshot);
+        if (isSuccessful(configured.code)) {
+            std::lock_guard state_lock(constraint_state_mutex_);
+            constraint_states_.erase(project_id);
+        }
+        conversion::toProto(configured, response->mutable_operation());
         return ::grpc::Status::OK;
     });
 }
@@ -918,6 +922,7 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
 
     std::vector<ConstraintRule> single_sequence_rules;
     std::vector<ConstraintRule> multi_sequence_rules;
+    std::vector<ConstraintRule> aggregate_rules;
     const auto sequenceWasAffected = [&changed_sequence_set](
                                          const std::vector<SequenceId>& ids) {
         return std::any_of(
@@ -927,11 +932,58 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
                     changed_sequence_set.end();
             });
     };
+    const auto clauseKey = [](const ConstraintRule& rule) {
+        return rule.or_group_id.empty()
+            ? std::string{"\x1f"} + rule.constraint_id
+            : std::string{"\x1e"} + rule.or_group_id;
+    };
+    std::unordered_set<std::string> affected_clauses;
+    for (const auto& rule : enabled_rules) {
+        if (sequenceWasAffected(sequenceIdsFor(rule))) {
+            affected_clauses.insert(clauseKey(rule));
+        }
+    }
+    std::unordered_set<std::string> initialized_rules;
+    std::unordered_set<std::string> violated_rules;
+    {
+        std::lock_guard state_lock(constraint_state_mutex_);
+        const auto project_state = constraint_states_.find(project_id);
+        if (project_state != constraint_states_.end()) {
+            for (const auto& [constraint_id, state] : project_state->second) {
+                if (state.initialized) {
+                    initialized_rules.insert(constraint_id);
+                }
+                if (!state.violations.empty()) {
+                    violated_rules.insert(constraint_id);
+                }
+            }
+        }
+    }
+    for (const auto& rule : enabled_rules) {
+        if (violated_rules.find(rule.constraint_id) !=
+            violated_rules.end()) {
+            // Persistent reporting applies to every ingest request, even
+            // when this batch did not touch the violating rule's sequence.
+            affected_clauses.insert(clauseKey(rule));
+        }
+    }
+    std::vector<ConstraintRule> selected_rules;
     for (const auto& rule : enabled_rules) {
         const auto& sequence_ids = sequenceIdsFor(rule);
-        if (sequence_ids.empty() || !sequenceWasAffected(sequence_ids)) {
-            // A rule unrelated to this window update cannot produce a new
-            // violation. Its sequences are not queried or checked here.
+        if (sequence_ids.empty() ||
+            affected_clauses.find(clauseKey(rule)) == affected_clauses.end()) {
+            continue;
+        }
+        selected_rules.push_back(rule);
+        const bool needs_initialization = initialized_rules.find(
+            rule.constraint_id) == initialized_rules.end();
+        if (!sequenceWasAffected(sequence_ids) && !needs_initialization) {
+            continue;
+        }
+        const bool aggregate = !rule.terms.empty() &&
+            rule.terms.front().aggregation != ConstraintAggregation::Sample;
+        if (aggregate) {
+            aggregate_rules.push_back(rule);
             continue;
         }
         if (sequence_ids.size() == 1) {
@@ -941,7 +993,7 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
         }
     }
 
-    if (single_sequence_rules.empty() && multi_sequence_rules.empty()) {
+    if (selected_rules.empty()) {
         finishDerived();
         result.constraint_notification_result = internal::ok(
             0,
@@ -952,6 +1004,8 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
 
     struct ConstraintGroupExecution {
         ConstraintCheckResult result;
+        std::vector<ConstraintRule> rules;
+        std::optional<ConstraintIncrementalRange> range;
         double query_ms{0.0};
         double check_ms{0.0};
     };
@@ -1047,13 +1101,27 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
             groups.push_back(makeGroup(std::move(split.second), std::nullopt));
         }
     };
-    addRuleGroups(single_sequence_rules);
-    addRuleGroups(multi_sequence_rules);
+    const auto addWithoutMixingOrClauses = [&addRuleGroups](
+                                                const auto& rules) {
+        std::vector<ConstraintRule> ordinary;
+        for (const auto& rule : rules) {
+            if (rule.or_group_id.empty()) {
+                ordinary.push_back(rule);
+            } else {
+                addRuleGroups(std::vector<ConstraintRule>{rule});
+            }
+        }
+        addRuleGroups(ordinary);
+    };
+    addWithoutMixingOrClauses(single_sequence_rules);
+    addWithoutMixingOrClauses(multi_sequence_rules);
     recordConstraintPrepare();
 
     const auto run_group = [this, project_id, &mapped_sequence_cache](
                                ConstraintGroupSpec group) {
         ConstraintGroupExecution execution;
+        execution.rules = group.rules;
+        execution.range = group.range;
         if (group.rules.empty()) {
             execution.result.satisfied = true;
             execution.result.operation = internal::ok(
@@ -1099,15 +1167,49 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
     double constraint_query_ms = 0.0;
     double constraint_check_ms = 0.0;
     std::vector<std::future<ConstraintGroupExecution>> group_futures;
-    group_futures.reserve(groups.size());
+    group_futures.reserve(groups.size() + aggregate_rules.size());
     const auto constraint_group_started = std::chrono::steady_clock::now();
     for (auto& group : groups) {
         group_futures.push_back(std::async(
             std::launch::async, run_group, std::move(group)));
     }
+    for (const auto& rule : aggregate_rules) {
+        group_futures.push_back(std::async(
+            std::launch::async,
+            [this, project_id, rule, &mapped_sequence_cache] {
+                ConstraintGroupExecution execution;
+                execution.rules.push_back(rule);
+                const auto query_started = std::chrono::steady_clock::now();
+                const auto statistics =
+                    window_service_.queryWindowStatistics(
+                        project_id,
+                        mapped_sequence_cache.at(rule.constraint_id));
+                const auto query_finished = std::chrono::steady_clock::now();
+                execution.query_ms =
+                    std::chrono::duration<double, std::milli>(
+                        query_finished - query_started).count();
+                if (!isSuccessful(statistics.operation.code)) {
+                    execution.result.operation = statistics.operation;
+                    execution.result.satisfied = false;
+                    return execution;
+                }
+                const auto check_started = std::chrono::steady_clock::now();
+                execution.result = constraint_engine_.checkConstraints(
+                    project_id,
+                    std::vector<ConstraintRule>{rule},
+                    statistics.data);
+                execution.check_ms =
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - check_started)
+                        .count();
+                return execution;
+            }));
+    }
     bool group_failed = false;
+    std::vector<ConstraintGroupExecution> executions;
+    executions.reserve(group_futures.size());
     for (auto& future : group_futures) {
-        const auto execution = future.get();
+        auto execution = future.get();
         constraint_query_ms += execution.query_ms;
         constraint_check_ms += execution.check_ms;
         if (!isSuccessful(execution.result.operation.code)) {
@@ -1123,9 +1225,82 @@ IngestPipelineResult TimeseriesCoreGrpcService::processHotIngest(
             check.violations.end(),
             execution.result.violations.begin(),
             execution.result.violations.end());
+        executions.push_back(std::move(execution));
     }
     const auto constraint_group_finished = std::chrono::steady_clock::now();
     if (!group_failed) {
+        check.violations.clear();
+        {
+            std::lock_guard state_lock(constraint_state_mutex_);
+            auto& project_states = constraint_states_[project_id];
+            for (const auto& execution : executions) {
+                for (const auto& rule : execution.rules) {
+                    auto& state = project_states[rule.constraint_id];
+                    if (state.initialized &&
+                        window_update.update_generation <
+                            state.update_generation) {
+                        continue;
+                    }
+                    if (execution.range) {
+                        auto first = state.violations.lower_bound(
+                            execution.range->start_time);
+                        auto last = execution.range->end_time ==
+                                std::numeric_limits<Timestamp>::max()
+                            ? state.violations.end()
+                            : state.violations.upper_bound(
+                                  execution.range->end_time);
+                        state.violations.erase(first, last);
+                        if (window_update.window_start_time) {
+                            state.violations.erase(
+                                state.violations.begin(),
+                                state.violations.lower_bound(
+                                    *window_update.window_start_time));
+                        }
+                    } else {
+                        state.violations.clear();
+                    }
+                    for (const auto& violation :
+                         execution.result.violations) {
+                        if (violation.constraint_id == rule.constraint_id) {
+                            state.violations[violation.anchor_time] =
+                                violation;
+                        }
+                    }
+                    state.initialized = true;
+                    state.update_generation =
+                        window_update.update_generation;
+                }
+            }
+
+            std::unordered_map<std::string, std::vector<const ConstraintRule*>>
+                clauses;
+            for (const auto& rule : selected_rules) {
+                clauses[clauseKey(rule)].push_back(&rule);
+            }
+            for (const auto& [key, clause] : clauses) {
+                (void)key;
+                const bool clause_satisfied = std::any_of(
+                    clause.begin(), clause.end(),
+                    [&project_states](const ConstraintRule* rule) {
+                        const auto found = project_states.find(
+                            rule->constraint_id);
+                        return found == project_states.end() ||
+                            !found->second.initialized ||
+                            found->second.violations.empty();
+                    });
+                if (clause_satisfied) {
+                    continue;
+                }
+                for (const auto* rule : clause) {
+                    const auto& violations =
+                        project_states.at(rule->constraint_id).violations;
+                    for (const auto& [anchor, violation] : violations) {
+                        (void)anchor;
+                        check.violations.push_back(violation);
+                    }
+                }
+            }
+        }
         check.satisfied = check.violations.empty();
         std::string message = check.satisfied
             ? "continuous constraint checks completed; all satisfied"

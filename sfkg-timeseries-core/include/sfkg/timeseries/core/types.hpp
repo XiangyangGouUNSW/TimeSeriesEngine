@@ -144,19 +144,28 @@ struct AlignmentRange {
     std::size_t prefix_samples{0};
 };
 
+enum class ConstraintAggregation {
+    Sample,
+    Average,
+    Maximum,
+    Minimum
+};
+
 struct ConstraintTerm {
     std::string variable;
     double coefficient{};
     std::size_t sample_offset{};
+    ConstraintAggregation aggregation{ConstraintAggregation::Sample};
 };
 
 struct ConstraintRule {
     std::string constraint_id;
     std::unordered_map<std::string, SequenceId> variable_mapping;
-    double lower_bound{};
-    double upper_bound{};
+    std::optional<double> lower_bound;
+    std::optional<double> upper_bound;
     std::vector<ConstraintTerm> terms;
     ProjectId project_id;
+    std::string or_group_id;
 };
 
 struct ConstraintTermValue {
@@ -166,15 +175,17 @@ struct ConstraintTermValue {
     std::size_t sample_offset{};
     Timestamp sample_time{};
     double value{};
+    ConstraintAggregation aggregation{ConstraintAggregation::Sample};
 };
 
 struct ConstraintViolation {
     std::string constraint_id;
     Timestamp anchor_time{};
-    double lower_bound{};
-    double upper_bound{};
+    std::optional<double> lower_bound;
+    std::optional<double> upper_bound;
     double evaluated_value{};
     std::vector<ConstraintTermValue> term_values;
+    std::string or_group_id;
 };
 
 struct ConstraintCheckResult {
@@ -187,6 +198,26 @@ struct ConstraintCheckResult {
     std::size_t pending_count{};
     bool satisfied{false};
     std::vector<ConstraintViolation> violations;
+};
+
+struct SequenceWindowStatistics {
+    std::size_t count{};
+    double average{};
+    double maximum{};
+    double minimum{};
+};
+
+struct WindowStatisticsData {
+    Timestamp window_start_time{};
+    Timestamp window_end_time{};
+    std::unordered_map<SequenceId, SequenceWindowStatistics>
+        sequence_statistics;
+    ProjectId project_id;
+};
+
+struct WindowStatisticsResult {
+    OperationResult operation;
+    WindowStatisticsData data;
 };
 
 struct WindowQuery {

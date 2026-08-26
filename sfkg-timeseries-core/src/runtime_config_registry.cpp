@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "operation_helpers.hpp"
+#include "constraint_rule_helpers.hpp"
 
 namespace sfkg::timeseries::core {
 namespace {
@@ -309,39 +310,10 @@ OperationResult RuntimeConfigRegistry::replaceConstraints(
 
     for (const auto& item : snapshot.items) {
         const auto& rule = item.rule;
-        if (isBlank(rule.constraint_id)) {
-            return internal::invalidArgument("constraint_id must not be empty");
-        }
-        if (!std::isfinite(rule.lower_bound) ||
-            !std::isfinite(rule.upper_bound) ||
-            rule.lower_bound > rule.upper_bound) {
-            return internal::invalidArgument(
-                "constraint bounds must be finite and ordered");
-        }
-        if (rule.variable_mapping.empty() || rule.terms.empty()) {
-            return internal::invalidArgument(
-                "constraint mappings and terms must not be empty");
-        }
-
-        std::size_t previous_offset = 0;
-        bool first_term = true;
-        for (const auto& term : rule.terms) {
-            if (isBlank(term.variable) || !std::isfinite(term.coefficient)) {
-                return internal::invalidArgument(
-                    "constraint terms must contain a variable and finite coefficient");
-            }
-            if (rule.variable_mapping.find(term.variable) ==
-                rule.variable_mapping.end()) {
-                return internal::invalidArgument(
-                    "constraint term has no variable mapping: " + term.variable);
-            }
-            if ((first_term && term.sample_offset != 0) ||
-                (!first_term && term.sample_offset < previous_offset)) {
-                return internal::invalidArgument(
-                    "constraint offsets must start at zero and be nondecreasing");
-            }
-            first_term = false;
-            previous_offset = term.sample_offset;
+        std::string validation_error;
+        if (!internal::validateConstraintRule(
+                rule, nullptr, &validation_error)) {
+            return internal::invalidArgument(std::move(validation_error));
         }
 
         for (const auto& [variable, sequence_id] : rule.variable_mapping) {
@@ -383,44 +355,15 @@ OperationResult RuntimeConfigRegistry::upsertConstraints(
 
     for (const auto& item : snapshot.items) {
         const auto& rule = item.rule;
-        if (isBlank(rule.constraint_id)) {
-            return internal::invalidArgument("constraint_id must not be empty");
-        }
         if (!seen_constraint_ids.emplace(rule.constraint_id).second) {
             return internal::invalidArgument(
                 "duplicate constraint_id in incremental update: " +
                 rule.constraint_id);
         }
-        if (!std::isfinite(rule.lower_bound) ||
-            !std::isfinite(rule.upper_bound) ||
-            rule.lower_bound > rule.upper_bound) {
-            return internal::invalidArgument(
-                "constraint bounds must be finite and ordered");
-        }
-        if (rule.variable_mapping.empty() || rule.terms.empty()) {
-            return internal::invalidArgument(
-                "constraint mappings and terms must not be empty");
-        }
-
-        std::size_t previous_offset = 0;
-        bool first_term = true;
-        for (const auto& term : rule.terms) {
-            if (isBlank(term.variable) || !std::isfinite(term.coefficient)) {
-                return internal::invalidArgument(
-                    "constraint terms must contain a variable and finite coefficient");
-            }
-            if (rule.variable_mapping.find(term.variable) ==
-                rule.variable_mapping.end()) {
-                return internal::invalidArgument(
-                    "constraint term has no variable mapping: " + term.variable);
-            }
-            if ((first_term && term.sample_offset != 0) ||
-                (!first_term && term.sample_offset < previous_offset)) {
-                return internal::invalidArgument(
-                    "constraint offsets must start at zero and be nondecreasing");
-            }
-            first_term = false;
-            previous_offset = term.sample_offset;
+        std::string validation_error;
+        if (!internal::validateConstraintRule(
+                rule, nullptr, &validation_error)) {
+            return internal::invalidArgument(std::move(validation_error));
         }
 
         for (const auto& [variable, sequence_id] : rule.variable_mapping) {

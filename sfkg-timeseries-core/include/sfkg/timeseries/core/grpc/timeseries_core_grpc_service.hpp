@@ -1,5 +1,9 @@
 #pragma once
 
+#include <map>
+#include <mutex>
+#include <unordered_map>
+
 #include <grpcpp/grpcpp.h>
 
 #include "timeseries_core.grpc.pb.h"
@@ -110,6 +114,11 @@ public:
 
 private:
     struct IngestDiagnostics;
+    struct CachedConstraintState {
+        std::map<Timestamp, ConstraintViolation> violations;
+        std::uint64_t update_generation{0};
+        bool initialized{false};
+    };
 
     IngestPipelineResult processHotIngest(
         const ProjectId& project_id,
@@ -128,6 +137,11 @@ private:
     ConstraintResultReceiverClient& constraint_result_receiver_;
     ConstraintResultNotificationExecutor constraint_notification_executor_;
     IngestTaskExecutor ingest_task_executor_;
+    std::mutex constraint_state_mutex_;
+    std::unordered_map<
+        ProjectId,
+        std::unordered_map<std::string, CachedConstraintState>>
+        constraint_states_;
 };
 
 }  // namespace sfkg::timeseries::core::grpc

@@ -1,5 +1,6 @@
 #include <cassert>
 #include <atomic>
+#include <cmath>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -328,6 +329,57 @@ int main() {
             std::optional<Timestamp>{1'000}});
         assert(pointsFor(queried.data, sequence_id).size() == 1'000);
     }
+
+    // Window aggregates use the append-maintained sum/count and monotonic
+    // queues. Corrections rebuild once, then later appends and eviction are
+    // incremental again.
+    WindowService aggregate_window;
+    assert(aggregate_window.configureWindowSize(5).code == OperationCode::Ok);
+    assert(aggregate_window.buildTimeWindow({{
+        {0, "aggregate", 3.0},
+        {1, "aggregate", 1.0},
+        {2, "aggregate", 5.0},
+    }}).code == OperationCode::Ok);
+    auto aggregate_statistics =
+        aggregate_window.queryWindowStatistics({"aggregate"});
+    assert(aggregate_statistics.operation.code == OperationCode::Ok);
+    auto statistics =
+        aggregate_statistics.data.sequence_statistics.at("aggregate");
+    assert(statistics.count == 3);
+    assert(statistics.average == 3.0);
+    assert(statistics.minimum == 1.0);
+    assert(statistics.maximum == 5.0);
+
+    assert(aggregate_window.buildTimeWindow({{
+        {1, "aggregate", 7.0},
+    }}).code == OperationCode::Ok);
+    aggregate_statistics =
+        aggregate_window.queryWindowStatistics({"aggregate"});
+    statistics =
+        aggregate_statistics.data.sequence_statistics.at("aggregate");
+    assert(statistics.count == 3);
+    assert(statistics.average == 5.0);
+    assert(statistics.minimum == 3.0);
+    assert(statistics.maximum == 7.0);
+
+    assert(aggregate_window.buildTimeWindow({{
+        {10, "aggregate", 10.0},
+    }}).code == OperationCode::Ok);
+    aggregate_statistics =
+        aggregate_window.queryWindowStatistics({"aggregate"});
+    statistics =
+        aggregate_statistics.data.sequence_statistics.at("aggregate");
+    assert(statistics.count == 1);
+    assert(statistics.average == 10.0);
+    assert(statistics.minimum == 10.0);
+    assert(statistics.maximum == 10.0);
+
+    WindowService non_numeric_window;
+    assert(non_numeric_window.buildTimeWindow({{
+        {0, "text", std::string{"not-a-number"}},
+    }}).code == OperationCode::Ok);
+    assert(non_numeric_window.queryWindowStatistics({"text"}).operation.code ==
+           OperationCode::InvalidArgument);
 
     std::cout << "window_service_test passed\n";
     return 0;

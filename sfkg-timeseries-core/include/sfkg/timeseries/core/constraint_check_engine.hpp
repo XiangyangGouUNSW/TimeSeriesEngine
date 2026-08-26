@@ -30,6 +30,13 @@ public:
     ConstraintCheckResult checkConstraints(
         const ProjectId& project_id,
         const std::vector<ConstraintRule>& rules,
+        const WindowStatisticsData& data) const;
+    ConstraintCheckResult checkConstraints(
+        const std::vector<ConstraintRule>& rules,
+        const WindowStatisticsData& data) const;
+    ConstraintCheckResult checkConstraints(
+        const ProjectId& project_id,
+        const std::vector<ConstraintRule>& rules,
         const WindowData& data,
         const std::optional<ConstraintCheckRange>& range) const;
     ConstraintCheckResult checkConstraints(

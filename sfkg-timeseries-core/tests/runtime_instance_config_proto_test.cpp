@@ -1,4 +1,5 @@
 #include <cassert>
+#include <optional>
 #include <string>
 
 #include "grpc/internal/proto_conversion.hpp"
@@ -49,6 +50,47 @@ int main() {
     assert(error.empty());
     assert(window_target.window_size == 259'200'000);
     assert(window_target.project_id == "project-a");
+
+    proto::RuntimeConstraintConfig constraint_source;
+    constraint_source.set_enabled(true);
+    constraint_source.set_project_id("project-a");
+    auto* constraint_rule = constraint_source.mutable_rule();
+    constraint_rule->set_constraint_id("average-upper");
+    (*constraint_rule->mutable_variable_mapping())["x"] = "temperature-1";
+    constraint_rule->set_upper_bound(30.0);
+    constraint_rule->set_or_group_id("temperature-choice");
+    auto* constraint_term = constraint_rule->add_terms();
+    constraint_term->set_variable("x");
+    constraint_term->set_coefficient(1.0);
+    constraint_term->set_aggregation(
+        proto::CONSTRAINT_AGGREGATION_AVERAGE);
+    core::RuntimeConstraintConfig constraint_target;
+    error.clear();
+    assert(conversion::fromProto(
+        constraint_source, &constraint_target, &error));
+    assert(!constraint_target.rule.lower_bound);
+    assert(constraint_target.rule.upper_bound ==
+           std::optional<double>{30.0});
+    assert(constraint_target.rule.or_group_id == "temperature-choice");
+    assert(constraint_target.rule.terms.front().aggregation ==
+           core::ConstraintAggregation::Average);
+
+    core::ConstraintCheckResult check_result;
+    check_result.operation.code = core::OperationCode::Ok;
+    check_result.violations.push_back({
+        "average-upper", 10, std::nullopt, 30.0, 31.0,
+        {{"x", "temperature-1", 1.0, 0, 10, 31.0,
+          core::ConstraintAggregation::Average}},
+        "temperature-choice"});
+    proto::CheckConstraintsResponse check_response;
+    conversion::toProto(check_result, &check_response);
+    assert(check_response.violations_size() == 1);
+    assert(!check_response.violations(0).has_lower_bound());
+    assert(check_response.violations(0).has_upper_bound());
+    assert(check_response.violations(0).or_group_id() ==
+           "temperature-choice");
+    assert(check_response.violations(0).term_values(0).aggregation() ==
+           proto::CONSTRAINT_AGGREGATION_AVERAGE);
 
     proto::DerivedSeriesConfig derived_source;
     derived_source.set_derived_sequence_id("temperature-pressure-sum");

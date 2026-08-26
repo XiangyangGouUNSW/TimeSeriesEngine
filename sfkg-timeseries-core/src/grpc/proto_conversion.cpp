@@ -29,6 +29,44 @@ pb::OperationCode operationCodeToProto(OperationCode code) {
     return pb::OPERATION_CODE_INTERNAL_ERROR;
 }
 
+pb::ConstraintAggregation aggregationToProto(
+    ConstraintAggregation aggregation) {
+    switch (aggregation) {
+        case ConstraintAggregation::Sample:
+            return pb::CONSTRAINT_AGGREGATION_SAMPLE;
+        case ConstraintAggregation::Average:
+            return pb::CONSTRAINT_AGGREGATION_AVERAGE;
+        case ConstraintAggregation::Maximum:
+            return pb::CONSTRAINT_AGGREGATION_MAXIMUM;
+        case ConstraintAggregation::Minimum:
+            return pb::CONSTRAINT_AGGREGATION_MINIMUM;
+    }
+    return pb::CONSTRAINT_AGGREGATION_SAMPLE;
+}
+
+bool aggregationFromProto(
+    pb::ConstraintAggregation source,
+    ConstraintAggregation* target,
+    std::string* error) {
+    switch (source) {
+        case pb::CONSTRAINT_AGGREGATION_SAMPLE:
+            *target = ConstraintAggregation::Sample;
+            return true;
+        case pb::CONSTRAINT_AGGREGATION_AVERAGE:
+            *target = ConstraintAggregation::Average;
+            return true;
+        case pb::CONSTRAINT_AGGREGATION_MAXIMUM:
+            *target = ConstraintAggregation::Maximum;
+            return true;
+        case pb::CONSTRAINT_AGGREGATION_MINIMUM:
+            *target = ConstraintAggregation::Minimum;
+            return true;
+        default:
+            *error = "unknown constraint aggregation";
+            return false;
+    }
+}
+
 bool fromProto(
     const pb::RawTimeseriesPoint& source,
     RawTimeseriesPoint* target,
@@ -66,8 +104,13 @@ bool fromProto(
     }
     target->constraint_id = source.constraint_id();
     target->project_id = source.project_id();
-    target->lower_bound = source.lower_bound();
-    target->upper_bound = source.upper_bound();
+    target->or_group_id = source.or_group_id();
+    target->lower_bound = source.has_lower_bound()
+        ? std::optional<double>{source.lower_bound()}
+        : std::nullopt;
+    target->upper_bound = source.has_upper_bound()
+        ? std::optional<double>{source.upper_bound()}
+        : std::nullopt;
     target->variable_mapping.clear();
     target->terms.clear();
     for (const auto& [variable, sequence_id] : source.variable_mapping()) {
@@ -75,9 +118,15 @@ bool fromProto(
     }
     target->terms.reserve(source.terms_size());
     for (const auto& term : source.terms()) {
-        target->terms.push_back(
-            {term.variable(), term.coefficient(),
-             static_cast<std::size_t>(term.sample_offset())});
+        ConstraintAggregation aggregation;
+        if (!aggregationFromProto(term.aggregation(), &aggregation, error)) {
+            return false;
+        }
+        target->terms.push_back({
+            term.variable(),
+            term.coefficient(),
+            static_cast<std::size_t>(term.sample_offset()),
+            aggregation});
     }
     return true;
 }
@@ -715,9 +764,14 @@ void toProto(
         auto* converted = target->add_violations();
         converted->set_constraint_id(violation.constraint_id);
         converted->set_anchor_time(violation.anchor_time);
-        converted->set_lower_bound(violation.lower_bound);
-        converted->set_upper_bound(violation.upper_bound);
+        if (violation.lower_bound) {
+            converted->set_lower_bound(*violation.lower_bound);
+        }
+        if (violation.upper_bound) {
+            converted->set_upper_bound(*violation.upper_bound);
+        }
         converted->set_evaluated_value(violation.evaluated_value);
+        converted->set_or_group_id(violation.or_group_id);
         for (const auto& term : violation.term_values) {
             auto* converted_term = converted->add_term_values();
             converted_term->set_variable(term.variable);
@@ -726,6 +780,8 @@ void toProto(
             converted_term->set_sample_offset(term.sample_offset);
             converted_term->set_sample_time(term.sample_time);
             converted_term->set_value(term.value);
+            converted_term->set_aggregation(
+                aggregationToProto(term.aggregation));
         }
     }
 }

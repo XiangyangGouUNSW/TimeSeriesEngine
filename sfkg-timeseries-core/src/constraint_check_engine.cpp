@@ -2,10 +2,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
+#include <limits>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
+#include "constraint_rule_helpers.hpp"
 #include "operation_helpers.hpp"
 
 namespace sfkg::timeseries::core {
@@ -35,52 +40,6 @@ bool numericValue(const TimeseriesValue& value, double* output) {
     return false;
 }
 
-bool validateRule(
-    const ConstraintRule& rule,
-    std::size_t* max_offset,
-    std::string* error) {
-    if (rule.constraint_id.empty()) {
-        *error = "constraint_id must not be empty";
-        return false;
-    }
-    if (!std::isfinite(rule.lower_bound) ||
-        !std::isfinite(rule.upper_bound) ||
-        rule.lower_bound > rule.upper_bound) {
-        *error = "constraint bounds must be finite and ordered";
-        return false;
-    }
-    if (rule.variable_mapping.empty() || rule.terms.empty()) {
-        *error = "constraint mappings and terms must not be empty";
-        return false;
-    }
-
-    std::size_t previous_offset = 0;
-    bool first_term = true;
-    for (const auto& term : rule.terms) {
-        if (term.variable.empty() || !std::isfinite(term.coefficient)) {
-            *error =
-                "constraint terms must contain a variable and finite coefficient";
-            return false;
-        }
-        if (rule.variable_mapping.find(term.variable) ==
-            rule.variable_mapping.end()) {
-            *error = "constraint term has no variable mapping: " +
-                term.variable;
-            return false;
-        }
-        if ((first_term && term.sample_offset != 0) ||
-            (!first_term && term.sample_offset < previous_offset)) {
-            *error =
-                "constraint offsets must start at zero and be nondecreasing";
-            return false;
-        }
-        first_term = false;
-        previous_offset = term.sample_offset;
-    }
-    *max_offset = previous_offset;
-    return true;
-}
-
 bool hasSingleSequence(const ConstraintRule& rule, SequenceId* sequence_id) {
     std::unordered_set<SequenceId> sequence_ids;
     for (const auto& [variable, mapped_sequence] : rule.variable_mapping) {
@@ -95,7 +54,8 @@ bool hasSingleSequence(const ConstraintRule& rule, SequenceId* sequence_id) {
 }
 
 bool isWithinBounds(double value, const ConstraintRule& rule) {
-    return value >= rule.lower_bound && value <= rule.upper_bound;
+    return (!rule.lower_bound || value >= *rule.lower_bound) &&
+        (!rule.upper_bound || value <= *rule.upper_bound);
 }
 
 struct ResolvedTermValue {
@@ -155,7 +115,8 @@ bool evaluateRuleAt(
                 term.coefficient,
                 term.sample_offset,
                 resolved_term.sample_time,
-                resolved_term.value});
+                resolved_term.value,
+                term.aggregation});
         }
         result->violations.push_back({
             rule.constraint_id,
@@ -163,24 +124,76 @@ bool evaluateRuleAt(
             rule.lower_bound,
             rule.upper_bound,
             evaluated_value,
-            std::move(term_values)});
+            std::move(term_values),
+            rule.or_group_id});
     }
     return true;
 }
 
-void finalizeResult(ConstraintCheckResult* result) {
-    result->satisfied = result->violations.empty();
-    std::string message = result->satisfied
+struct RuleCheckOutcome {
+    const ConstraintRule* rule{};
+    ConstraintCheckResult result;
+};
+
+ConstraintCheckResult combineRuleOutcomes(
+    const ProjectId& project_id,
+    std::vector<RuleCheckOutcome> outcomes) {
+    ConstraintCheckResult result;
+    result.project_id = project_id;
+
+    struct Clause {
+        std::vector<std::size_t> outcome_indices;
+    };
+    std::vector<Clause> clauses;
+    std::unordered_map<std::string, std::size_t> clause_index;
+    clause_index.reserve(outcomes.size());
+
+    for (std::size_t index = 0; index < outcomes.size(); ++index) {
+        auto& outcome = outcomes[index];
+        result.evaluated_count += outcome.result.evaluated_count;
+        result.pending_count += outcome.result.pending_count;
+        const auto& rule = *outcome.rule;
+        const std::string key = rule.or_group_id.empty()
+            ? std::string{"\x1f"} + rule.constraint_id
+            : std::string{"\x1e"} + rule.or_group_id;
+        auto [found, inserted] = clause_index.emplace(key, clauses.size());
+        if (inserted) {
+            clauses.emplace_back();
+        }
+        clauses[found->second].outcome_indices.push_back(index);
+    }
+
+    result.satisfied = true;
+    for (const auto& clause : clauses) {
+        const bool clause_satisfied = std::any_of(
+            clause.outcome_indices.begin(),
+            clause.outcome_indices.end(),
+            [&outcomes](std::size_t index) {
+                return outcomes[index].result.violations.empty();
+            });
+        if (clause_satisfied) {
+            continue;
+        }
+        result.satisfied = false;
+        for (const auto index : clause.outcome_indices) {
+            auto& violations = outcomes[index].result.violations;
+            result.violations.insert(
+                result.violations.end(),
+                std::make_move_iterator(violations.begin()),
+                std::make_move_iterator(violations.end()));
+        }
+    }
+
+    std::string message = result.satisfied
         ? "constraint checks completed; all satisfied"
         : "constraint checks completed; violations found";
-    if (result->pending_count != 0) {
-        message += "; " + std::to_string(result->pending_count) +
+    if (result.pending_count != 0) {
+        message += "; " + std::to_string(result.pending_count) +
             " aligned samples pending because mapped sequence data was "
             "not available yet";
     }
-    result->operation = internal::ok(
-        result->evaluated_count,
-        std::move(message));
+    result.operation = internal::ok(result.evaluated_count, std::move(message));
+    return result;
 }
 
 bool isMissingMappedSequenceError(const std::string& error) {
@@ -188,6 +201,122 @@ bool isMissingMappedSequenceError(const std::string& error) {
         "aligned sample is missing mapped sequence: ";
     return error.compare(0, std::char_traits<char>::length(kPrefix), kPrefix) ==
         0;
+}
+
+bool buildWindowStatisticsForRule(
+    const ConstraintRule& rule,
+    const WindowData& data,
+    WindowStatisticsData* statistics,
+    std::string* error) {
+    statistics->window_start_time = data.window_start_time;
+    statistics->window_end_time = data.window_end_time;
+    statistics->project_id = data.project_id;
+    statistics->sequence_statistics.clear();
+
+    std::unordered_set<SequenceId> seen;
+    for (const auto& term : rule.terms) {
+        const auto& sequence_id = rule.variable_mapping.at(term.variable);
+        if (!seen.insert(sequence_id).second) {
+            continue;
+        }
+        const auto sequence = data.sequence_values.find(sequence_id);
+        if (sequence == data.sequence_values.end()) {
+            *error = "window data does not contain mapped sequence: " +
+                sequence_id;
+            return false;
+        }
+
+        std::size_t count = 0;
+        long double sum = 0.0L;
+        double minimum = std::numeric_limits<double>::infinity();
+        double maximum = -std::numeric_limits<double>::infinity();
+        for (const auto& point : sequence->second) {
+            if (point.time < data.window_start_time ||
+                point.time >= data.window_end_time) {
+                continue;
+            }
+            double value = 0.0;
+            if (!numericValue(point.value, &value)) {
+                *error =
+                    "window aggregate constraint values must be finite numeric values";
+                return false;
+            }
+            ++count;
+            sum += static_cast<long double>(value);
+            minimum = std::min(minimum, value);
+            maximum = std::max(maximum, value);
+        }
+        if (count == 0) {
+            continue;
+        }
+        const auto average = static_cast<double>(
+            sum / static_cast<long double>(count));
+        if (!std::isfinite(average)) {
+            *error = "window aggregate average is not finite";
+            return false;
+        }
+        statistics->sequence_statistics.emplace(
+            sequence_id,
+            SequenceWindowStatistics{count, average, maximum, minimum});
+    }
+    return true;
+}
+
+bool evaluateAggregateRule(
+    const ConstraintRule& rule,
+    const WindowStatisticsData& data,
+    ConstraintCheckResult* result,
+    std::string* error) {
+    const auto mapped_sequences = mappedSequencesForRule(rule);
+    for (const auto& sequence_id : mapped_sequences) {
+        if (data.sequence_statistics.find(sequence_id) ==
+            data.sequence_statistics.end()) {
+            ++result->pending_count;
+            return true;
+        }
+    }
+
+    std::vector<ResolvedTermValue> resolved_terms;
+    resolved_terms.reserve(rule.terms.size());
+    return evaluateRuleAt(
+        rule,
+        mapped_sequences,
+        data.window_end_time,
+        0,
+        [&data](const ConstraintTerm& term,
+                const SequenceId& sequence_id,
+                std::size_t,
+                ResolvedTermValue* term_value,
+                std::string* resolve_error) {
+            const auto found = data.sequence_statistics.find(sequence_id);
+            if (found == data.sequence_statistics.end() ||
+                found->second.count == 0) {
+                *resolve_error =
+                    "window aggregate sequence has no numeric samples: " +
+                    sequence_id;
+                return false;
+            }
+            switch (term.aggregation) {
+                case ConstraintAggregation::Average:
+                    term_value->value = found->second.average;
+                    break;
+                case ConstraintAggregation::Maximum:
+                    term_value->value = found->second.maximum;
+                    break;
+                case ConstraintAggregation::Minimum:
+                    term_value->value = found->second.minimum;
+                    break;
+                case ConstraintAggregation::Sample:
+                    *resolve_error =
+                        "sample term cannot be evaluated from window statistics";
+                    return false;
+            }
+            term_value->sample_time = data.window_end_time;
+            return true;
+        },
+        result,
+        error,
+        &resolved_terms);
 }
 
 }  // namespace
@@ -227,13 +356,29 @@ ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
             "window data must contain at least one sequence"));
     }
 
-    ConstraintCheckResult result;
-    result.project_id = project_id;
+    std::vector<RuleCheckOutcome> outcomes;
+    outcomes.reserve(rules.size());
     for (const auto& rule : rules) {
-        std::size_t max_offset = 0;
+        internal::ConstraintRuleProperties properties;
         std::string error;
-        if (!validateRule(rule, &max_offset, &error)) {
+        if (!internal::validateConstraintRule(
+                rule, &properties, &error)) {
             return failure(internal::invalidArgument(error));
+        }
+
+        ConstraintCheckResult rule_result;
+        rule_result.project_id = project_id;
+        if (properties.kind ==
+            internal::ConstraintRuleKind::WindowAggregate) {
+            WindowStatisticsData statistics;
+            if (!buildWindowStatisticsForRule(
+                    rule, data, &statistics, &error) ||
+                !evaluateAggregateRule(
+                    rule, statistics, &rule_result, &error)) {
+                return failure(internal::invalidArgument(error));
+            }
+            outcomes.push_back({&rule, std::move(rule_result)});
+            continue;
         }
 
         SequenceId sequence_id;
@@ -251,7 +396,9 @@ ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
         }
 
         const auto& points = sequence->second;
+        const auto max_offset = properties.maximum_sample_offset;
         if (max_offset >= points.size()) {
+            outcomes.push_back({&rule, std::move(rule_result)});
             continue;
         }
 
@@ -298,17 +445,17 @@ ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
                     term_value->value = value;
                     return true;
                 },
-                &result,
+                &rule_result,
                 &error,
                 &resolved_terms);
             if (!evaluated) {
                 return failure(internal::invalidArgument(error));
             }
         }
+        outcomes.push_back({&rule, std::move(rule_result)});
     }
 
-    finalizeResult(&result);
-    return result;
+    return combineRuleOutcomes(project_id, std::move(outcomes));
 }
 
 ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
@@ -363,16 +510,27 @@ ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
         }
     }
 
-    ConstraintCheckResult result;
-    result.project_id = project_id;
+    std::vector<RuleCheckOutcome> outcomes;
+    outcomes.reserve(rules.size());
     for (const auto& rule : rules) {
-        std::size_t max_offset = 0;
+        internal::ConstraintRuleProperties properties;
         std::string error;
-        if (!validateRule(rule, &max_offset, &error)) {
+        if (!internal::validateConstraintRule(
+                rule, &properties, &error)) {
             return failure(internal::invalidArgument(error));
         }
+        if (properties.kind ==
+            internal::ConstraintRuleKind::WindowAggregate) {
+            return failure(failedPrecondition(
+                "window aggregate rules require raw window statistics; "
+                "they cannot be evaluated from aligned samples"));
+        }
+        ConstraintCheckResult rule_result;
+        rule_result.project_id = project_id;
         const auto mapped_sequences = mappedSequencesForRule(rule);
+        const auto max_offset = properties.maximum_sample_offset;
         if (max_offset >= data.samples.size()) {
+            outcomes.push_back({&rule, std::move(rule_result)});
             continue;
         }
 
@@ -422,7 +580,7 @@ ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
                     term_value->value = value;
                     return true;
                 },
-                &result,
+                &rule_result,
                 &error,
                 &resolved_terms);
             if (!evaluated) {
@@ -432,16 +590,16 @@ ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
                 // malformed aligned window. A later update of the missing
                 // sequence will retry the affected range.
                 if (isMissingMappedSequenceError(error)) {
-                    ++result.pending_count;
+                    ++rule_result.pending_count;
                     continue;
                 }
                 return failure(internal::invalidArgument(error));
             }
         }
+        outcomes.push_back({&rule, std::move(rule_result)});
     }
 
-    finalizeResult(&result);
-    return result;
+    return combineRuleOutcomes(project_id, std::move(outcomes));
 }
 
 ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
@@ -453,6 +611,53 @@ ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
         rules,
         data,
         range);
+}
+
+ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
+    const ProjectId& project_id,
+    const std::vector<ConstraintRule>& rules,
+    const WindowStatisticsData& data) const {
+    if (rules.empty()) {
+        return failure(internal::invalidArgument(
+            "constraint rules must not be empty"));
+    }
+    if (data.window_start_time > data.window_end_time) {
+        return failure(internal::invalidArgument(
+            "window statistics start time must not be after end time"));
+    }
+
+    std::vector<RuleCheckOutcome> outcomes;
+    outcomes.reserve(rules.size());
+    for (const auto& rule : rules) {
+        internal::ConstraintRuleProperties properties;
+        std::string error;
+        if (!internal::validateConstraintRule(
+                rule, &properties, &error)) {
+            return failure(internal::invalidArgument(error));
+        }
+        if (properties.kind !=
+            internal::ConstraintRuleKind::WindowAggregate) {
+            return failure(failedPrecondition(
+                "sample rules cannot be evaluated from window statistics"));
+        }
+
+        ConstraintCheckResult rule_result;
+        rule_result.project_id = project_id;
+        if (!evaluateAggregateRule(rule, data, &rule_result, &error)) {
+            return failure(internal::invalidArgument(error));
+        }
+        outcomes.push_back({&rule, std::move(rule_result)});
+    }
+    return combineRuleOutcomes(project_id, std::move(outcomes));
+}
+
+ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
+    const std::vector<ConstraintRule>& rules,
+    const WindowStatisticsData& data) const {
+    return checkConstraints(
+        data.project_id.empty() ? ProjectId{"default"} : data.project_id,
+        rules,
+        data);
 }
 
 }  // namespace sfkg::timeseries::core

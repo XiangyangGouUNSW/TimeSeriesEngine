@@ -96,6 +96,29 @@ int main() {
     result = registry.replaceConstraints({{{rule, true}}});
     assert(result.code == OperationCode::Ok);
 
+    ConstraintRule upper_only_aggregate = rule;
+    upper_only_aggregate.constraint_id = "temperature-average-upper";
+    upper_only_aggregate.lower_bound.reset();
+    upper_only_aggregate.terms.front().aggregation =
+        ConstraintAggregation::Average;
+    upper_only_aggregate.or_group_id = "temperature-choice";
+    result = registry.upsertConstraints({{{upper_only_aggregate, true}}});
+    assert(result.code == OperationCode::Ok);
+
+    ConstraintRule invalid_unbounded = rule;
+    invalid_unbounded.constraint_id = "invalid-unbounded";
+    invalid_unbounded.lower_bound.reset();
+    invalid_unbounded.upper_bound.reset();
+    result = registry.upsertConstraints({{{invalid_unbounded, true}}});
+    assert(result.code == OperationCode::InvalidArgument);
+
+    ConstraintRule invalid_mixed = upper_only_aggregate;
+    invalid_mixed.constraint_id = "invalid-mixed";
+    invalid_mixed.terms.push_back({
+        "x", 1.0, 0, ConstraintAggregation::Sample});
+    result = registry.upsertConstraints({{{invalid_mixed, true}}});
+    assert(result.code == OperationCode::InvalidArgument);
+
     rule.upper_bound = 100.0;
     result = registry.upsertConstraints({{{rule, true}}});
     assert(result.code == OperationCode::Ok);

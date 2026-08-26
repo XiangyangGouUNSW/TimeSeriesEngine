@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <deque>
+#include <cmath>
 #include <functional>
 #include <future>
 #include <limits>
@@ -46,6 +47,18 @@ constexpr std::size_t kMinimumSequenceGroupCost = 8;
 
 ProjectId effectiveProject(const ProjectId& project_id) {
     return project_id.empty() ? ProjectId{"default"} : project_id;
+}
+
+bool finiteNumericValue(const TimeseriesValue& value, double* output) {
+    if (const auto* number = std::get_if<double>(&value)) {
+        *output = *number;
+        return std::isfinite(*number);
+    }
+    if (const auto* number = std::get_if<std::int64_t>(&value)) {
+        *output = static_cast<double>(*number);
+        return true;
+    }
+    return false;
 }
 
 std::string scopedSequenceKey(
@@ -191,6 +204,77 @@ WindowService::WindowService()
 
 WindowService::~WindowService() = default;
 
+void WindowService::resetStatistics(SequenceWindow& sequence) {
+    sequence.statistics_valid = true;
+    sequence.statistics_count = 0;
+    sequence.statistics_non_numeric_count = 0;
+    sequence.statistics_sum = 0.0L;
+    sequence.statistics_minimum.clear();
+    sequence.statistics_maximum.clear();
+}
+
+void WindowService::appendStatistic(
+    SequenceWindow& sequence,
+    const RawTimeseriesPoint& point) {
+    if (!sequence.statistics_valid) {
+        return;
+    }
+    double value = 0.0;
+    if (!finiteNumericValue(point.value, &value)) {
+        ++sequence.statistics_non_numeric_count;
+        return;
+    }
+    ++sequence.statistics_count;
+    sequence.statistics_sum += static_cast<long double>(value);
+    while (!sequence.statistics_minimum.empty() &&
+           sequence.statistics_minimum.back().second >= value) {
+        sequence.statistics_minimum.pop_back();
+    }
+    sequence.statistics_minimum.emplace_back(point.time, value);
+    while (!sequence.statistics_maximum.empty() &&
+           sequence.statistics_maximum.back().second <= value) {
+        sequence.statistics_maximum.pop_back();
+    }
+    sequence.statistics_maximum.emplace_back(point.time, value);
+}
+
+void WindowService::removeStatistic(
+    SequenceWindow& sequence,
+    const RawTimeseriesPoint& point) {
+    if (!sequence.statistics_valid) {
+        return;
+    }
+    double value = 0.0;
+    if (!finiteNumericValue(point.value, &value)) {
+        if (sequence.statistics_non_numeric_count != 0) {
+            --sequence.statistics_non_numeric_count;
+        }
+        return;
+    }
+    if (sequence.statistics_count != 0) {
+        --sequence.statistics_count;
+    }
+    sequence.statistics_sum -= static_cast<long double>(value);
+    if (!sequence.statistics_minimum.empty() &&
+        sequence.statistics_minimum.front().first == point.time) {
+        sequence.statistics_minimum.pop_front();
+    }
+    if (!sequence.statistics_maximum.empty() &&
+        sequence.statistics_maximum.front().first == point.time) {
+        sequence.statistics_maximum.pop_front();
+    }
+}
+
+void WindowService::rebuildStatistics(SequenceWindow& sequence) {
+    flushLatePoints(sequence);
+    resetStatistics(sequence);
+    for (std::size_t index = sequence.active_begin;
+         index < sequence.points.size();
+         ++index) {
+        appendStatistic(sequence, sequence.points[index]);
+    }
+}
+
 void WindowService::replaceSequence(
     SequenceWindow& sequence,
     const TimeseriesBatch& data) {
@@ -220,11 +304,16 @@ void WindowService::replaceSequence(
     sequence.latest_time = sequence.points.empty()
         ? std::nullopt
         : std::optional<Timestamp>{sequence.points.back().time};
+    resetStatistics(sequence);
+    for (const auto& point : sequence.points) {
+        appendStatistic(sequence, point);
+    }
 }
 
 void WindowService::mergeSortedPoints(
     SequenceWindow& sequence,
     std::vector<RawTimeseriesPoint> incoming) {
+    sequence.statistics_valid = false;
     compactSequence(sequence);
     if (incoming.empty()) {
         return;
@@ -771,6 +860,9 @@ WindowUpdateResult WindowService::updateWindowIncremental(
                 prepared.sequence->points.push_back(std::move(point));
                 prepared.sequence->latest_time =
                     prepared.sequence->points.back().time;
+                WindowService::appendStatistic(
+                    *prepared.sequence,
+                    prepared.sequence->points.back());
             }
             timing.incremental_safe = true;
         } else if (!has_active_points &&
@@ -778,6 +870,7 @@ WindowUpdateResult WindowService::updateWindowIncremental(
             WindowService::mergeSortedPoints(
                 *prepared.sequence, std::move(prepared.incoming));
         } else {
+            prepared.sequence->statistics_valid = false;
             for (auto& point : prepared.incoming) {
                 const auto point_time = point.time;
                 prepared.sequence->late_points[point.time] = std::move(point);
@@ -909,11 +1002,15 @@ bool WindowService::pruneExpiredPoints(
             });
         if (first_active != begin) {
             evicted = true;
+            for (auto point = begin; point != first_active; ++point) {
+                WindowService::removeStatistic(points, *point);
+            }
         }
         const auto late_begin = points.late_points.begin();
         const auto late_end = points.late_points.lower_bound(start);
         if (late_begin != late_end) {
             evicted = true;
+            points.statistics_valid = false;
         }
         points.active_begin = static_cast<std::size_t>(
             first_active - points.points.begin());
@@ -1183,6 +1280,101 @@ WindowQueryResult WindowService::queryWindowData(
 WindowQueryResult WindowService::queryWindowData(
     const WindowQuery& query) const {
     return queryWindowData(query.project_id, query);
+}
+
+WindowStatisticsResult WindowService::queryWindowStatistics(
+    const ProjectId& project_id,
+    const std::vector<SequenceId>& sequence_ids) const {
+    WindowStatisticsResult result;
+    result.data.project_id = effectiveProject(project_id);
+    if (sequence_ids.empty()) {
+        result.operation = internal::invalidArgument(
+            "window statistics sequence_ids must not be empty");
+        return result;
+    }
+
+    std::vector<std::pair<SequenceId, std::shared_ptr<SequenceWindow>>>
+        sequences;
+    std::optional<Timestamp> watermark;
+    std::int64_t window_size = 0;
+    {
+        std::shared_lock lock(mutex_);
+        const auto watermark_found = watermarks_.find(result.data.project_id);
+        if (watermark_found != watermarks_.end()) {
+            watermark = watermark_found->second;
+        }
+        const auto size_found = window_sizes_.find(result.data.project_id);
+        window_size = size_found == window_sizes_.end()
+            ? kDefaultWindowSizeMs
+            : size_found->second;
+        sequences.reserve(sequence_ids.size());
+        for (const auto& sequence_id : sequence_ids) {
+            const auto found = sequence_windows_.find(
+                scopedSequenceKey(result.data.project_id, sequence_id));
+            if (found != sequence_windows_.end() && found->second) {
+                sequences.emplace_back(sequence_id, found->second);
+            }
+        }
+    }
+    if (!watermark || window_size <= 0) {
+        result.operation = internal::ok(0, "window statistics are empty");
+        return result;
+    }
+
+    result.data.window_start_time = *watermark <
+            std::numeric_limits<Timestamp>::min() + window_size
+        ? std::numeric_limits<Timestamp>::min()
+        : *watermark - window_size;
+    result.data.window_end_time = *watermark ==
+            std::numeric_limits<Timestamp>::max()
+        ? *watermark
+        : *watermark + 1;
+
+    std::size_t point_count = 0;
+    for (const auto& [sequence_id, sequence] : sequences) {
+        std::unique_lock sequence_lock(sequence->mutex);
+        if (!sequence->statistics_valid) {
+            rebuildStatistics(*sequence);
+        }
+        if (sequence->statistics_non_numeric_count != 0) {
+            result.operation = internal::invalidArgument(
+                "window aggregate constraint values must be finite numeric "
+                "values for sequence: " + sequence_id);
+            result.data.sequence_statistics.clear();
+            return result;
+        }
+        if (sequence->statistics_count == 0) {
+            continue;
+        }
+        const auto average = static_cast<double>(
+            sequence->statistics_sum /
+            static_cast<long double>(sequence->statistics_count));
+        if (!std::isfinite(average) ||
+            sequence->statistics_minimum.empty() ||
+            sequence->statistics_maximum.empty()) {
+            result.operation = internal::invalidArgument(
+                "window aggregate statistics are not finite for sequence: " +
+                sequence_id);
+            result.data.sequence_statistics.clear();
+            return result;
+        }
+        result.data.sequence_statistics.emplace(
+            sequence_id,
+            SequenceWindowStatistics{
+                sequence->statistics_count,
+                average,
+                sequence->statistics_maximum.front().second,
+                sequence->statistics_minimum.front().second});
+        point_count += sequence->statistics_count;
+    }
+    result.operation = internal::ok(
+        point_count, "window statistics query completed");
+    return result;
+}
+
+WindowStatisticsResult WindowService::queryWindowStatistics(
+    const std::vector<SequenceId>& sequence_ids) const {
+    return queryWindowStatistics("default", sequence_ids);
 }
 
 }  // namespace sfkg::timeseries::core

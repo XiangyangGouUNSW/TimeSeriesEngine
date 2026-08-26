@@ -183,19 +183,30 @@ message AlignmentConfig {
   string project_id = 3;
 }
 
+enum ConstraintAggregation {
+  CONSTRAINT_AGGREGATION_SAMPLE = 0;
+  CONSTRAINT_AGGREGATION_AVERAGE = 1;
+  CONSTRAINT_AGGREGATION_MAXIMUM = 2;
+  CONSTRAINT_AGGREGATION_MINIMUM = 3;
+}
+
 message ConstraintTerm {
   string variable = 1;
   double coefficient = 2;
   uint64 sample_offset = 3;
+  ConstraintAggregation aggregation = 4;
 }
 
 message ConstraintRule {
   string constraint_id = 1;
   map<string, string> variable_mapping = 2;
-  double lower_bound = 3;
-  double upper_bound = 4;
+  optional double lower_bound = 3;
+  optional double upper_bound = 4;
   repeated ConstraintTerm terms = 5;
   string project_id = 6;
+  // Rules with the same non-empty id form one OR clause. Different clauses,
+  // and rules with an empty id, are combined with AND.
+  string or_group_id = 7;
 }
 
 message ConstraintTermValue {
@@ -205,15 +216,17 @@ message ConstraintTermValue {
   uint64 sample_offset = 4;
   int64 sample_time = 5;
   double value = 6;
+  ConstraintAggregation aggregation = 7;
 }
 
 message ConstraintViolation {
   string constraint_id = 1;
   int64 anchor_time = 2;
-  double lower_bound = 3;
-  double upper_bound = 4;
+  optional double lower_bound = 3;
+  optional double upper_bound = 4;
   double evaluated_value = 5;
   repeated ConstraintTermValue term_values = 6;
+  string or_group_id = 7;
 }
 
 message RuntimeInstanceConfig {

@@ -139,6 +139,15 @@ if(SFKG_BUILD_GRPC)
     target_link_libraries(sfkg-timeseries-core-smoke
         PRIVATE sfkg_timeseries_proto)
 
+    if(SFKG_BUILD_TESTS)
+        add_executable(continuous_constraint_state_test
+            tests/continuous_constraint_state_test.cpp)
+        target_link_libraries(continuous_constraint_state_test
+            PRIVATE sfkg_timeseries_grpc)
+        add_test(NAME continuous_constraint_state_test
+            COMMAND continuous_constraint_state_test)
+    endif()
+
     add_executable(etth1-grpc-history-demo
         tools/etth1_grpc_history_demo.cpp)
     target_link_libraries(etth1-grpc-history-demo
@@ -178,6 +187,10 @@ if(SFKG_BUILD_BENCHMARKS)
     add_executable(window_service_benchmark
         tools/window_service_benchmark.cpp)
     target_link_libraries(window_service_benchmark
+        PRIVATE sfkg_timeseries_domain)
+    add_executable(constraint_aggregate_benchmark
+        tools/constraint_aggregate_benchmark.cpp)
+    target_link_libraries(constraint_aggregate_benchmark
         PRIVATE sfkg_timeseries_domain)
 endif()
 
