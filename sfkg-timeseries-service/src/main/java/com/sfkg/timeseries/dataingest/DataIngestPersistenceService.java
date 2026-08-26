@@ -123,12 +123,7 @@ public class DataIngestPersistenceService {
             entityProperties.put("tableName", tableName);
             entityProperties.put("businessKey", businessKey);
             entityProperties.put("recordJson", json);
-            rawFields.forEach((key, value) -> {
-                Object normalizedValue = normalizePropertyValue(value);
-                if (normalizedValue != null) {
-                    entityProperties.put("field_" + key, normalizedValue);
-                }
-            });
+            addStableSemanticProperties(tableName, rawFields, entityProperties);
             return new DataIngestEntityPayload(
                     tableName + ":" + businessKey,
                     tableName,
@@ -263,6 +258,99 @@ public class DataIngestPersistenceService {
             return objectMapper.writeValueAsString(value);
         } catch (JsonProcessingException exception) {
             return String.valueOf(value);
+        }
+    }
+
+    /**
+     * Add stable, query-friendly RDF property names while keeping recordJson
+     * unchanged.
+     */
+    private void addStableSemanticProperties(
+            String tableName,
+            Map<String, Object> rawFields,
+            Map<String, Object> entityProperties) {
+        switch (tableName) {
+            case "timeseries_instance_config" -> {
+                copyStableProperty(rawFields, entityProperties, "sequenceId", "sequence_id");
+                copyStableProperty(rawFields, entityProperties, "instanceName", "instance_name");
+                copyStableProperty(rawFields, entityProperties, "externalSequenceId", "external_sequence_id");
+                copyStableProperty(rawFields, entityProperties, "categoryId", "category_id");
+                copyStableProperty(rawFields, entityProperties, "categoryName", "category_name");
+                copyStableProperty(rawFields, entityProperties, "deviceInstanceId", "device_instance_id");
+                copyStableProperty(rawFields, entityProperties, "dataSourceId", "data_source_id");
+                copyStableProperty(rawFields, entityProperties, "accessStatus", "access_status");
+                copyStableProperty(rawFields, entityProperties, "dataType", "data_type");
+                copyStableProperty(rawFields, entityProperties, "seriesKind", "series_kind");
+            }
+            case "timeseries_category" -> {
+                copyStableProperty(rawFields, entityProperties, "categoryId", "category_id");
+                copyStableProperty(rawFields, entityProperties, "categoryName", "category_name");
+                copyStableProperty(rawFields, entityProperties, "dataType", "data_type");
+                copyStableProperty(rawFields, entityProperties,
+                        "applicableObjectType", "applicable_object_type");
+                copyStableProperty(rawFields, entityProperties, "defaultUnit", "default_unit");
+                copyStableProperty(rawFields, entityProperties, "confirmStatus", "confirm_status");
+            }
+            case "timeseries_constraint" -> {
+                copyStableProperty(rawFields, entityProperties, "constraintId", "constraint_id");
+                copyStableProperty(rawFields, entityProperties, "constraintName", "constraint_name");
+                copyStableProperty(rawFields, entityProperties,
+                        "constraintDescription", "constraint_description");
+                copyStableProperty(rawFields, entityProperties,
+                        "constraintExpression", "constraint_expression");
+                copyStableProperty(rawFields, entityProperties, "lowerBound", "lower_bound");
+                copyStableProperty(rawFields, entityProperties, "upperBound", "upper_bound");
+                copyStableProperty(rawFields, entityProperties, "effectiveStatus", "effective_status");
+                copyStableProperty(rawFields, entityProperties, "confirmStatus", "confirm_status");
+            }
+            case "timeseries_relation" -> {
+                copyStableProperty(rawFields, entityProperties, "relationId", "relation_id");
+                copyStableProperty(rawFields, entityProperties, "relationName", "relation_name");
+                copyStableProperty(rawFields, entityProperties, "relationType", "relation_type");
+                copyStableProperty(rawFields, entityProperties,
+                        "targetSequenceId", "target_sequence_id");
+                copyStableProperty(rawFields, entityProperties,
+                        "targetCategoryName", "target_category_name");
+                copyStableProperty(rawFields, entityProperties, "lagRange", "lag_range");
+                copyStableProperty(rawFields, entityProperties, "confidence", "confidence");
+                copyStableProperty(rawFields, entityProperties,
+                        "relationDescription", "relation_description");
+                copyStableProperty(rawFields, entityProperties, "effectiveStatus", "effective_status");
+                copyStableProperty(rawFields, entityProperties, "confirmStatus", "confirm_status");
+            }
+            case "timeseries_event" -> {
+                copyStableProperty(rawFields, entityProperties, "eventId", "event_id");
+                copyStableProperty(rawFields, entityProperties, "eventName", "event_name");
+                copyStableProperty(rawFields, entityProperties, "eventType", "event_type");
+                copyStableProperty(rawFields, entityProperties, "eventSource", "event_source");
+                copyStableProperty(rawFields, entityProperties, "taskId", "task_id");
+                copyStableProperty(rawFields, entityProperties,
+                        "eventDescription", "event_description");
+                copyStableProperty(rawFields, entityProperties, "eventLevel", "event_level");
+                copyStableProperty(rawFields, entityProperties, "eventTime", "event_time");
+                copyStableProperty(rawFields, entityProperties, "confirmStatus", "confirm_status");
+                copyStableProperty(rawFields, entityProperties, "handleStatus", "handle_status");
+                copyStableProperty(rawFields, entityProperties,
+                        "diagnosisResult", "diagnosis_result");
+                copyStableProperty(rawFields, entityProperties,
+                        "diagnosisBasis", "diagnosis_basis");
+                copyStableProperty(rawFields, entityProperties,
+                        "disposalResult", "disposal_result");
+            }
+            default -> {
+                // Other persistence tables keep recordJson as their payload.
+            }
+        }
+    }
+
+    private void copyStableProperty(
+            Map<String, Object> rawFields,
+            Map<String, Object> entityProperties,
+            String sourceName,
+            String stableName) {
+        Object value = normalizePropertyValue(rawFields.get(sourceName));
+        if (value != null) {
+            entityProperties.put(stableName, value);
         }
     }
 

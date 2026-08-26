@@ -1,6 +1,7 @@
 package com.sfkg.timeseries.dataingest;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -164,6 +165,12 @@ class DataIngestRecordLoaderTests {
                     payload.path("relations").get(0).path("type").asText());
             assertEquals("timeseries_category:cat001",
                     payload.path("relations").get(0).path("target").asText());
+
+            var propertiesNode = payload.path("entities").get(0).path("properties");
+            assertEquals("1001", propertiesNode.path("sequence_id").asText());
+            assertEquals("cat001", propertiesNode.path("category_id").asText());
+            assertFalse(propertiesNode.has("field_sequenceId"));
+            assertTrue(propertiesNode.path("recordJson").asText().contains("sequenceId"));
         } finally {
             server.stop(0);
         }
