@@ -19,6 +19,7 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfException;
 
 @Configuration
 @EnableMethodSecurity
@@ -57,7 +58,10 @@ public class SecurityConfig {
                         .authenticationEntryPoint((request, response, cause) ->
                                 writeError(response, objectMapper, 401, "login required"))
                         .accessDeniedHandler((request, response, cause) ->
-                                writeError(response, objectMapper, 403, "permission denied")))
+                                writeError(response, objectMapper, 403,
+                                        cause instanceof CsrfException
+                                                ? "csrf token invalid"
+                                                : "permission denied")))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/login", "/api/auth/logout", "/api/auth/csrf")
                             .permitAll()

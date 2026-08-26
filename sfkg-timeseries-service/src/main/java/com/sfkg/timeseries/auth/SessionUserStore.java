@@ -50,13 +50,27 @@ public class SessionUserStore {
 
     private void ensureBootstrapUserUnlocked(List<SessionUserAccount> accounts) {
         String username = properties.getBootstrapUsername();
-        String password = properties.getBootstrapPassword();
-        if (username == null || username.isBlank() || password == null || password.isBlank()) {
+        if (username == null || username.isBlank()) {
             throw new BusinessException("bootstrap authentication user is not configured");
         }
-        boolean exists = accounts.stream().anyMatch(account -> username.equals(account.getUsername()));
-        if (exists) {
+        SessionUserAccount existingBootstrap = accounts.stream()
+                .filter(account -> username.equals(account.getUsername()))
+                .findFirst()
+                .orElse(null);
+        if (existingBootstrap != null) {
+            // Migrate an administrator file created by the initial auth draft.
+            if (existingBootstrap.getPermissions() == null
+                    || existingBootstrap.getPermissions().isEmpty()) {
+                existingBootstrap.setPermissions(allPermissions());
+                writeAllUnlocked(accounts);
+            }
             return;
+        }
+
+        String password = properties.getBootstrapPassword();
+        if (password == null || password.isBlank()) {
+            throw new BusinessException(
+                    "bootstrap authentication password is not configured; set TIMESERIES_AUTH_BOOTSTRAP_PASSWORD");
         }
 
         SessionUserAccount admin = new SessionUserAccount();
@@ -64,12 +78,17 @@ public class SessionUserStore {
         admin.setUsername(username);
         admin.setPasswordHash(passwordEncoder.encode(password));
         admin.setEnabled(true);
-        admin.setPermissions(new LinkedHashSet<>());
-        for (PermissionCode permission : PermissionCode.values()) {
-            admin.getPermissions().add(permission.name());
-        }
+        admin.setPermissions(allPermissions());
         accounts.add(admin);
         writeAllUnlocked(accounts);
+    }
+
+    private LinkedHashSet<String> allPermissions() {
+        LinkedHashSet<String> permissions = new LinkedHashSet<>();
+        for (PermissionCode permission : PermissionCode.values()) {
+            permissions.add(permission.name());
+        }
+        return permissions;
     }
 
     private List<SessionUserAccount> readAllUnlocked() {

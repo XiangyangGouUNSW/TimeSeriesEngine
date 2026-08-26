@@ -13,6 +13,23 @@ JSON_DIR="src/test/resources/command-requests/ett"
 DATA_INGEST_URL="${TIMESERIES_DATA_INGEST_ENDPOINT:-http://127.0.0.1:8006}"
 CORE_ENDPOINT="${TIMESERIES_CORE_ENDPOINT:-127.0.0.1:50051}"
 
+: "${TIMESERIES_AUTH_BOOTSTRAP_USERNAME:=admin}"
+: "${TIMESERIES_AUTH_BOOTSTRAP_PASSWORD:=admin123}"
+export TIMESERIES_AUTH_BOOTSTRAP_USERNAME TIMESERIES_AUTH_BOOTSTRAP_PASSWORD
+COOKIE_JAR="$(mktemp)"
+AUTH_BODY="$(mktemp)"
+trap 'rm -f "$COOKIE_JAR" "$AUTH_BODY"' EXIT
+python3 -c 'import json,os; print(json.dumps({"username":os.environ["TIMESERIES_AUTH_BOOTSTRAP_USERNAME"],"password":os.environ["TIMESERIES_AUTH_BOOTSTRAP_PASSWORD"]}))' > "$AUTH_BODY"
+curl -sS -f -c "$COOKIE_JAR" -H "Content-Type: application/json" \
+    --data-binary "@$AUTH_BODY" "$BASE_URL/api/auth/login" > /dev/null
+CSRF_TOKEN=$(curl -sS -f -c "$COOKIE_JAR" -b "$COOKIE_JAR" "$BASE_URL/api/auth/csrf" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["token"])')
+if [[ -z "$CSRF_TOKEN" ]]; then
+    echo "Login succeeded but CSRF token was not returned"
+    exit 1
+fi
+CURL_AUTH=(-b "$COOKIE_JAR" -H "X-XSRF-TOKEN: $CSRF_TOKEN")
+
 PASS=0
 FAIL=0
 SKIP=0
@@ -58,11 +75,11 @@ post_json() {
 
     response_file="$(mktemp)"
     if [[ "$data_arg" == @* ]]; then
-        http_code=$(curl -s -o "$response_file" -w "%{http_code}" -X "$method" "$url" \
+        http_code=$(curl -s "${CURL_AUTH[@]}" -o "$response_file" -w "%{http_code}" -X "$method" "$url" \
             -H "Content-Type: application/json" \
             --data-binary "$data_arg")
     else
-        http_code=$(curl -s -o "$response_file" -w "%{http_code}" -X "$method" "$url" \
+        http_code=$(curl -s "${CURL_AUTH[@]}" -o "$response_file" -w "%{http_code}" -X "$method" "$url" \
             -H "Content-Type: application/json" \
             -d "$data_arg")
     fi
@@ -108,16 +125,16 @@ check_request() {
     response_file="$(mktemp)"
     if [[ -n "$data_arg" ]]; then
         if [[ "$data_arg" == @* ]]; then
-            http_code=$(curl -s -o "$response_file" -w "%{http_code}" -X "$method" "$url" \
+            http_code=$(curl -s "${CURL_AUTH[@]}" -o "$response_file" -w "%{http_code}" -X "$method" "$url" \
                 -H "Content-Type: application/json" \
                 --data-binary "$data_arg")
         else
-            http_code=$(curl -s -o "$response_file" -w "%{http_code}" -X "$method" "$url" \
+            http_code=$(curl -s "${CURL_AUTH[@]}" -o "$response_file" -w "%{http_code}" -X "$method" "$url" \
                 -H "Content-Type: application/json" \
                 -d "$data_arg")
         fi
     else
-        http_code=$(curl -s -o "$response_file" -w "%{http_code}" -X "$method" "$url")
+        http_code=$(curl -s "${CURL_AUTH[@]}" -o "$response_file" -w "%{http_code}" -X "$method" "$url")
     fi
 
     if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]] && \
@@ -141,7 +158,7 @@ check_list() {
     local count
 
     response_file="$(mktemp)"
-    curl -s -o "$response_file" -X GET "$url"
+    curl -s "${CURL_AUTH[@]}" -o "$response_file" -X GET "$url"
     count=$(python3 -c "import sys,json;d=json.load(open(sys.argv[1]));v=d.get('data');print(len(v) if isinstance(v,list) else ('n/a' if v is None else 1))" "$response_file" 2>/dev/null)
     if grep -q '"success"[[:space:]]*:[[:space:]]*true' "$response_file"; then
         PASS=$((PASS + 1))

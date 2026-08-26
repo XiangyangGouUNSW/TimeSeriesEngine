@@ -1,5 +1,15 @@
 import axios from 'axios'
 
+let csrfToken = ''
+
+export function setCsrfToken(token) {
+  csrfToken = token || ''
+}
+
+export function clearCsrfToken() {
+  csrfToken = ''
+}
+
 // 所有请求走相对路径，开发模式由 vite proxy 转发到 Java 后端（:8080）
 const http = axios.create({
   baseURL: '',
@@ -11,6 +21,14 @@ const http = axios.create({
 
 http.interceptors.request.use((config) => {
   config.withCredentials = true
+  const method = (config.method || 'get').toLowerCase()
+  if (csrfToken && !['get', 'head', 'options'].includes(method)) {
+    if (config.headers?.set) {
+      config.headers.set('X-XSRF-TOKEN', csrfToken)
+    } else {
+      config.headers = { ...config.headers, 'X-XSRF-TOKEN': csrfToken }
+    }
+  }
   return config
 })
 

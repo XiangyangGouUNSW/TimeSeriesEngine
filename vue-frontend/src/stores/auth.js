@@ -1,5 +1,6 @@
 import { reactive } from 'vue'
 import { api } from '../api/timeseries'
+import { clearCsrfToken, setCsrfToken } from '../api/http'
 
 const state = reactive({
   user: null,
@@ -31,8 +32,15 @@ export const authStore = {
 
     state.loading = true
     state.loadPromise = api.currentUser()
-      .then((response) => {
+      .then(async (response) => {
         state.user = response.success ? response.data : null
+        if (state.user) {
+          const csrf = await api.csrfToken()
+          if (!csrf.success || !csrf.data?.token) {
+            throw new Error('CSRF token query failed')
+          }
+          setCsrfToken(csrf.data.token)
+        }
         return Boolean(state.user)
       })
       .catch(() => {
@@ -54,7 +62,12 @@ export const authStore = {
     }
     state.user = response.data
     state.initialized = true
-    await api.csrfToken()
+    const csrf = await api.csrfToken()
+    if (!csrf.success || !csrf.data?.token) {
+      state.user = null
+      throw new Error('CSRF token query failed')
+    }
+    setCsrfToken(csrf.data.token)
     return state.user
   },
 
@@ -62,6 +75,7 @@ export const authStore = {
     try {
       await api.logout()
     } finally {
+      clearCsrfToken()
       state.user = null
       state.initialized = true
     }

@@ -19,7 +19,14 @@ npm run dev
 
 浏览器访问 http://localhost:5173
 
-首次启动后可使用默认管理员登录：用户名 `admin`，密码 `admin123`。登录成功后，浏览器通过 `JSESSIONID` Cookie 维持服务端 Session；前端请求已开启 `withCredentials`，不需要手动把用户信息放入业务请求参数。
+首次登录默认使用测试账号 `admin` / `admin123`（仓库内硬编码，仅用于测试）；如需覆盖可设置环境变量：
+
+```powershell
+$env:TIMESERIES_AUTH_BOOTSTRAP_USERNAME = "admin"
+$env:TIMESERIES_AUTH_BOOTSTRAP_PASSWORD = "replace-with-a-local-secret"
+```
+
+首次登录时会将管理员的 BCrypt 密码哈希保存到 `data/timeseries-users.json`。登录成功后，浏览器通过 `JSESSIONID` Cookie 维持服务端 Session；前端请求已开启 `withCredentials`，不需要手动把用户信息放入业务请求参数。
 
 系统支持三种权限：`HISTORY_DATA`（历史数据）、`CONFIG_INFO`（配置和项目）、`TASK_INFO`（任务、结果、事件和决策）。没有登录会跳转到登录页，没有对应权限的页面不会显示，直接请求接口时服务端返回 `401` 或 `403`。
 

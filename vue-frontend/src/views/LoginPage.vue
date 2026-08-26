@@ -5,7 +5,7 @@ import { authStore } from '../stores/auth'
 
 const router = useRouter()
 const route = useRoute()
-const form = reactive({ username: 'admin', password: 'admin123' })
+const form = reactive({ username: '', password: '' })
 const errorMessage = ref('')
 const submitting = ref(false)
 
