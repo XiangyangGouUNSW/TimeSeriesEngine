@@ -171,8 +171,7 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
             return;
         }
         cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
-        if (memoryCache.getCategory(projectId, categoryId).isEmpty()
-                && memoryCache.getCategory(categoryId).isEmpty()) {
+        if (memoryCache.getCategory(projectId, categoryId).isEmpty()) {
             throw new BusinessException("category not found: " + categoryId);
         }
     }
@@ -212,7 +211,6 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
         }
         cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
         return memoryCache.getCategory(projectId, categoryId)
-                .or(() -> memoryCache.getCategory(categoryId))
                 .map(TimeseriesCategory::getCategoryName)
                 .orElse(null);
     }

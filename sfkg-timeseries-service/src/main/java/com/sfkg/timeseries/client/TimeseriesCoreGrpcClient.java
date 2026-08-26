@@ -373,8 +373,7 @@ public class TimeseriesCoreGrpcClient {
         for (String id : ids) {
             if (id == null || id.isBlank()) continue;
             // Check if it's a category ID
-            if (memoryCache.getCategory(projectId, id).isPresent()
-                    || (projectId == null && memoryCache.getCategory(id).isPresent())) {
+            if (memoryCache.getCategory(projectId, id).isPresent()) {
                 // Expand category → all sequence IDs
                 for (TimeseriesInstanceConfig inst : memoryCache.listInstanceConfigs()) {
                     if (java.util.Objects.equals(projectId, inst.getProjectId())

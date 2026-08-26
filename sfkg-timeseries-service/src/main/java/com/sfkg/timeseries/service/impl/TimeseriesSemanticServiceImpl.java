@@ -101,8 +101,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         String categoryId = request != null ? request.getCategoryId() : null;
         if (categoryId != null) {
             cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
-            if (memoryCache.getCategory(request.getProjectId(), categoryId).isPresent()
-                    || memoryCache.getCategory(categoryId).isPresent()) {
+            if (memoryCache.getCategory(request.getProjectId(), categoryId).isPresent()) {
                 throw new BusinessException("category already exists: " + categoryId);
             }
         }
@@ -207,8 +206,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         String constraintId = request != null ? request.getConstraintId() : null;
         if (constraintId != null) {
             cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
-            if (memoryCache.getConstraint(request.getProjectId(), constraintId).isPresent()
-                    || memoryCache.getConstraint(constraintId).isPresent()) {
+            if (memoryCache.getConstraint(request.getProjectId(), constraintId).isPresent()) {
                 throw new BusinessException("constraint already exists: " + constraintId);
             }
         }
@@ -345,8 +343,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         String relationId = request != null ? request.getRelationId() : null;
         if (relationId != null) {
             cacheManager.ensureTableLoaded(CachedTable.RELATION);
-            if (memoryCache.getRelation(request.getProjectId(), relationId).isPresent()
-                    || memoryCache.getRelation(relationId).isPresent()) {
+            if (memoryCache.getRelation(request.getProjectId(), relationId).isPresent()) {
                 throw new BusinessException("relation already exists: " + relationId);
             }
         }
@@ -614,7 +611,6 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         }
         cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
         return memoryCache.getCategory(projectId, categoryId)
-                .or(() -> memoryCache.getCategory(categoryId))
                 .map(TimeseriesCategory::getCategoryName)
                 .orElse(null);
     }
