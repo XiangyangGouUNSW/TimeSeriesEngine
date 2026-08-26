@@ -2,7 +2,7 @@
 
 Python 时序分析模块：模型异常检测、时序预测与预警、归因建议。
 通过 gRPC 从 C 端（sfkg-timeseries-core）获取数据，向 S 端（统一业务服务）
-提供分析服务。
+提供分析服务。支持 Project ID 多租户隔离（不同项目的任务/结果/模型互不串扰）。
 
 ## 当前实现范围
 
@@ -34,6 +34,10 @@ Python 时序分析模块：模型异常检测、时序预测与预警、归因�
 - **模型版本**：`config_version` 进模型缓存 key（`{task_id}@v{ver}` /
   `{task_id}:{method}@v{ver}`），版本变 → key 变 → 自动重训；**保留最近 2 个版本**
   （回滚到上一配置秒级复用旧模型不重训，磁盘有界）；
+- **Project ID 多租户隔离**（对齐 C/S 分支 08-25 新增）：任务状态、结果、模型缓存全部按
+  `project_id` 复合键隔离（`{project_id}::{task_id}`、模型
+  `{project_id}::{task_id}:{method}@v{ver}`）。请求级 `project_id` 权威，空值归一化为
+  `default`；同 task_id 的不同项目互不串数据（任务状态/结果/模型各自独立，重训互不干扰）；
 - **任务调度**：注册制生命周期（Sync 注册 → Scheduler 周期扫描 → 结果查询）；
   **双队列双 worker 池**——训练队列（默认 1 worker 串行）与推理队列（默认 2 worker 并行）
   分离，重型训练不阻塞其他任务的在线检测/预测；队列有界满则跳过下轮、inflight 去重、
@@ -98,6 +102,26 @@ python tests/test_analysis_client.py
 python tools/fake_core_server.py     # 假 C 端，监听 50051
 python app/analysis_server.py
 ```
+
+## 部署 / Docker 打包
+
+本模块无 Dockerfile，打包由 C 端同学统一编排（docker-compose 串起 S/C/P + TDengine）。
+打包方按以下几点操作即可：
+
+1. **构建时先生成 gRPC stub**：`generated/` 已 gitignore、不会随 clone 出现。构建阶段
+   必须跑 `tools/gen_proto.sh`（依赖 `grpcio-tools`，`requirements.txt` 已含），否则
+   `import timeseries_analysis_pb2` 会报 ModuleNotFoundError。
+2. **`models/` 是运行时缓存**：gitignore 不提交，首次训练自动创建。容器内可挂载持久卷
+   （可选）；不挂载也能跑（每次重启重训一次）。
+3. **`core.provider` 必须从 `mock` 改为 `grpc`**：默认 `mock` 用本地 ETT 假数据、只供
+   联调。部署时改 `config.yaml` 的 `core.address` / `core.port` 指向真 C 端地址（默认
+   `localhost:50051`）。
+4. **对外监听**：`server.address 0.0.0.0` / `server.port 50053`，供 S 端调用；容器内请
+   映射该端口。
+5. **依赖较重**：`torch`（建议 CUDA 版，体积几个 GB）+ `transformers`。纯 CPU 也能跑
+   （预测变慢），镜像偏大属正常，不必担心。
+6. **多核机器限线程**：容器内若 CPU 核多，需设 `SFKG_MAX_THREADS`（默认 4）限制
+   OpenMP/torch 线程，否则 sklearn/torch 线程过订阅会卡死（见下方「说明」节）。
 
 ## 配置
 
