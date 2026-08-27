@@ -8,8 +8,8 @@ import org.springframework.stereotype.Component;
 public class SessionAuthProperties {
 
     private String userFile = "data/timeseries-users.json";
-    private String bootstrapUsername = "admin";
-    private String bootstrapPassword = "admin123";
+    private String bootstrapUsername = "";
+    private String bootstrapPassword = "";
 
     public String getUserFile() {
         return userFile;

@@ -1,8 +1,5 @@
 package com.sfkg.timeseries.auth;
 
-import com.fasterxml.jackson.databind.JavaType;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sfkg.timeseries.common.BusinessException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -12,8 +9,13 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Repository;
+
+import com.fasterxml.jackson.databind.JavaType;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sfkg.timeseries.common.BusinessException;
 
 /** Local user store for the first runnable session-authentication version. */
 @Repository
@@ -48,10 +50,15 @@ public class SessionUserStore {
         }
     }
 
+    /**
+     * First-run seeding, fully optional. If no bootstrap username is configured,
+     * only accounts from the user file are used and nothing else happens.
+     */
     private void ensureBootstrapUserUnlocked(List<SessionUserAccount> accounts) {
         String username = properties.getBootstrapUsername();
         if (username == null || username.isBlank()) {
-            throw new BusinessException("bootstrap authentication user is not configured");
+            // Bootstrap 未配置：直接使用用户文件中的账号，不做任何初始化。
+            return;
         }
         SessionUserAccount existingBootstrap = accounts.stream()
                 .filter(account -> username.equals(account.getUsername()))

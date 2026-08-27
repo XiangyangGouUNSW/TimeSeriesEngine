@@ -22,10 +22,10 @@ trap 'rm -f "$COOKIE_JAR" "$AUTH_BODY"' EXIT
 python3 -c 'import json,os; print(json.dumps({"username":os.environ["TIMESERIES_AUTH_BOOTSTRAP_USERNAME"],"password":os.environ["TIMESERIES_AUTH_BOOTSTRAP_PASSWORD"]}))' > "$AUTH_BODY"
 curl -sS -f -c "$COOKIE_JAR" -H "Content-Type: application/json" \
     --data-binary "@$AUTH_BODY" "$BASE_URL/api/auth/login" > /dev/null
-CSRF_TOKEN=$(curl -sS -f -c "$COOKIE_JAR" -b "$COOKIE_JAR" "$BASE_URL/api/auth/csrf" \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["token"])')
+curl -sS -f -c "$COOKIE_JAR" -b "$COOKIE_JAR" "$BASE_URL/api/auth/csrf" > /dev/null
+CSRF_TOKEN=$(awk '$6 == "XSRF-TOKEN" { token = $7 } END { print token }' "$COOKIE_JAR")
 if [[ -z "$CSRF_TOKEN" ]]; then
-    echo "Login succeeded but CSRF token was not returned"
+    echo "Login succeeded but the XSRF-TOKEN cookie was not returned"
     exit 1
 fi
 CURL_AUTH=(-b "$COOKIE_JAR" -H "X-XSRF-TOKEN: $CSRF_TOKEN")

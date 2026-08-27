@@ -19,7 +19,6 @@ npm run dev
 
 浏览器访问 http://localhost:5173
 
-首次登录默认使用测试账号 `admin` / `admin123`（仓库内硬编码，仅用于测试）；如需覆盖可设置环境变量：
 
 ```powershell
 $env:TIMESERIES_AUTH_BOOTSTRAP_USERNAME = "admin"

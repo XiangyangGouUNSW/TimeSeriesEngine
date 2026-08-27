@@ -1,6 +1,6 @@
 import { reactive } from 'vue'
 import { api } from '../api/timeseries'
-import { clearCsrfToken, setCsrfToken } from '../api/http'
+import { setCsrfToken } from '../api/http'
 
 const state = reactive({
   user: null,
@@ -8,6 +8,14 @@ const state = reactive({
   loading: false,
   loadPromise: null,
 })
+
+async function initializeCsrfCookie() {
+  const csrf = await api.csrfToken()
+  if (!csrf.success || !csrf.data?.token) {
+    throw new Error('CSRF token query failed')
+  }
+  setCsrfToken(csrf.data.token)
+}
 
 export const authStore = {
   get user() {
@@ -35,11 +43,7 @@ export const authStore = {
       .then(async (response) => {
         state.user = response.success ? response.data : null
         if (state.user) {
-          const csrf = await api.csrfToken()
-          if (!csrf.success || !csrf.data?.token) {
-            throw new Error('CSRF token query failed')
-          }
-          setCsrfToken(csrf.data.token)
+          await initializeCsrfCookie()
         }
         return Boolean(state.user)
       })
@@ -62,12 +66,12 @@ export const authStore = {
     }
     state.user = response.data
     state.initialized = true
-    const csrf = await api.csrfToken()
-    if (!csrf.success || !csrf.data?.token) {
+    try {
+      await initializeCsrfCookie()
+    } catch (error) {
       state.user = null
-      throw new Error('CSRF token query failed')
+      throw error
     }
-    setCsrfToken(csrf.data.token)
     return state.user
   },
 
@@ -75,9 +79,9 @@ export const authStore = {
     try {
       await api.logout()
     } finally {
-      clearCsrfToken()
       state.user = null
       state.initialized = true
+      setCsrfToken(null)
     }
   },
 
