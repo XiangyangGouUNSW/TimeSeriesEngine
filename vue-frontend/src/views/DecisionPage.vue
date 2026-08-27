@@ -2,7 +2,7 @@
 import { reactive, ref, watch } from 'vue'
 import { api } from '../api/timeseries'
 import RefInput from '../components/RefInput.vue'
-import { toastError } from '../composables/toast'
+import { toastError, toastSuccess } from '../composables/toast'
 import { useRefOptions } from '../composables/refOptions'
 import ResultViewer from '../components/ResultViewer.vue'
 import { projectContext, withCurrentProject } from '../stores/project'
@@ -24,8 +24,10 @@ async function run(promise) {
     const res = await promise
     response.value = res
     if (res && res.success === false) error.value = res.message || '请求失败'
+    return res
   } catch (e) {
     error.value = e.message || String(e)
+    return null
   } finally {
     loading.value = false
   }
@@ -61,13 +63,15 @@ function eventPayload(src) {
 async function doDiagnosis() {
   const payload = eventPayload(diagnosis)
   if (!payload) return
-  await run(api.diagnosis(payload))
+  const res = await run(api.diagnosis(payload))
+  if (res && res.success !== false) toastSuccess((res && res.message) || '诊断完成')
 }
 
 async function doSuggestion() {
   const payload = eventPayload(suggestion)
   if (!payload) return
-  await run(api.suggestion(payload))
+  const res = await run(api.suggestion(payload))
+  if (res && res.success !== false) toastSuccess((res && res.message) || '处置建议生成成功')
 }
 
 async function doFeedback() {
@@ -79,7 +83,8 @@ async function doFeedback() {
   if (!payload) return
   if (feedback.disposalResult) payload.disposalResult = feedback.disposalResult
   if (feedback.handleStatus) payload.handleStatus = feedback.handleStatus
-  await run(api.feedback(payload))
+  const res = await run(api.feedback(payload))
+  if (res && res.success !== false) toastSuccess((res && res.message) || '反馈提交成功')
 }
 </script>
 

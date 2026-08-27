@@ -20,6 +20,7 @@ import org.springframework.security.web.context.HttpSessionSecurityContextReposi
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfException;
+import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 
 @Configuration
 @EnableMethodSecurity
@@ -48,6 +49,11 @@ public class SecurityConfig {
         http
                 .authenticationProvider(authenticationProvider)
                 .csrf(csrf -> csrf
+                        // 使用 plain handler：cookie 中的原始 token 可直接作为
+                        // X-XSRF-TOKEN 请求头回传（SPA / curl 场景）。
+                        // 默认的 XorCsrfTokenRequestAttributeHandler 会把令牌
+                        // 掩码（BREACH 防护），导致 cookie 原始值被拒绝。
+                        .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler())
                         .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
                         .ignoringRequestMatchers("/api/auth/login", "/api/auth/logout"))
                 .formLogin(AbstractHttpConfigurer::disable)

@@ -3,7 +3,7 @@ import { reactive, ref, watch } from 'vue'
 import { api } from '../api/timeseries'
 import RefInput from '../components/RefInput.vue'
 import DerivedExprInput from '../components/DerivedExprInput.vue'
-import { toastError } from '../composables/toast'
+import { toastError, toastSuccess } from '../composables/toast'
 import { useRefOptions } from '../composables/refOptions'
 import ResultViewer from '../components/ResultViewer.vue'
 import { projectContext, withCurrentProject } from '../stores/project'
@@ -77,6 +77,7 @@ async function send(payload) {
     const res = await api.syncDerivedSeries(scopedPayload)
     response.value = res
     if (res && res.success === false) error.value = res.message || '请求失败'
+    else if (res) toastSuccess((res && res.message) || '派生序列同步成功')
   } catch (e) {
     error.value = e.message || String(e)
   } finally {

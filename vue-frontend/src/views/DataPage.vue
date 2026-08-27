@@ -3,7 +3,7 @@ import { reactive, ref, watch } from 'vue'
 import * as XLSX from 'xlsx'
 import { api } from '../api/timeseries'
 import RefInput from '../components/RefInput.vue'
-import { toastError } from '../composables/toast'
+import { toastError, toastSuccess } from '../composables/toast'
 import { useRefOptions } from '../composables/refOptions'
 import ResultViewer from '../components/ResultViewer.vue'
 import { projectContext, withCurrentProject } from '../stores/project'
@@ -26,8 +26,10 @@ async function run(promise) {
     const res = await promise
     response.value = res
     if (res && res.success === false) error.value = res.message || '请求失败'
+    return res
   } catch (e) {
     error.value = e.message || String(e)
+    return null
   } finally {
     loading.value = false
   }
@@ -65,7 +67,8 @@ async function doIngest() {
     return
   }
   if (ingest.returnResolvedData) payload.returnResolvedData = ingest.returnResolvedData === 'true'
-  await run(api.ingestData(payload))
+  const res = await run(api.ingestData(payload))
+  if (res && res.success !== false) toastSuccess((res && res.message) || '数据写入成功')
 }
 
 // ── 文件导入（CSV / XLSX） ─────────────────────────────────
@@ -216,7 +219,8 @@ async function doImport() {
     toastError('请先选择当前项目，且请求项目必须与当前项目一致')
     return
   }
-  await run(api.ingestData(payload))
+  const res = await run(api.ingestData(payload))
+  if (res && res.success !== false) toastSuccess((res && res.message) || '文件数据导入成功')
 }
 
 // ── 历史数据查询 ──────────────────────────────────────────

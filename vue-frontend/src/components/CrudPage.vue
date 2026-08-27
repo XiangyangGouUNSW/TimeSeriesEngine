@@ -2,7 +2,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import http from '../api/http'
 import { api } from '../api/timeseries'
-import { toastError } from '../composables/toast'
+import { toastError, toastSuccess } from '../composables/toast'
 import { useRefOptions } from '../composables/refOptions'
 import FieldInput from './FieldInput.vue'
 import RefInput from './RefInput.vue'
@@ -232,6 +232,7 @@ async function create() {
     editing.value = true
     await loadAll()
     loadRefOptions()
+    toastSuccess((res && res.message) || `${props.config.title} 创建成功`)
   }
 }
 
@@ -243,6 +244,7 @@ async function update() {
   if (res && res.success !== false) {
     await loadAll()
     loadRefOptions()
+    toastSuccess((res && res.message) || `${props.config.title} 更新成功`)
   }
 }
 
@@ -287,7 +289,10 @@ async function doStatus() {
   const scopedPayload = scopePayload(payload)
   if (scopedPayload === null) return
   const res = await run('patch', `${base.value}${su.path}`, scopedPayload)
-  if (res && res.success !== false) await loadAll()
+  if (res && res.success !== false) {
+    await loadAll()
+    toastSuccess((res && res.message) || '状态更新成功')
+  }
 }
 
 async function sendRaw(method) {
@@ -301,7 +306,10 @@ async function sendRaw(method) {
   const scopedPayload = scopePayload(payload)
   if (scopedPayload === null) return
   const res = await run(method, base.value, scopedPayload)
-  if (res && res.success !== false) await loadAll()
+  if (res && res.success !== false) {
+    await loadAll()
+    toastSuccess((res && res.message) || '请求成功')
+  }
 }
 
 async function showDetail(row) {

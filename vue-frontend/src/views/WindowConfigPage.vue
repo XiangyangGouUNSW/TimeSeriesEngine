@@ -1,7 +1,7 @@
 <script setup>
 import { reactive, ref, watch } from 'vue'
 import { api } from '../api/timeseries'
-import { toastError } from '../composables/toast'
+import { toastError, toastSuccess } from '../composables/toast'
 import ResultViewer from '../components/ResultViewer.vue'
 import { projectContext, withCurrentProject } from '../stores/project'
 
@@ -42,6 +42,7 @@ async function submit() {
     const res = await api.syncWindowConfig(payload)
     response.value = res
     if (res && res.success === false) error.value = res.message || '请求失败'
+    else if (res) toastSuccess((res && res.message) || '窗口配置保存成功')
   } catch (e) {
     error.value = e.message || String(e)
   } finally {

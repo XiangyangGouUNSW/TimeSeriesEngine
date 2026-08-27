@@ -3,7 +3,7 @@ import { reactive, ref, watch } from 'vue'
 import { api } from '../api/timeseries'
 import RefInput from '../components/RefInput.vue'
 import ResultViewer from '../components/ResultViewer.vue'
-import { toastError } from '../composables/toast'
+import { toastError, toastSuccess } from '../composables/toast'
 import { useRefOptions } from '../composables/refOptions'
 import { projectContext, withCurrentProject } from '../stores/project'
 
@@ -46,8 +46,10 @@ async function run(promise, collect) {
     response.value = res
     if (res && res.success === false) error.value = res.message || '请求失败'
     if (collect && res && res.data) rows.value = res.data
+    return res
   } catch (e) {
     error.value = e.message || String(e)
+    return null
   } finally {
     loading.value = false
   }
@@ -68,7 +70,8 @@ async function compute() {
   const e = dt(form.endTime)
   if (s) payload.startTime = s
   if (e) payload.endTime = e
-  await run(api.computeStatistics(payload), false)
+  const res = await run(api.computeStatistics(payload), false)
+  if (res && res.success !== false) toastSuccess((res && res.message) || '统计计算完成')
 }
 
 async function loadAll() {
