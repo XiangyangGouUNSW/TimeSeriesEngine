@@ -6,6 +6,7 @@ import com.sfkg.timeseries.common.ApiResult;
 import com.sfkg.timeseries.dto.CategoryQueryRequest;
 import com.sfkg.timeseries.dto.CategorySaveRequest;
 import com.sfkg.timeseries.dto.CategoryStatusUpdateRequest;
+import com.sfkg.timeseries.dto.ConstraintBatchSaveRequest;
 import com.sfkg.timeseries.dto.ConstraintQueryRequest;
 import com.sfkg.timeseries.dto.ConstraintSaveRequest;
 import com.sfkg.timeseries.dto.ConstraintStatusUpdateRequest;
@@ -82,6 +83,12 @@ public class TimeseriesSemanticController {
     public ApiResult<Void> saveConstraint(@RequestBody ConstraintSaveRequest request) {
         semanticService.createConstraint(request);
         return returnSuccess("semantic constraint save success");
+    }
+
+    @PostMapping(value = "/constraints/batch", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    public ApiResult<List<String>> saveConstraintBatch(@RequestBody ConstraintBatchSaveRequest request) {
+        List<String> ids = semanticService.createConstraintBatch(request);
+        return returnSuccess("semantic constraint batch save success", ids);
     }
 
     @PutMapping(value = "/constraints", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)

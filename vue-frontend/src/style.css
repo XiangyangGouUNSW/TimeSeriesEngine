@@ -233,6 +233,62 @@ tr.clickable {
   padding: 24px 0;
 }
 
+/* ── OR 组批量创建（约束页）── */
+.or-batch-card {
+  border: 1px solid var(--primary);
+}
+
+.or-batch-hint {
+  color: var(--muted, #7a8694);
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 4px 0 12px;
+}
+
+.or-batch-head {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.or-batch-head .field {
+  flex: 1;
+  min-width: 220px;
+}
+
+.or-batch-head button {
+  height: 34px;
+}
+
+.or-member {
+  border: 1px dashed var(--border, #d5dbe3);
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 10px;
+  background: var(--surface2, #f7f9fb);
+}
+
+.or-member-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.or-member-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.or-member .t-add {
+  margin-top: 4px;
+  width: 100%;
+  color: var(--primary);
+  border-style: dashed;
+}
+
 .page-title {
   display: flex;
   align-items: center;
@@ -466,6 +522,12 @@ tr.clickable {
 .terms-editor .t-offset {
   flex: 0.9;
   min-width: 90px;
+}
+
+.terms-editor .t-agg {
+  flex: 1.1;
+  min-width: 110px;
+  width: auto;
 }
 
 .terms-editor .t-del,

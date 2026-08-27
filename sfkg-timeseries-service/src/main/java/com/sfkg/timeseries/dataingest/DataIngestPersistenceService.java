@@ -161,6 +161,12 @@ public class DataIngestPersistenceService {
                     }
                 }
             }
+            // OR 组归属边：指向同一组的合成组节点，便于图谱按组遍历
+            if (constraint.getOrGroupId() != null && !constraint.getOrGroupId().isBlank()) {
+                addRelation(relations, keys, source,
+                        "in_or_group",
+                        nodeName("timeseries_constraint_group", constraint.getOrGroupId()));
+            }
         } else if (entity instanceof TimeseriesRelation relation) {
             if (relation.getSourceSequences() != null) {
                 for (String referenceId : relation.getSourceSequences()) {
@@ -304,6 +310,7 @@ public class DataIngestPersistenceService {
                 copyStableProperty(rawFields, entityProperties, "upperBound", "upper_bound");
                 copyStableProperty(rawFields, entityProperties, "effectiveStatus", "effective_status");
                 copyStableProperty(rawFields, entityProperties, "confirmStatus", "confirm_status");
+                copyStableProperty(rawFields, entityProperties, "orGroupId", "or_group_id");
             }
             case "timeseries_relation" -> {
                 copyStableProperty(rawFields, entityProperties, "relationId", "relation_id");

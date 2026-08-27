@@ -7,6 +7,7 @@ import { useRefOptions } from '../composables/refOptions'
 import FieldInput from './FieldInput.vue'
 import RefInput from './RefInput.vue'
 import ResultViewer from './ResultViewer.vue'
+import ConstraintOrGroupForm from './ConstraintOrGroupForm.vue'
 import { projectContext, withCurrentProject } from '../stores/project'
 
 // 配置驱动的通用 CRUD 页面：
@@ -183,6 +184,9 @@ function buildPayload(fields, src) {
           }
           if (t.sampleOffset !== undefined && t.sampleOffset !== null && t.sampleOffset !== '') {
             item.sampleOffset = Number(t.sampleOffset)
+          }
+          if (t.aggregation && t.aggregation !== 'SAMPLE') {
+            item.aggregation = t.aggregation
           }
           return item
         })
@@ -416,6 +420,12 @@ function cellText(row, col) {
   if (typeof v === 'object') return JSON.stringify(v)
   return v
 }
+
+// OR 组批量创建完成后刷新列表与下拉选项
+async function onBatchCreated() {
+  await loadAll()
+  loadRefOptions()
+}
 </script>
 
 <template>
@@ -443,6 +453,14 @@ function cellText(row, col) {
 
     <!-- 表单模式 -->
     <template v-else>
+      <!-- 约束页专用：OR 组批量创建（一次提交多条，统一同步 Core） -->
+      <ConstraintOrGroupForm
+        v-if="config.batchOr"
+        :instance-options="refOptions.instance || []"
+        :category-options="refOptions.category || []"
+        @created="onBatchCreated"
+      />
+
       <div class="card">
         <h3>{{ editing ? '编辑' : '新增' }} {{ config.title }}</h3>
         <div class="grid">

@@ -18,6 +18,8 @@ public class ConstraintSaveRequest {
     private Double lowerBound;
     private Double upperBound;
     private List<ConstraintTermDTO> terms;
+    // 相同非空 id 的约束组成一个 OR 子句；空 id 独立成子句；子句间 AND
+    private String orGroupId;
     private String effectiveStatus;
     private String confirmStatus;
     private String user;
@@ -27,5 +29,7 @@ public class ConstraintSaveRequest {
         private String variable;
         private Double coefficient;
         private Long sampleOffset;
+        // SAMPLE / AVERAGE / MAXIMUM / MINIMUM
+        private String aggregation;
     }
 }

@@ -23,7 +23,7 @@ function setLevel(type) {
 function addTerm() {
   emit('update:modelValue', [
     ...(props.modelValue || []),
-    { variable: '', mappingType: level.value, mappingId: '', coefficient: 1.0, sampleOffset: 0 },
+    { variable: '', mappingType: level.value, mappingId: '', coefficient: 1.0, sampleOffset: 0, aggregation: 'SAMPLE' },
   ])
 }
 
@@ -58,6 +58,7 @@ function setField(i, key, value) {
       <span class="t-seq">映射ID</span>
       <span class="t-coef">系数（无量纲）</span>
       <span class="t-offset">采样偏移（步）</span>
+      <span class="t-agg">聚合方式</span>
       <span class="t-del-slot"></span>
     </div>
 
@@ -104,6 +105,17 @@ function setField(i, key, value) {
         placeholder="采样偏移（可选）"
         @input="setField(i, 'sampleOffset', $event.target.value === '' ? undefined : Number($event.target.value))"
       />
+      <select
+        class="t-agg"
+        :value="t.aggregation || 'SAMPLE'"
+        title="窗口内取值的聚合方式"
+        @change="setField(i, 'aggregation', $event.target.value)"
+      >
+        <option value="SAMPLE">SAMPLE（逐点）</option>
+        <option value="AVERAGE">AVERAGE（均值）</option>
+        <option value="MAXIMUM">MAXIMUM（最大）</option>
+        <option value="MINIMUM">MINIMUM（最小）</option>
+      </select>
       <button type="button" class="t-del" @click="remove(i)">删除</button>
     </div>
 
@@ -112,6 +124,7 @@ function setField(i, key, value) {
       说明：变量名需与「约束表达式」中的变量一致（如表达式 x &lt; 40 中的 x）；
       映射目标可选「实例」（具体序列 ID）或「类别」（类别 ID，后端自动展开为该类别下所有实例）；
       每个约束项构成 系数 × 变量(t − 采样偏移) 的线性项，系数与采样偏移留空则忽略该项；
+      聚合方式：SAMPLE=逐点求值，AVERAGE/MAXIMUM/MINIMUM=按窗口统计值求值（非 SAMPLE 时窗口内所有点参与聚合）；
       所有「变量名 → 映射ID」会自动生成 variableMapping 随请求提交，无需单独填写。
     </small>
   </div>

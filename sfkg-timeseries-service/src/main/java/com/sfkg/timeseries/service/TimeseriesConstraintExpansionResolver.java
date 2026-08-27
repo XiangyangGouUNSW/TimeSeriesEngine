@@ -28,7 +28,11 @@ public class TimeseriesConstraintExpansionResolver {
         Map<String, String> rawMapping = constraint.getVariableMapping() != null
                 ? constraint.getVariableMapping()
                 : Map.of();
-        return expandConstraintRules(constraint.getProjectId(), constraint.getConstraintId(), rawMapping);
+        return expandConstraintRules(
+                constraint.getProjectId(),
+                constraint.getConstraintId(),
+                constraint.getOrGroupId(),
+                rawMapping);
     }
 
     public List<String> expandConstraintIdsForContext(
@@ -73,7 +77,7 @@ public class TimeseriesConstraintExpansionResolver {
     }
 
     private List<ExpandedConstraintRule> expandConstraintRules(
-            String projectId, String constraintId, Map<String, String> rawMapping) {
+            String projectId, String constraintId, String orGroupId, Map<String, String> rawMapping) {
 
         Map<String, List<String>> expandedByVar = new LinkedHashMap<>();
         for (Map.Entry<String, String> entry : rawMapping.entrySet()) {
@@ -126,7 +130,8 @@ public class TimeseriesConstraintExpansionResolver {
         for (Map<String, String> varMap : deviceRules.values()) {
             result.add(new ExpandedConstraintRule(
                     buildExpandedConstraintId(constraintId, varMap),
-                    new LinkedHashMap<>(varMap)));
+                    new LinkedHashMap<>(varMap),
+                    buildExpandedOrGroupId(orGroupId, varMap)));
         }
         return result;
     }
@@ -154,21 +159,44 @@ public class TimeseriesConstraintExpansionResolver {
         return result;
     }
 
-    private String buildExpandedConstraintId(String constraintId, Map<String, String> varMap) {
-        String suffix = varMap.values().stream()
+    /**
+     * 规则内所有映射序列的排序去重后缀，用于展开后 ID 的生成。
+     */
+    private String ruleSuffix(Map<String, String> varMap) {
+        return varMap.values().stream()
                 .filter(value -> value != null && !value.isBlank())
                 .distinct()
                 .sorted()
                 .collect(Collectors.joining("_"));
+    }
+
+    private String buildExpandedConstraintId(String constraintId, Map<String, String> varMap) {
+        String suffix = ruleSuffix(varMap);
         return suffix.isEmpty()
                 ? nullToEmpty(constraintId)
                 : nullToEmpty(constraintId) + "_" + suffix;
+    }
+
+    /**
+     * OR 组 ID 展开：同样追加规则序列后缀，使「映射到同一组序列」的规则共享
+     * 同一组 ID（组内 OR），而不同设备/序列集的规则拿到不同组 ID（组间独立）。
+     * 类别级展开成多条规则时不再丢弃组 ID，也不会发生跨设备 OR。
+     */
+    private String buildExpandedOrGroupId(String orGroupId, Map<String, String> varMap) {
+        if (orGroupId == null || orGroupId.isBlank()) {
+            return "";
+        }
+        String suffix = ruleSuffix(varMap);
+        return suffix.isEmpty() ? orGroupId : orGroupId + "_" + suffix;
     }
 
     private String nullToEmpty(String value) {
         return value == null ? "" : value;
     }
 
-    public record ExpandedConstraintRule(String constraintId, Map<String, String> variableMapping) {
+    public record ExpandedConstraintRule(
+            String constraintId,
+            Map<String, String> variableMapping,
+            String orGroupId) {
     }
 }

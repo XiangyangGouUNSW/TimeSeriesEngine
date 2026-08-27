@@ -1,0 +1,48 @@
+{
+  "projectId": "project-ett",
+  "orGroupId": "ett-ot-band",
+  "constraints": [
+    {
+      "constraintId": "ett-ot-below-10",
+      "constraintName": "OT below 10",
+      "variableMapping": {
+        "x": "ETTh1_OT"
+      },
+      "constraintDescription": "OT in acceptable cold band",
+      "constraintExpression": "x < 10",
+      "upperBound": 10.0,
+      "terms": [
+        {
+          "variable": "x",
+          "coefficient": 1.0,
+          "sampleOffset": 0,
+          "aggregation": "SAMPLE"
+        }
+      ],
+      "effectiveStatus": "ENABLE",
+      "confirmStatus": "CONFIRMED",
+      "user": "test"
+    },
+    {
+      "constraintId": "ett-ot-above-40",
+      "constraintName": "OT above 40",
+      "variableMapping": {
+        "x": "ETTh1_OT"
+      },
+      "constraintDescription": "OT in acceptable hot band",
+      "constraintExpression": "x > 40",
+      "lowerBound": 40.0,
+      "terms": [
+        {
+          "variable": "x",
+          "coefficient": 1.0,
+          "sampleOffset": 0,
+          "aggregation": "SAMPLE"
+        }
+      ],
+      "effectiveStatus": "ENABLE",
+      "confirmStatus": "CONFIRMED",
+      "user": "test"
+    }
+  ]
+}

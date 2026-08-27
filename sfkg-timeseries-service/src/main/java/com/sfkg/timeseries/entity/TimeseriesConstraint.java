@@ -19,6 +19,8 @@ public class TimeseriesConstraint {
     private Double lowerBound;
     private Double upperBound;
     private List<ConstraintTermItem> terms;
+    // 相同非空 id 的约束组成一个 OR 子句（组内任一满足即组满足）；空 id 独立成子句；子句间 AND
+    private String orGroupId;
     private String effectiveStatus;
     private String confirmStatus;
     private LocalDateTime createTime;
@@ -31,5 +33,7 @@ public class TimeseriesConstraint {
         private String variable;
         private Double coefficient;
         private Long sampleOffset;
+        // SAMPLE / AVERAGE / MAXIMUM / MINIMUM
+        private String aggregation;
     }
 }

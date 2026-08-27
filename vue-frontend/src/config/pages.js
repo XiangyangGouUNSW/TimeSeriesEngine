@@ -112,6 +112,12 @@ export const pages = {
       },
       { name: 'lowerBound', label: '下界', type: 'number', unit: '与序列数值同单位', hint: '留空表示无下界' },
       { name: 'upperBound', label: '上界', type: 'number', unit: '与序列数值同单位', hint: '留空表示无上界' },
+      {
+        name: 'orGroupId',
+        label: 'OR 组 ID',
+        type: 'text',
+        hint: '普通约束留空即可；OR 组约束请用上方「OR 组批量创建」一次性提交多条。编辑已有 OR 组约束时此字段会回填，请勿清空',
+      },
       { name: 'constraintDescription', label: '约束描述', type: 'textarea' },
       { name: 'effectiveStatus', label: '生效状态', type: 'select', options: EFFECTIVE_STATUS },
       { name: 'confirmStatus', label: '确认状态', type: 'select', options: CONFIRM_STATUS },
@@ -131,11 +137,14 @@ export const pages = {
         { name: 'effectiveStatus', label: '生效状态', type: 'select', options: EFFECTIVE_STATUS },
       ],
     },
+    // OR 组批量创建表单（一次提交多条约束 → 统一同步 Core）
+    batchOr: true,
     columns: [
       { key: 'constraintId', label: '约束ID' },
       { key: 'projectId', label: '项目ID' },
       { key: 'constraintName', label: '名称' },
       { key: 'constraintExpression', label: '表达式' },
+      { key: 'orGroupId', label: 'OR 组' },
       { key: 'effectiveStatus', label: '生效状态' },
       { key: 'confirmStatus', label: '确认状态' },
     ],

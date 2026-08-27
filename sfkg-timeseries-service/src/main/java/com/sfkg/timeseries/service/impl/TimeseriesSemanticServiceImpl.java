@@ -2,6 +2,7 @@ package com.sfkg.timeseries.service.impl;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -24,6 +25,7 @@ import com.sfkg.timeseries.common.SemanticId;
 import com.sfkg.timeseries.dto.CategoryQueryRequest;
 import com.sfkg.timeseries.dto.CategorySaveRequest;
 import com.sfkg.timeseries.dto.CategoryStatusUpdateRequest;
+import com.sfkg.timeseries.dto.ConstraintBatchSaveRequest;
 import com.sfkg.timeseries.dto.ConstraintQueryRequest;
 import com.sfkg.timeseries.dto.ConstraintSaveRequest;
 import com.sfkg.timeseries.dto.ConstraintStatusUpdateRequest;
@@ -213,6 +215,82 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         return doSaveConstraint(request);
     }
 
+    @Override
+    public List<String> createConstraintBatch(ConstraintBatchSaveRequest request) {
+        if (request == null || request.getConstraints() == null || request.getConstraints().isEmpty()) {
+            throw new BusinessException("constraint batch must not be empty");
+        }
+        if (request.getOrGroupId() == null || request.getOrGroupId().isBlank()) {
+            throw new BusinessException("orGroupId must not be empty for constraint batch");
+        }
+        String projectId = ProjectIdValidator.require(request.getProjectId());
+        validateOrGroupId(request.getOrGroupId());
+        cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
+
+        List<TimeseriesConstraint> entities = new ArrayList<>();
+        List<String> createdIds = new ArrayList<>();
+        Set<String> seenIds = new HashSet<>();
+        for (ConstraintSaveRequest member : request.getConstraints()) {
+            if (member == null) {
+                throw new BusinessException("constraint batch contains null member");
+            }
+            member.setProjectId(projectId);
+            member.setOrGroupId(request.getOrGroupId());
+            validateConstraintExpression(member.getConstraintExpression());
+            validateVariableMapping(projectId, member.getVariableMapping());
+            if (member.getTerms() == null || member.getTerms().isEmpty()) {
+                throw new BusinessException("constraint terms must not be empty: " + member.getConstraintName());
+            }
+            validateConstraintTerms(member.getTerms());
+
+            String constraintId = member.getConstraintId() == null
+                    ? SemanticId.generate(
+                            member.getConstraintName(),
+                            member.getVariableMapping() != null && !member.getVariableMapping().isEmpty()
+                                    ? member.getVariableMapping().values().iterator().next() : null)
+                    : member.getConstraintId();
+            if (!seenIds.add(constraintId)) {
+                throw new BusinessException("duplicate constraint in batch: " + constraintId);
+            }
+            if (memoryCache.getConstraint(projectId, constraintId).isPresent()) {
+                throw new BusinessException("constraint already exists: " + constraintId);
+            }
+
+            TimeseriesConstraint entity = new TimeseriesConstraint();
+            BeanUtils.copyProperties(member, entity);
+            if (member.getTerms() != null) {
+                entity.setTerms(member.getTerms().stream()
+                        .map(dto -> {
+                            TimeseriesConstraint.ConstraintTermItem item = new TimeseriesConstraint.ConstraintTermItem();
+                            item.setVariable(dto.getVariable());
+                            item.setCoefficient(dto.getCoefficient());
+                            item.setSampleOffset(dto.getSampleOffset());
+                            item.setAggregation(dto.getAggregation());
+                            return item;
+                        })
+                        .collect(Collectors.toList()));
+            }
+            entity.setConstraintId(constraintId);
+            entity.setProjectId(projectId);
+            entity.setOrGroupId(request.getOrGroupId());
+            LocalDateTime now = LocalDateTime.now();
+            entity.setCreateTime(now);
+            entity.setUpdateTime(now);
+            entity.setCreateUser(member.getUser());
+            entity.setUpdateUser(member.getUser());
+            entities.add(entity);
+            createdIds.add(constraintId);
+        }
+
+        // 先整体落盘 + 更新内存缓存，再一次性同步 Core，保证 OR 组原子送达
+        for (TimeseriesConstraint entity : entities) {
+            constraintMapper.insert(entity);
+            memoryCache.putConstraint(entity);
+        }
+        coreGrpcClient.syncConstraintConfigs(entities);
+        return createdIds;
+    }
+
     private String doSaveConstraint(ConstraintSaveRequest request) {
         if (request == null) {
             throw new BusinessException("constraint request must not be null");
@@ -223,6 +301,8 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         if (request.getTerms() == null || request.getTerms().isEmpty()) {
             throw new BusinessException("constraint terms must not be empty");
         }
+        validateConstraintTerms(request.getTerms());
+        validateOrGroupId(request.getOrGroupId());
         cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
         String constraintId = request.getConstraintId() == null
                 ? SemanticId.generate(
@@ -248,6 +328,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                                 item.setVariable(dto.getVariable());
                                 item.setCoefficient(dto.getCoefficient());
                                 item.setSampleOffset(dto.getSampleOffset());
+                                item.setAggregation(dto.getAggregation());
                                 return item;
                             })
                             .collect(Collectors.toList()));
@@ -442,6 +523,38 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
 
     private static final Set<String> VALID_DATA_TYPES = Set.of("double", "int64", "bool", "string");
 
+    private static final Set<String> VALID_CONSTRAINT_AGGREGATIONS = Set.of(
+            "SAMPLE", "AVERAGE", "MAXIMUM", "MINIMUM");
+
+    /** 校验每个 term 的聚合方式；空值允许（同步时回退到 SAMPLE）。 */
+    private void validateConstraintTerms(List<ConstraintSaveRequest.ConstraintTermDTO> terms) {
+        for (ConstraintSaveRequest.ConstraintTermDTO term : terms) {
+            if (term.getVariable() == null || term.getVariable().isBlank()) {
+                throw new BusinessException("constraint term variable must not be empty");
+            }
+            if (term.getAggregation() != null && !term.getAggregation().isBlank()
+                    && !VALID_CONSTRAINT_AGGREGATIONS.contains(term.getAggregation().trim().toUpperCase())) {
+                throw new BusinessException("unsupported constraint aggregation: " + term.getAggregation()
+                        + ". Supported: " + VALID_CONSTRAINT_AGGREGATIONS);
+            }
+        }
+    }
+
+    /** OR 组 id 只允许字母数字和 _ - . 字符，避免污染 Core 端 clause key。 */
+    private void validateOrGroupId(String orGroupId) {
+        if (orGroupId == null || orGroupId.isBlank()) {
+            return;
+        }
+        String trimmed = orGroupId.trim();
+        for (int i = 0; i < trimmed.length(); i++) {
+            char ch = trimmed.charAt(i);
+            if (!Character.isLetterOrDigit(ch) && ch != '_' && ch != '-' && ch != '.') {
+                throw new BusinessException("orGroupId contains invalid character '" + ch
+                        + "' at position " + i);
+            }
+        }
+    }
+
     @Override
     public void validateConstraintExpression(String expression) {
         if (expression == null || expression.isBlank()) {
@@ -580,6 +693,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         snapshot.setUpperBound(source.getUpperBound());
         snapshot.setEffectiveStatus(source.getEffectiveStatus());
         snapshot.setConfirmStatus(source.getConfirmStatus());
+        snapshot.setOrGroupId(source.getOrGroupId());
         snapshot.setVariableMapping(source.getVariableMapping() != null
                 ? new java.util.LinkedHashMap<>(source.getVariableMapping()) : null);
         snapshot.setTerms(source.getTerms() != null

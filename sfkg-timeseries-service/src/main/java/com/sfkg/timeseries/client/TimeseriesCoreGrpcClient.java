@@ -20,6 +20,7 @@ import com.sfkg.timeseries.grpc.AlignedWindowData;
 import com.sfkg.timeseries.grpc.AlignmentConfig;
 import com.sfkg.timeseries.grpc.ComputeStatisticsRequest;
 import com.sfkg.timeseries.grpc.ComputeStatisticsResponse;
+import com.sfkg.timeseries.grpc.ConstraintAggregation;
 import com.sfkg.timeseries.grpc.ConstraintRule;
 import com.sfkg.timeseries.grpc.ConstraintTerm;
 import com.sfkg.timeseries.grpc.DerivedBinaryExpression;
@@ -177,22 +178,62 @@ public class TimeseriesCoreGrpcClient {
         return callCoreSync(address, stub -> stub.syncConstraints(req), "syncConstraints");
     }
 
+    /**
+     * 批量同步多条约束到 Core：所有规则的 RuntimeConstraintConfig
+     * 汇总到同一个 SyncConstraintsRequest，一次 RPC 原子送达。
+     * 用于 OR 组批量创建（同组规则同时到达，避免中途求值产生半组状态）。
+     */
+    public SyncResult syncConstraintConfigs(List<TimeseriesConstraint> constraints) {
+        String address = grpcClientProperties.getCoreAddress();
+        if (isBlank(address)) {
+            return notConfigured("syncConstraints");
+        }
+        if (constraints == null || constraints.isEmpty()) {
+            return SyncResult.success();
+        }
+        SyncConstraintsRequest.Builder reqBuilder = SyncConstraintsRequest.newBuilder();
+        int ruleCount = 0;
+        for (TimeseriesConstraint constraint : constraints) {
+            List<RuntimeConstraintConfig> items = buildRuntimeConstraintConfigs(
+                    constraint, isEnabled(constraint.getEffectiveStatus()));
+            reqBuilder.addAllItems(items);
+            ruleCount += items.size();
+        }
+        TimeseriesConstraint first = constraints.get(0);
+        reqBuilder.setProjectId(nullToEmpty(first.getProjectId()));
+        LOG.info("[{}] -> syncConstraints batch constraints={} rules={} at {}",
+                SERVICE_NAME, constraints.size(), ruleCount, address);
+        return callCoreSync(address, stub -> stub.syncConstraints(reqBuilder.build()), "syncConstraints");
+    }
+
     private List<RuntimeConstraintConfig> buildRuntimeConstraintConfigs(
             TimeseriesConstraint constraint, boolean enabled) {
+        List<ExpandedConstraintRule> expandedRules = constraintExpansionResolver.expandConstraint(constraint);
         List<RuntimeConstraintConfig> items = new ArrayList<>();
-        for (ExpandedConstraintRule expandedRule : constraintExpansionResolver.expandConstraint(constraint)) {
+        for (ExpandedConstraintRule expandedRule : expandedRules) {
             ConstraintRule.Builder rb = ConstraintRule.newBuilder()
                     .setConstraintId(expandedRule.constraintId())
-                    .setLowerBound(constraint.getLowerBound() != null ? constraint.getLowerBound() : -Double.MAX_VALUE)
-                    .setUpperBound(constraint.getUpperBound() != null ? constraint.getUpperBound() : Double.MAX_VALUE)
                     .setProjectId(nullToEmpty(constraint.getProjectId()))
                     .putAllVariableMapping(expandedRule.variableMapping());
+            // optional 语义：null = 未设置（不再用 ±Double.MAX_VALUE 哨兵值）
+            if (constraint.getLowerBound() != null) {
+                rb.setLowerBound(constraint.getLowerBound());
+            }
+            if (constraint.getUpperBound() != null) {
+                rb.setUpperBound(constraint.getUpperBound());
+            }
+            // 展开后的组 ID 已带序列后缀：同设备规则共享同组（组内 OR），
+            // 不同设备规则组 ID 不同（组间独立），类别级展开不会跨设备 OR。
+            if (expandedRule.orGroupId() != null && !expandedRule.orGroupId().isBlank()) {
+                rb.setOrGroupId(expandedRule.orGroupId());
+            }
             if (constraint.getTerms() != null) {
                 for (TimeseriesConstraint.ConstraintTermItem term : constraint.getTerms()) {
                     rb.addTerms(ConstraintTerm.newBuilder()
                             .setVariable(nullToEmpty(term.getVariable()))
                             .setCoefficient(term.getCoefficient() != null ? term.getCoefficient() : 0.0)
                             .setSampleOffset(term.getSampleOffset() != null ? term.getSampleOffset() : 0L)
+                            .setAggregation(toConstraintAggregation(term.getAggregation()))
                             .build());
                 }
             }
@@ -203,6 +244,19 @@ public class TimeseriesCoreGrpcClient {
                     .build());
         }
         return items;
+    }
+
+    /** 将字符串聚合方式映射为 proto 枚举；空值/未知值回退到 SAMPLE。 */
+    private ConstraintAggregation toConstraintAggregation(String aggregation) {
+        if (aggregation == null || aggregation.isBlank()) {
+            return ConstraintAggregation.CONSTRAINT_AGGREGATION_SAMPLE;
+        }
+        return switch (aggregation.trim().toUpperCase()) {
+            case "AVERAGE" -> ConstraintAggregation.CONSTRAINT_AGGREGATION_AVERAGE;
+            case "MAXIMUM" -> ConstraintAggregation.CONSTRAINT_AGGREGATION_MAXIMUM;
+            case "MINIMUM" -> ConstraintAggregation.CONSTRAINT_AGGREGATION_MINIMUM;
+            default -> ConstraintAggregation.CONSTRAINT_AGGREGATION_SAMPLE;
+        };
     }
 
     private boolean isEnabled(String status) {

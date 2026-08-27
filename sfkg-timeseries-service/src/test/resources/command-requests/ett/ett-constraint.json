@@ -13,9 +13,11 @@
     {
       "variable": "x",
       "coefficient": 1.0,
-      "sampleOffset": 0
+      "sampleOffset": 0,
+      "aggregation": "SAMPLE"
     }
   ],
+  "orGroupId": null,
   "effectiveStatus": "ENABLE",
   "confirmStatus": "CONFIRMED",
   "user": null

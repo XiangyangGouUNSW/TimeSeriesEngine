@@ -31,6 +31,11 @@ public interface TimeseriesSemanticService {
 
     String createConstraint(ConstraintSaveRequest request);
 
+    /**
+     * OR 组批量创建：整体校验、整体落库后一次性同步 Core，返回全部约束 ID。
+     */
+    List<String> createConstraintBatch(com.sfkg.timeseries.dto.ConstraintBatchSaveRequest request);
+
     void updateConstraintStatus(ConstraintStatusUpdateRequest request);
 
     void updateConstraintStatus(String constraintId, String status);
