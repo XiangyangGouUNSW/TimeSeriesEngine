@@ -51,7 +51,7 @@ timeseries:
   # ── Ingest buffer-pool (hash-partitioned async pipeline) ─────────
   ingest:
     sender-threads: ${INGEST_SENDER_THREADS:1}               # Sender 线程数 (seq_id hash % N)
-    batch-size: ${INGEST_BATCH_SIZE:10000}                     # 攒够多少点发送
+    batch-size: ${INGEST_BATCH_SIZE:50000}                     # 攒够多少点发送
     batch-timeout-ms: ${INGEST_BATCH_TIMEOUT_MS:500}         # 超时强制发送 (ms)
     queue-capacity: ${INGEST_QUEUE_CAPACITY:1000000}           # 每线程队列上限
 

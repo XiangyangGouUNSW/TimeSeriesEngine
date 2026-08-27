@@ -215,13 +215,14 @@ public class TimeseriesCoreGrpcClient {
                     .setConstraintId(expandedRule.constraintId())
                     .setProjectId(nullToEmpty(constraint.getProjectId()))
                     .putAllVariableMapping(expandedRule.variableMapping());
-            // optional 语义：null = 未设置（不再用 ±Double.MAX_VALUE 哨兵值）
-            if (constraint.getLowerBound() != null) {
-                rb.setLowerBound(constraint.getLowerBound());
-            }
-            if (constraint.getUpperBound() != null) {
-                rb.setUpperBound(constraint.getUpperBound());
-            }
+            // Core 校验要求上下界均有限且有序（lower <= upper），不支持单边规则。
+            // 单边约束缺失的一侧用有限极值补齐，仅作用于 gRPC 消息，不回写实体。
+            rb.setLowerBound(constraint.getLowerBound() != null
+                    ? constraint.getLowerBound()
+                    : -Double.MAX_VALUE);
+            rb.setUpperBound(constraint.getUpperBound() != null
+                    ? constraint.getUpperBound()
+                    : Double.MAX_VALUE);
             // 展开后的组 ID 已带序列后缀：同设备规则共享同组（组内 OR），
             // 不同设备规则组 ID 不同（组间独立），类别级展开不会跨设备 OR。
             if (expandedRule.orGroupId() != null && !expandedRule.orGroupId().isBlank()) {

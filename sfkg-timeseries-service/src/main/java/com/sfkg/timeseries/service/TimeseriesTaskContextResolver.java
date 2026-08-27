@@ -388,7 +388,11 @@ public class TimeseriesTaskContextResolver {
     }
 
     private boolean isRelationEnabled(TimeseriesRelation rel) {
-        return rel != null && "ENABLE".equalsIgnoreCase(rel.getEffectiveStatus());
+        // 与约束侧 isConstraintActive 对齐：ENABLE + CONFIRMED 才参与任务上下文
+        return rel != null
+                && ("ENABLE".equalsIgnoreCase(rel.getEffectiveStatus())
+                        || "ENABLED".equalsIgnoreCase(rel.getEffectiveStatus()))
+                && "CONFIRMED".equalsIgnoreCase(rel.getConfirmStatus());
     }
 
     private String nullToEmpty(String value) {
