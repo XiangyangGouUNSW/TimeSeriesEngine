@@ -11,6 +11,5 @@
   "confidence": 0.9,
   "relationDescription": "load features correlate with transformer oil temperature",
   "effectiveStatus": "ENABLE",
-  "confirmStatus": "CONFIRMED",
-  "user": null
+  "confirmStatus": "CONFIRMED"
 }

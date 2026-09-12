@@ -14,6 +14,7 @@ import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.auth.CurrentAuditUser;
 import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.common.SemanticId;
 import com.sfkg.timeseries.dto.InstanceConfigQueryRequest;
@@ -94,6 +95,7 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
                 ? generateSequenceId(request)
                 : request.getSequenceId();
 
+        String user = CurrentAuditUser.username();
         TimeseriesInstanceConfig entity = memoryCache.computeInstanceConfig(
                 request != null ? request.getProjectId() : null, sequenceId, existing -> {
             TimeseriesInstanceConfig e = existing != null ? existing : new TimeseriesInstanceConfig();
@@ -106,7 +108,6 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
             e.setDeviceInstanceName(resolveDeviceInstanceName(e.getDeviceInstanceId()));
             // audit fields
             LocalDateTime now = LocalDateTime.now();
-            String user = request != null ? request.getUser() : null;
             if (existing == null) {
                 e.setCreateTime(now);
                 e.setCreateUser(user);

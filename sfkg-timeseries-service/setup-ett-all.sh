@@ -238,7 +238,7 @@ echo ""
 echo "--- [10/18] Creating event ---"
 EVENT_ID="ett-test-event-001"
 post_json "event-create" "$BASE_URL/api/timeseries/events" \
-    "{\"projectId\":\"project-ett\",\"eventId\":\"$EVENT_ID\",\"eventName\":\"script test event\",\"eventType\":\"WARNING\",\"eventSource\":\"test-script\",\"relatedSequences\":[\"ETTh1_OT\"],\"eventDescription\":\"created by setup-ett-all.sh\",\"eventLevel\":\"MEDIUM\",\"confirmStatus\":\"CONFIRMED\",\"handleStatus\":\"UNHANDLED\",\"user\":\"script\"}"
+    "{\"projectId\":\"project-ett\",\"eventId\":\"$EVENT_ID\",\"eventName\":\"script test event\",\"eventType\":\"WARNING\",\"eventSource\":\"test-script\",\"relatedSequences\":[\"ETTh1_OT\"],\"eventDescription\":\"created by setup-ett-all.sh\",\"eventLevel\":\"MEDIUM\",\"confirmStatus\":\"CONFIRMED\",\"handleStatus\":\"UNHANDLED\"}"
 
 # ── Step 11: 数据写入（5 分钟间隔密集点，保证 1h 窗口内 ≥2 点供 Core 对齐） ─
 echo ""

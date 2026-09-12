@@ -5,8 +5,8 @@
   "variableMapping": {
     "x": "ETTh1_OT"
   },
-  "constraintDescription": "OT should be monitored below threshold",
-  "constraintExpression": "x < 40",
+  "constraintDescription": "OT must stay within [0, 20]; Core evaluates lowerBound/upperBound, expression is documentation only",
+  "constraintExpression": "x <= 20",
   "lowerBound": 0.0,
   "upperBound": 20.0,
   "terms": [
@@ -19,6 +19,5 @@
   ],
   "orGroupId": null,
   "effectiveStatus": "ENABLE",
-  "confirmStatus": "CONFIRMED",
-  "user": null
+  "confirmStatus": "CONFIRMED"
 }

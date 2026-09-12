@@ -20,8 +20,7 @@
         }
       ],
       "effectiveStatus": "ENABLE",
-      "confirmStatus": "CONFIRMED",
-      "user": "test"
+      "confirmStatus": "CONFIRMED"
     },
     {
       "constraintId": "ett-ot-above-40",
@@ -41,8 +40,7 @@
         }
       ],
       "effectiveStatus": "ENABLE",
-      "confirmStatus": "CONFIRMED",
-      "user": "test"
+      "confirmStatus": "CONFIRMED"
     }
   ]
 }

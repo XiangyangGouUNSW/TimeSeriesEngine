@@ -20,6 +20,7 @@ import com.sfkg.timeseries.client.AnomalyGrpcClient;
 import com.sfkg.timeseries.client.ForecastGrpcClient;
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.auth.CurrentAuditUser;
 import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.common.SemanticId;
 import com.sfkg.timeseries.dto.CategoryQueryRequest;
@@ -130,6 +131,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 ? SemanticId.generate(request.getCategoryName())
                 : request.getCategoryId();
 
+        String user = CurrentAuditUser.username();
         TimeseriesCategory entity = memoryCache.computeCategory(
                 request != null ? request.getProjectId() : null, categoryId, existing -> {
             TimeseriesCategory e = existing != null ? existing : new TimeseriesCategory();
@@ -140,7 +142,6 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             e.setProjectId(request != null ? request.getProjectId() : (existing != null ? existing.getProjectId() : null));
             // audit fields
             LocalDateTime now = LocalDateTime.now();
-            String user = request != null ? request.getUser() : null;
             if (existing == null) {
                 e.setCreateTime(now);
                 e.setCreateUser(user);
@@ -164,6 +165,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         }
         request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
         cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
+        String user = CurrentAuditUser.username();
         TimeseriesCategory entity = memoryCache.computeCategory(
                 request.getProjectId(), request.getCategoryId(), existing -> {
             TimeseriesCategory e = existing != null ? existing : new TimeseriesCategory();
@@ -176,11 +178,13 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             LocalDateTime now = LocalDateTime.now();
             if (existing == null) {
                 e.setCreateTime(now);
+                e.setCreateUser(user);
             } else {
                 e.setCreateTime(existing.getCreateTime());
                 e.setCreateUser(existing.getCreateUser());
             }
             e.setUpdateTime(now);
+            e.setUpdateUser(user);
             return e;
         });
         categoryMapper.updateById(entity);
@@ -226,6 +230,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         String projectId = ProjectIdValidator.require(request.getProjectId());
         validateOrGroupId(request.getOrGroupId());
         cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
+        String user = CurrentAuditUser.username();
 
         List<TimeseriesConstraint> entities = new ArrayList<>();
         List<String> createdIds = new ArrayList<>();
@@ -276,8 +281,8 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             LocalDateTime now = LocalDateTime.now();
             entity.setCreateTime(now);
             entity.setUpdateTime(now);
-            entity.setCreateUser(member.getUser());
-            entity.setUpdateUser(member.getUser());
+            entity.setCreateUser(user);
+            entity.setUpdateUser(user);
             entities.add(entity);
             createdIds.add(constraintId);
         }
@@ -316,6 +321,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 memoryCache.getConstraint(
                         request != null ? request.getProjectId() : null, constraintId).orElse(null));
 
+        String user = CurrentAuditUser.username();
         TimeseriesConstraint entity = memoryCache.computeConstraint(
                 request != null ? request.getProjectId() : null, constraintId, existing -> {
             TimeseriesConstraint e = existing != null ? existing : new TimeseriesConstraint();
@@ -338,7 +344,6 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             e.setProjectId(request != null ? request.getProjectId() : (existing != null ? existing.getProjectId() : null));
             // audit fields
             LocalDateTime now = LocalDateTime.now();
-            String user = request != null ? request.getUser() : null;
             if (existing == null) {
                 e.setCreateTime(now);
                 e.setCreateUser(user);
@@ -364,6 +369,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         }
         request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
         cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
+        String user = CurrentAuditUser.username();
         TimeseriesConstraint entity = memoryCache.computeConstraint(
                 request.getProjectId(), request.getConstraintId(), existing -> {
             TimeseriesConstraint e = existing != null ? existing : new TimeseriesConstraint();
@@ -379,11 +385,13 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             LocalDateTime now = LocalDateTime.now();
             if (existing == null) {
                 e.setCreateTime(now);
+                e.setCreateUser(user);
             } else {
                 e.setCreateTime(existing.getCreateTime());
                 e.setCreateUser(existing.getCreateUser());
             }
             e.setUpdateTime(now);
+            e.setUpdateUser(user);
             return e;
         });
         constraintMapper.updateById(entity);
@@ -444,6 +452,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                         request != null ? request.getRelationType() : null)
                 : request.getRelationId();
 
+        String user = CurrentAuditUser.username();
         TimeseriesRelation entity = memoryCache.computeRelation(
                 request != null ? request.getProjectId() : null, relationId, existing -> {
             TimeseriesRelation e = existing != null ? existing : new TimeseriesRelation();
@@ -455,7 +464,6 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             e.setTargetCategoryName(resolveCategoryName(e.getProjectId(), e.getTargetSequenceId()));
             // audit fields
             LocalDateTime now = LocalDateTime.now();
-            String user = request != null ? request.getUser() : null;
             if (existing == null) {
                 e.setCreateTime(now);
                 e.setCreateUser(user);
@@ -481,6 +489,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         }
         request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
         cacheManager.ensureTableLoaded(CachedTable.RELATION);
+        String user = CurrentAuditUser.username();
         TimeseriesRelation entity = memoryCache.computeRelation(
                 request.getProjectId(), request.getRelationId(), existing -> {
             TimeseriesRelation e = existing != null ? existing : new TimeseriesRelation();
@@ -496,11 +505,13 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             LocalDateTime now = LocalDateTime.now();
             if (existing == null) {
                 e.setCreateTime(now);
+                e.setCreateUser(user);
             } else {
                 e.setCreateTime(existing.getCreateTime());
                 e.setCreateUser(existing.getCreateUser());
             }
             e.setUpdateTime(now);
+            e.setUpdateUser(user);
             return e;
         });
         relationMapper.updateById(entity);

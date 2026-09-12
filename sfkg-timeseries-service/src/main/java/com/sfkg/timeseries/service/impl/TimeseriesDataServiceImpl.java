@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import com.sfkg.timeseries.client.IngestBufferPool;
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.common.IngestPointValueValidator;
 import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.dto.HistoryDataQueryRequest;
 import com.sfkg.timeseries.dto.TimeseriesDataSaveRequest;
@@ -42,11 +43,14 @@ public class TimeseriesDataServiceImpl implements TimeseriesDataService {
         String projectId = ProjectIdValidator.require(request.getProjectId());
         request.setProjectId(projectId);
 
-        // Route each point through the hash-partitioned buffer pool
+        // Validate the whole batch before offering any point, so a malformed
+        // value cannot become a partial write or a fabricated 0.0 observation.
         int pointCount = request.getPoints().size();
-        for (TimeseriesDataSaveRequest.IngestPointDTO point : request.getPoints()) {
-            if (point == null) {
-                throw new BusinessException("ingest point must not be null");
+        for (int index = 0; index < pointCount; index++) {
+            TimeseriesDataSaveRequest.IngestPointDTO point = request.getPoints().get(index);
+            String valueError = IngestPointValueValidator.validationError(point);
+            if (valueError != null) {
+                throw new BusinessException("invalid ingest point at index " + index + ": " + valueError);
             }
             if (point.getProjectId() == null || point.getProjectId().isBlank()) {
                 point.setProjectId(projectId);
@@ -55,6 +59,10 @@ public class TimeseriesDataServiceImpl implements TimeseriesDataService {
             } else {
                 point.setProjectId(projectId);
             }
+        }
+
+        // Route only fully validated points through the hash-partitioned buffer pool.
+        for (TimeseriesDataSaveRequest.IngestPointDTO point : request.getPoints()) {
             int partition = ingestBufferPool.partition(point.getProjectId(), point.getSequenceId());
             ingestBufferPool.offer(point, partition);
         }

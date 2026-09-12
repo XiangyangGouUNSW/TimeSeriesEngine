@@ -17,5 +17,4 @@ public class RelationSaveRequest {
     private String relationDescription;
     private String effectiveStatus;
     private String confirmStatus;
-    private String user;
 }

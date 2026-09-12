@@ -45,6 +45,7 @@ import com.sfkg.timeseries.mapper.TimeseriesCategoryMapper;
 import com.sfkg.timeseries.mapper.TimeseriesConstraintMapper;
 import com.sfkg.timeseries.mapper.TimeseriesRelationMapper;
 import com.sfkg.timeseries.service.TimeseriesConstraintExpansionResolver;
+import com.sfkg.timeseries.service.TimeseriesRelationExpansionResolver;
 import com.sfkg.timeseries.service.TimeseriesTaskContextResolver;
 import com.sfkg.timeseries.service.impl.TimeseriesSemanticServiceImpl;
 
@@ -80,8 +81,11 @@ class ConstraintOrGroupLargeScaleTests {
         cache = new TimeseriesMemoryCache();
         TimeseriesConstraintExpansionResolver expansionResolver =
                 new TimeseriesConstraintExpansionResolver(cache);
+        TimeseriesRelationExpansionResolver relationExpansionResolver =
+                new TimeseriesRelationExpansionResolver(cache);
         TimeseriesTaskContextResolver contextResolver =
-                new TimeseriesTaskContextResolver(cache, expansionResolver);
+                new TimeseriesTaskContextResolver(cache, expansionResolver,
+                        relationExpansionResolver);
 
         GrpcClientProperties properties = new GrpcClientProperties();
         String coreName = "core-" + UUID.randomUUID();
@@ -93,7 +97,8 @@ class ConstraintOrGroupLargeScaleTests {
         channelRegistry = new TestChannelRegistry();
 
         TimeseriesCoreGrpcClient coreClient = new TimeseriesCoreGrpcClient(
-                properties, new ObjectMapper(), cache, channelRegistry, expansionResolver);
+                properties, new ObjectMapper(), cache, channelRegistry, expansionResolver,
+                relationExpansionResolver);
         AnomalyGrpcClient anomalyClient = new AnomalyGrpcClient(properties, contextResolver, channelRegistry);
         ForecastGrpcClient forecastClient = new ForecastGrpcClient(properties, contextResolver, channelRegistry);
 

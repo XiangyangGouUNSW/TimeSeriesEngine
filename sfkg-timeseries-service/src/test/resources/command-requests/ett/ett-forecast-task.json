@@ -20,7 +20,5 @@
   "constraintIds": [
     "ett-ot-upper-limit"
   ],
-  "warningRule": "OT > 38",
-  "status": "ENABLE",
-  "user": null
+  "status": "ENABLE"
 }

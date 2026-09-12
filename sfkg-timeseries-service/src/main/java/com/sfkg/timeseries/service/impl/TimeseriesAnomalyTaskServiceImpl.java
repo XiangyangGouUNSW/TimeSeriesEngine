@@ -10,6 +10,7 @@ import java.util.stream.Collectors;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 
+import com.sfkg.timeseries.auth.CurrentAuditUser;
 import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
@@ -79,6 +80,7 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
                 ? generateTaskId(request)
                 : request.getTaskId();
 
+        String user = CurrentAuditUser.username();
         TimeseriesAnomalyTask entity = memoryCache.computeAnomalyTask(
                 request != null ? request.getProjectId() : null, taskId, existing -> {
             TimeseriesAnomalyTask e = existing != null ? existing : new TimeseriesAnomalyTask();
@@ -89,7 +91,6 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
             e.setProjectId(request != null ? request.getProjectId() : (existing != null ? existing.getProjectId() : null));
             // audit fields
             LocalDateTime now = LocalDateTime.now();
-            String user = request != null ? request.getUser() : null;
             if (existing == null) {
                 e.setCreateTime(now);
                 e.setCreateUser(user);
@@ -132,6 +133,7 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
         }
         request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
         cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
+        String user = CurrentAuditUser.username();
         TimeseriesAnomalyTask entity = memoryCache.computeAnomalyTask(
                 request.getProjectId(), request.getTaskId(), existing -> {
             TimeseriesAnomalyTask e = existing != null ? existing : new TimeseriesAnomalyTask();
@@ -142,11 +144,13 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
             LocalDateTime now = LocalDateTime.now();
             if (existing == null) {
                 e.setCreateTime(now);
+                e.setCreateUser(user);
             } else {
                 e.setCreateTime(existing.getCreateTime());
                 e.setCreateUser(existing.getCreateUser());
             }
             e.setUpdateTime(now);
+            e.setUpdateUser(user);
             return e;
         });
 
@@ -154,9 +158,24 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
         anomalyGrpcClient.updateAnomalyTaskStatus(entity.getProjectId(), request.getTaskId(), request.getStatus());
     }
 
+    /**
+     * 合法检测方法 = P 端真正认识并能执行的方法集合。
+     * 对照 sfkg-timeseries-analysis/src/anomaly_models.py 的 KNOWN_METHODS，
+     * 外加 S 侧语义标记 CONSTRAINT_CHECK（实时约束检查由 C 端执行，P 端不参与）。
+     *
+     * 两边必须严格一致：
+     *  - P 端不认的方法会被静默过滤掉（空跑、不报错），所以不再接受
+     *    MODEL_ANOMALY_DETECTION / HYBRID 这类"分类标签"——它们不产生任何检测；
+     *  - P 端支持但此前漏配的 TREND_SHIFT / MUTUAL_COUPLING 在此补齐，
+     *    避免"合法方法被 S 端 400 拒绝"。
+     */
     private static final Set<String> VALID_DETECT_METHODS = Set.of(
-            "CONSTRAINT_CHECK", "MODEL_ANOMALY_DETECTION", "DISCRETE_OUTLIER",
-            "CAUSAL_PATTERN", "HISTORICAL_MATCH", "HYBRID");
+            "CONSTRAINT_CHECK",
+            "DISCRETE_OUTLIER",
+            "TREND_SHIFT",
+            "CAUSAL_PATTERN",
+            "MUTUAL_COUPLING",
+            "HISTORICAL_MATCH");
 
     @Override
     public void validateDetectObjects(AnomalyTaskSaveRequest request) {

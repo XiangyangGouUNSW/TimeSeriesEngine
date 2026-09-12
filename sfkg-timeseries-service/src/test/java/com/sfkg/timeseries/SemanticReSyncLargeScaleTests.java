@@ -36,6 +36,7 @@ import com.sfkg.timeseries.mapper.TimeseriesCategoryMapper;
 import com.sfkg.timeseries.mapper.TimeseriesConstraintMapper;
 import com.sfkg.timeseries.mapper.TimeseriesRelationMapper;
 import com.sfkg.timeseries.service.TimeseriesConstraintExpansionResolver;
+import com.sfkg.timeseries.service.TimeseriesRelationExpansionResolver;
 import com.sfkg.timeseries.service.TimeseriesTaskContextResolver;
 import com.sfkg.timeseries.service.impl.TimeseriesSemanticServiceImpl;
 
@@ -65,7 +66,8 @@ class SemanticReSyncLargeScaleTests {
         TimeseriesCacheManager cacheManager = mock(TimeseriesCacheManager.class);
         TimeseriesConstraintExpansionResolver expansionResolver =
                 new TimeseriesConstraintExpansionResolver(cache);
-        contextResolver = new TimeseriesTaskContextResolver(cache, expansionResolver);
+        contextResolver = new TimeseriesTaskContextResolver(cache, expansionResolver,
+                new TimeseriesRelationExpansionResolver(cache));
         service = new TimeseriesSemanticServiceImpl(
                 mock(TimeseriesCategoryMapper.class),
                 mock(TimeseriesConstraintMapper.class),

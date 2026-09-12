@@ -18,5 +18,4 @@ public class ForecastTaskSaveRequest {
     private List<String> constraintIds;
     private String warningRule;
     private String status;
-    private String user;
 }

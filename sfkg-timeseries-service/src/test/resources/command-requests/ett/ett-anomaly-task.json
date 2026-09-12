@@ -7,16 +7,16 @@
   ],
   "methods": [
     "CONSTRAINT_CHECK",
-    "MODEL_ANOMALY_DETECTION",
-    "DISCRETE_OUTLIER","CAUSAL_PATTERN"
+    "DISCRETE_OUTLIER",
+    "TREND_SHIFT",
+    "CAUSAL_PATTERN"
   ],
-  "warningRule": "OT > 38",
+  "warningRule": "HIGH",
   "contextLength": 96,
   "slideStepMs": 3600000,
   "minimumPoints": 200,
   "constraintIds": [
     "ett-ot-upper-limit"
   ],
-  "status": "ENABLE",
-  "user": null
+  "status": "ENABLE"
 }

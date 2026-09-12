@@ -1,8 +1,22 @@
 package com.sfkg.timeseries.client;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
+import com.sfkg.timeseries.common.IngestPointValueValidator;
+import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.config.GrpcClientProperties;
 import com.sfkg.timeseries.dto.DerivedSeriesConfigSaveRequest;
 import com.sfkg.timeseries.dto.DerivedSeriesConfigSaveRequest.DerivedExpressionDTO;
@@ -62,21 +76,12 @@ import com.sfkg.timeseries.grpc.VariableRole;
 import com.sfkg.timeseries.grpc.WindowData;
 import com.sfkg.timeseries.service.TimeseriesConstraintExpansionResolver;
 import com.sfkg.timeseries.service.TimeseriesConstraintExpansionResolver.ExpandedConstraintRule;
-import com.sfkg.timeseries.common.ProjectIdValidator;
+import com.sfkg.timeseries.service.TimeseriesRelationExpansionResolver;
+import com.sfkg.timeseries.service.TimeseriesRelationExpansionResolver.ExpandedRelationPair;
 import com.sfkg.timeseries.vo.HistoryDataVO;
+
 import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
-import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.concurrent.TimeUnit;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 
 @Component
 public class TimeseriesCoreGrpcClient {
@@ -89,16 +94,19 @@ public class TimeseriesCoreGrpcClient {
     private final TimeseriesMemoryCache memoryCache;
     private final GrpcChannelRegistry channelRegistry;
     private final TimeseriesConstraintExpansionResolver constraintExpansionResolver;
+    private final TimeseriesRelationExpansionResolver relationExpansionResolver;
 
     public TimeseriesCoreGrpcClient(GrpcClientProperties grpcClientProperties, ObjectMapper objectMapper,
                                     TimeseriesMemoryCache memoryCache,
                                     GrpcChannelRegistry channelRegistry,
-                                    TimeseriesConstraintExpansionResolver constraintExpansionResolver) {
+                                    TimeseriesConstraintExpansionResolver constraintExpansionResolver,
+                                    TimeseriesRelationExpansionResolver relationExpansionResolver) {
         this.grpcClientProperties = grpcClientProperties;
         this.objectMapper = objectMapper;
         this.memoryCache = memoryCache;
         this.channelRegistry = channelRegistry;
         this.constraintExpansionResolver = constraintExpansionResolver;
+        this.relationExpansionResolver = relationExpansionResolver;
     }
 
     // ── instance config ────────────────────────────────────────────────
@@ -275,52 +283,39 @@ public class TimeseriesCoreGrpcClient {
             return SyncResult.fail("relation is null");
         }
 
-        // Resolve source/target: category IDs → sequence IDs, grouped by deviceInstanceId
-        List<String> srcSeqIds = resolveToSequences(relation.getProjectId(), relation.getSourceSequences());
-        List<String> tgtSeqIds = resolveToSequences(relation.getProjectId(),
-                relation.getTargetSequenceId() != null ? List.of(relation.getTargetSequenceId()) : List.of());
-
-        // Group by deviceInstanceId — only pair sequences on the same device
-        Map<String, List<String>> srcByDevice = groupByDeviceInstanceId(relation.getProjectId(), srcSeqIds);
-        Map<String, List<String>> tgtByDevice = groupByDeviceInstanceId(relation.getProjectId(), tgtSeqIds);
+        // 展开（类别→序列、按设备分桶、实例级 relation_id）统一由
+        // TimeseriesRelationExpansionResolver 负责，与 P 端语义上下文共用同一份实现，
+        // 保证两端拿到的 relation_id 逐条一致。
+        // 注意：停用/未确认的关系也要照常下发（带 enabled=false），否则 C 端会残留旧规则。
+        List<ExpandedRelationPair> pairs = relationExpansionResolver.expand(relation, null);
+        boolean enabled = relationExpansionResolver.isRelationEnabled(relation);
 
         SyncRelationsRequest.Builder reqBuilder = SyncRelationsRequest.newBuilder()
                 .setProjectId(nullToEmpty(relation.getProjectId()));
-        int count = 0;
-        for (Map.Entry<String, List<String>> entry : srcByDevice.entrySet()) {
-            String deviceId = entry.getKey();
-            List<String> tgtInDevice = tgtByDevice.getOrDefault(deviceId, List.of());
-            if (tgtInDevice.isEmpty()) continue;
-
-            for (String src : entry.getValue()) {
-                for (String tgt : tgtInDevice) {
-                    if (src.equals(tgt)) continue; // skip self-relation
-                    RuntimeRelationConfig.Builder rb = RuntimeRelationConfig.newBuilder()
-                            .setRelationId(nullToEmpty(relation.getRelationId()) + "_" + src + "_" + tgt)
-                            .setTargetSequenceId(nullToEmpty(tgt))
-                            .setRelationType(nullToEmpty(relation.getRelationType()).toLowerCase())
-                            .setConfidence(relation.getConfidence() != null ? relation.getConfidence().doubleValue() : 0.0)
-                            .setProjectId(nullToEmpty(relation.getProjectId()))
-                            .setEnabled("ENABLE".equalsIgnoreCase(relation.getEffectiveStatus()));
-                    // 每个展开后的 pair 只有一个 source，权重恒为 1.0
-                    RuntimeRelationSource source = buildRelationSource(src, relation.getLagRange());
-                    if (source != null) {
-                        rb.addSources(source);
-                    }
-                    reqBuilder.addItems(rb.build());
-                    count++;
-                }
+        for (ExpandedRelationPair pair : pairs) {
+            RuntimeRelationConfig.Builder rb = RuntimeRelationConfig.newBuilder()
+                    .setRelationId(pair.relationId())
+                    .setTargetSequenceId(nullToEmpty(pair.targetSequenceId()))
+                    .setRelationType(nullToEmpty(relation.getRelationType()).toLowerCase())
+                    .setConfidence(relation.getConfidence() != null ? relation.getConfidence().doubleValue() : 0.0)
+                    .setProjectId(nullToEmpty(relation.getProjectId()))
+                    .setEnabled(enabled);
+            // 每个展开后的 pair 只有一个 source，权重恒为 1.0
+            RuntimeRelationSource source = buildRelationSource(pair.sourceSequenceId(), relation.getLagRange());
+            if (source != null) {
+                rb.addSources(source);
             }
+            reqBuilder.addItems(rb.build());
         }
 
-        if (count == 0) {
+        if (pairs.isEmpty()) {
             LOG.warn("[{}] syncRelations relationId={}: no sequence pairs resolved, skip",
                     SERVICE_NAME, relation.getRelationId());
             return SyncResult.success();
         }
 
         LOG.info("[{}] -> syncRelations relationId={} expanded to {} pairs at {}",
-                SERVICE_NAME, relation.getRelationId(), count, address);
+                SERVICE_NAME, relation.getRelationId(), pairs.size(), address);
         return callCoreSync(address, stub -> stub.syncRelations(reqBuilder.build()), "syncRelations");
     }
 
@@ -418,48 +413,8 @@ public class TimeseriesCoreGrpcClient {
     }
 
     // ── relation config helpers ────────────────────────────────────────
-    private List<String> resolveToSequences(Collection<String> ids) {
-        return resolveToSequences(null, ids);
-    }
-
-    private List<String> resolveToSequences(String projectId, Collection<String> ids) {
-        if (ids == null || ids.isEmpty()) return List.of();
-        List<String> result = new ArrayList<>();
-        for (String id : ids) {
-            if (id == null || id.isBlank()) continue;
-            // Check if it's a category ID
-            if (memoryCache.getCategory(projectId, id).isPresent()) {
-                // Expand category → all sequence IDs
-                for (TimeseriesInstanceConfig inst : memoryCache.listInstanceConfigs()) {
-                    if (java.util.Objects.equals(projectId, inst.getProjectId())
-                            && id.equals(inst.getCategoryId()) && inst.getSequenceId() != null) {
-                        result.add(inst.getSequenceId());
-                    }
-                }
-            } else {
-                // Treat as sequence ID directly
-                result.add(id);
-            }
-        }
-        return result;
-    }
-
-    private Map<String, List<String>> groupByDeviceInstanceId(List<String> seqIds) {
-        return groupByDeviceInstanceId(null, seqIds);
-    }
-
-    private Map<String, List<String>> groupByDeviceInstanceId(String projectId, List<String> seqIds) {
-        Map<String, List<String>> map = new LinkedHashMap<>();
-        for (String seqId : seqIds) {
-            TimeseriesInstanceConfig inst = memoryCache.getInstanceBySequenceId(projectId, seqId);
-            if (inst == null && projectId == null) {
-                inst = memoryCache.getInstanceBySequenceId(seqId);
-            }
-            String deviceId = inst != null && inst.getDeviceInstanceId() != null ? inst.getDeviceInstanceId() : "_default";
-            map.computeIfAbsent(deviceId, k -> new ArrayList<>()).add(seqId);
-        }
-        return map;
-    }
+    // 类别→序列展开与按设备分桶已收敛到 TimeseriesRelationExpansionResolver，
+    // 这里不再保留第二份实现。
 
     /**
      * Build a {@link RuntimeRelationSource} for one source sequence.
@@ -556,6 +511,12 @@ public class TimeseriesCoreGrpcClient {
         if (request == null || request.getPoints() == null || request.getPoints().isEmpty()) {
             return SyncResult.fail("no points to ingest");
         }
+        for (int index = 0; index < request.getPoints().size(); index++) {
+            String valueError = IngestPointValueValidator.validationError(request.getPoints().get(index));
+            if (valueError != null) {
+                return SyncResult.fail("invalid ingest point at index " + index + ": " + valueError);
+            }
+        }
         String address = grpcClientProperties.getCoreAddress();
         if (isBlank(address)) {
             return notConfigured("ingestData");
@@ -594,7 +555,9 @@ public class TimeseriesCoreGrpcClient {
         } else if (p.getStringValue() != null) {
             vb.setStringValue(p.getStringValue());
         } else {
-            vb.setDoubleValue(0.0);
+            // ingestData validates all points first. This guard must never turn
+            // missing input into an apparently valid numerical observation.
+            throw new IllegalArgumentException("ingest point has no value field");
         }
         return vb.build();
     }
@@ -928,40 +891,31 @@ public class TimeseriesCoreGrpcClient {
      * ({@code relationId_src_tgt}) registered by {@link #syncRelationConfig}.
      * Only same-device pairs whose target matches the dependent sequence and
      * whose source is among the requested sequences are returned.
+     *
+     * <p>展开与配对复用 {@link TimeseriesRelationExpansionResolver}，与
+     * {@link #syncRelationConfig} 及 P 端语义上下文用同一份实现。
+     * 启用判定同样要求 {@code ENABLE|ENABLED + CONFIRMED}，与任务上下文口径一致。
      */
     public List<String> resolveExpandedRelationIds(TimeseriesRelation relation,
                                                    List<String> sequenceIds,
                                                    String dependentSequenceId) {
-        if (relation == null || relation.getRelationId() == null
-                || !"ENABLE".equalsIgnoreCase(relation.getEffectiveStatus())) {
+        if (!relationExpansionResolver.isRelationEnabled(relation)) {
             return List.of();
         }
-        List<String> srcSeqIds = resolveToSequences(relation.getProjectId(), relation.getSourceSequences());
-        List<String> tgtSeqIds = resolveToSequences(relation.getProjectId(),
-                relation.getTargetSequenceId() != null
-                        ? List.of(relation.getTargetSequenceId()) : List.of());
-        if (dependentSequenceId != null && !dependentSequenceId.isBlank()) {
-            tgtSeqIds = tgtSeqIds.stream()
-                    .filter(dependentSequenceId::equals)
-                    .collect(java.util.stream.Collectors.toList());
+        Set<String> requested = sequenceIds != null && !sequenceIds.isEmpty()
+                ? new HashSet<>(sequenceIds)
+                : Set.of();
+        if (requested.isEmpty()) {
+            return List.of();
         }
-        java.util.Set<String> requested = sequenceIds != null && !sequenceIds.isEmpty()
-                ? new java.util.HashSet<>(sequenceIds)
-                : java.util.Set.of();
-
-        Map<String, List<String>> srcByDevice = groupByDeviceInstanceId(relation.getProjectId(), srcSeqIds);
-        Map<String, List<String>> tgtByDevice = groupByDeviceInstanceId(relation.getProjectId(), tgtSeqIds);
+        Collection<String> allowedTargets = dependentSequenceId != null && !dependentSequenceId.isBlank()
+                ? List.of(dependentSequenceId)
+                : null;
 
         List<String> expanded = new ArrayList<>();
-        for (Map.Entry<String, List<String>> entry : srcByDevice.entrySet()) {
-            List<String> tgtInDevice = tgtByDevice.getOrDefault(entry.getKey(), List.of());
-            for (String src : entry.getValue()) {
-                for (String tgt : tgtInDevice) {
-                    if (src.equals(tgt) || !requested.contains(src)) {
-                        continue;
-                    }
-                    expanded.add(relation.getRelationId() + "_" + src + "_" + tgt);
-                }
+        for (ExpandedRelationPair pair : relationExpansionResolver.expand(relation, allowedTargets)) {
+            if (requested.contains(pair.sourceSequenceId())) {
+                expanded.add(pair.relationId());
             }
         }
         return expanded;

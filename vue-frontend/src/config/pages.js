@@ -23,7 +23,6 @@ export const pages = {
       { name: 'dataType', label: '数据类型', type: 'select', options: DATA_TYPE, required: true },
       { name: 'seriesKind', label: '序列类型', type: 'select', options: ['CONTINUOUS', 'DISCRETE', 'CATEGORICAL'] },
       { name: 'accessStatus', label: '接入状态', type: 'select', options: EFFECTIVE_STATUS },
-      { name: 'user', label: '操作人', type: 'text' },
     ],
     queryFields: [
       { name: 'projectId', label: '项目ID', type: 'text' },
@@ -57,7 +56,6 @@ export const pages = {
       { name: 'applicableObjectType', label: '适用对象类型', type: 'text' },
       { name: 'defaultUnit', label: '默认单位', type: 'text' },
       { name: 'confirmStatus', label: '确认状态', type: 'select', options: CONFIRM_STATUS },
-      { name: 'user', label: '操作人', type: 'text' },
     ],
     queryFields: [
       { name: 'projectId', label: '项目ID', type: 'text' },
@@ -121,7 +119,6 @@ export const pages = {
       { name: 'constraintDescription', label: '约束描述', type: 'textarea' },
       { name: 'effectiveStatus', label: '生效状态', type: 'select', options: EFFECTIVE_STATUS },
       { name: 'confirmStatus', label: '确认状态', type: 'select', options: CONFIRM_STATUS },
-      { name: 'user', label: '操作人', type: 'text' },
     ],
     queryFields: [
       { name: 'projectId', label: '项目ID', type: 'text' },
@@ -166,7 +163,6 @@ export const pages = {
       { name: 'relationDescription', label: '关系描述', type: 'textarea' },
       { name: 'effectiveStatus', label: '生效状态', type: 'select', options: EFFECTIVE_STATUS },
       { name: 'confirmStatus', label: '确认状态', type: 'select', options: CONFIRM_STATUS },
-      { name: 'user', label: '操作人', type: 'text' },
     ],
     queryFields: [
       { name: 'projectId', label: '项目ID', type: 'text' },
@@ -203,15 +199,14 @@ export const pages = {
       { name: 'taskId', label: '任务ID', type: 'text', hint: '创建时留空则自动生成' },
       { name: 'taskName', label: '任务名称', type: 'text', required: true },
       { name: 'sequenceIds', label: '检测序列ID', type: 'refs', refType: 'instance', required: true, full: true, hint: '从已有实例中选择，可多选' },
-      { name: 'methods', label: '检测方法（逗号分隔）', type: 'array', required: true, hint: '如 DBSCAN, ZSCORE, ISOLATION_FOREST' },
-      { name: 'warningRule', label: '告警规则', type: 'text', hint: '如 anomalyLevel >= MEDIUM' },
+      { name: 'methods', label: '检测方法（逗号分隔）', type: 'array', required: true, hint: 'CONSTRAINT_CHECK / DISCRETE_OUTLIER / TREND_SHIFT / CAUSAL_PATTERN / MUTUAL_COUPLING / HISTORICAL_MATCH' },
+      { name: 'warningRule', label: '危险等级', type: 'text', hint: 'LOW / MEDIUM / HIGH（P 端当等级名用，不是布尔表达式）' },
       { name: 'contextLength', label: '上下文长度', type: 'number', unit: '点' },
       { name: 'slideStepMs', label: '滑动步长', type: 'number', unit: '毫秒' },
       { name: 'minimumPoints', label: '最小点数', type: 'number', unit: '点' },
       { name: 'constraintIds', label: '约束ID', type: 'refs', refType: 'constraint', hint: '从已有约束中选择，可多选' },
       { name: 'confirmedHistoricalEventIds', label: '已确认历史事件ID', type: 'refs', refType: 'event', hint: '从已有事件中选择，可多选' },
       { name: 'status', label: '状态', type: 'select', options: EFFECTIVE_STATUS },
-      { name: 'user', label: '操作人', type: 'text' },
     ],
     queryFields: [
       { name: 'projectId', label: '项目ID', type: 'text' },
@@ -251,9 +246,8 @@ export const pages = {
       { name: 'modelKey', label: '模型Key', type: 'text' },
       { name: 'constraintIds', label: '约束ID', type: 'refs', refType: 'constraint', hint: '从已有约束中选择，可多选' },
       { name: 'confirmedHistoricalEventIds', label: '已确认历史事件ID', type: 'refs', refType: 'event', hint: '从已有事件中选择，可多选' },
-      { name: 'warningRule', label: '告警规则', type: 'text' },
+      { name: 'warningRule', label: '危险等级', type: 'text', hint: '预留字段：预测预警当前固定 MEDIUM，P 端不会下发该字段' },
       { name: 'status', label: '状态', type: 'select', options: EFFECTIVE_STATUS },
-      { name: 'user', label: '操作人', type: 'text' },
     ],
     queryFields: [
       { name: 'projectId', label: '项目ID', type: 'text' },
@@ -299,7 +293,6 @@ export const pages = {
       { name: 'diagnosisResult', label: '诊断结果', type: 'text' },
       { name: 'diagnosisBasis', label: '诊断依据', type: 'textarea' },
       { name: 'disposalResult', label: '处置结果', type: 'textarea' },
-      { name: 'user', label: '操作人', type: 'text' },
     ],
     queryFields: [
       { name: 'projectId', label: '项目ID', type: 'text' },

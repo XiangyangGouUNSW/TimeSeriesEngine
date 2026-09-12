@@ -15,5 +15,4 @@ public class InstanceConfigSaveRequest {
     private String dataType;
     private String seriesKind;
     private String accessStatus;
-    private String user;
 }

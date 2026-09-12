@@ -14,6 +14,7 @@ import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.ForecastGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.auth.CurrentAuditUser;
 import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.common.SemanticId;
 import com.sfkg.timeseries.dto.ForecastTaskSaveRequest;
@@ -74,6 +75,7 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
                 ? generateTaskId(request)
                 : request.getTaskId();
 
+        String user = CurrentAuditUser.username();
         TimeseriesForecastTask entity = memoryCache.computeForecastTask(
                 request.getProjectId(), taskId, existing -> {
             TimeseriesForecastTask e = existing != null ? existing : new TimeseriesForecastTask();
@@ -84,7 +86,6 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
             e.setProjectId(request.getProjectId());
             // audit fields
             LocalDateTime now = LocalDateTime.now();
-            String user = request != null ? request.getUser() : null;
             if (existing == null) {
                 e.setCreateTime(now);
                 e.setCreateUser(user);
@@ -127,6 +128,7 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
         }
         request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
         cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
+        String user = CurrentAuditUser.username();
         TimeseriesForecastTask entity = memoryCache.computeForecastTask(
                 request.getProjectId(), request.getTaskId(), existing -> {
             TimeseriesForecastTask e = existing != null ? existing : new TimeseriesForecastTask();
@@ -137,11 +139,13 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
             LocalDateTime now = LocalDateTime.now();
             if (existing == null) {
                 e.setCreateTime(now);
+                e.setCreateUser(user);
             } else {
                 e.setCreateTime(existing.getCreateTime());
                 e.setCreateUser(existing.getCreateUser());
             }
             e.setUpdateTime(now);
+            e.setUpdateUser(user);
             return e;
         });
 

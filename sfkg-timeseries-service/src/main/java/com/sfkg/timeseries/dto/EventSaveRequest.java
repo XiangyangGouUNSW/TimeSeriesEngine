@@ -23,5 +23,4 @@ public class EventSaveRequest {
     private String diagnosisResult;
     private String diagnosisBasis;
     private String disposalResult;
-    private String user;
 }

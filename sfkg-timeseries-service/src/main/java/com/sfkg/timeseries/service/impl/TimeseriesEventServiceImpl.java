@@ -13,6 +13,7 @@ import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.auth.CurrentAuditUser;
 import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.common.SemanticId;
 import com.sfkg.timeseries.dto.EventQueryRequest;
@@ -88,6 +89,7 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
                 ? generateEventId(request.getEventType(), request.getEventName())
                 : request.getEventId();
 
+        String user = CurrentAuditUser.username();
         TimeseriesEvent entity = memoryCache.computeEvent(
                 request != null ? request.getProjectId() : null, eventId, existing -> {
             TimeseriesEvent e = existing != null ? existing : new TimeseriesEvent();
@@ -101,7 +103,6 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
             }
             // audit fields
             LocalDateTime now = LocalDateTime.now();
-            String user = request != null ? request.getUser() : null;
             if (existing == null) {
                 e.setCreateTime(now);
                 e.setCreateUser(user);

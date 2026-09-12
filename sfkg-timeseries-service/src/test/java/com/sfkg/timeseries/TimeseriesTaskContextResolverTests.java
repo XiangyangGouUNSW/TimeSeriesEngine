@@ -1,7 +1,11 @@
 package com.sfkg.timeseries;
 
+import java.util.List;
+import java.util.Map;
+
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.Test;
 
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.entity.TimeseriesCategory;
@@ -10,10 +14,8 @@ import com.sfkg.timeseries.entity.TimeseriesForecastTask;
 import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.grpc.SemanticContext;
 import com.sfkg.timeseries.service.TimeseriesConstraintExpansionResolver;
+import com.sfkg.timeseries.service.TimeseriesRelationExpansionResolver;
 import com.sfkg.timeseries.service.TimeseriesTaskContextResolver;
-import java.util.List;
-import java.util.Map;
-import org.junit.jupiter.api.Test;
 
 class TimeseriesTaskContextResolverTests {
 
@@ -28,7 +30,8 @@ class TimeseriesTaskContextResolverTests {
         TimeseriesConstraintExpansionResolver expansionResolver =
                 new TimeseriesConstraintExpansionResolver(cache);
         TimeseriesTaskContextResolver contextResolver =
-                new TimeseriesTaskContextResolver(cache, expansionResolver);
+                new TimeseriesTaskContextResolver(cache, expansionResolver,
+                        new TimeseriesRelationExpansionResolver(cache));
 
         TimeseriesForecastTask task = new TimeseriesForecastTask();
         task.setForecastObjects(List.of("ETTh1_OT"));

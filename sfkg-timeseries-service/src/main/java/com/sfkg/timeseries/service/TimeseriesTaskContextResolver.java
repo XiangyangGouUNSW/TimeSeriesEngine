@@ -23,12 +23,15 @@ public class TimeseriesTaskContextResolver {
 
     private final TimeseriesMemoryCache memoryCache;
     private final TimeseriesConstraintExpansionResolver constraintExpansionResolver;
+    private final TimeseriesRelationExpansionResolver relationExpansionResolver;
 
     public TimeseriesTaskContextResolver(
             TimeseriesMemoryCache memoryCache,
-            TimeseriesConstraintExpansionResolver constraintExpansionResolver) {
+            TimeseriesConstraintExpansionResolver constraintExpansionResolver,
+            TimeseriesRelationExpansionResolver relationExpansionResolver) {
         this.memoryCache = memoryCache;
         this.constraintExpansionResolver = constraintExpansionResolver;
+        this.relationExpansionResolver = relationExpansionResolver;
     }
 
     public Set<String> resolveForecastFeatureIds(TimeseriesForecastTask task) {
@@ -242,34 +245,23 @@ public class TimeseriesTaskContextResolver {
             Set<String> addedExpandedIds, List<SequenceRelation> result) {
         if (!isRelationEnabled(rel)) return;
 
-        List<String> srcSeqs = expandIds(projectId, rel.getSourceSequences());
-        if (srcSeqs.isEmpty()) return;
-
-        List<String> tgtSeqs = expandIds(projectId,
-                rel.getTargetSequenceId() != null ? List.of(rel.getTargetSequenceId()) : List.of());
-        // Only include targets that are in the task's sequences
-        tgtSeqs.retainAll(taskSeqIds);
-        if (tgtSeqs.isEmpty()) return;
-
-        String baseId = rel.getRelationId() != null ? rel.getRelationId() : "";
         String relType = rel.getRelationType() != null ? rel.getRelationType() : "";
         double confidence = rel.getConfidence() != null ? rel.getConfidence().doubleValue() : 0.0;
         int lagSteps = parseLag(rel.getLagRange());
 
-        for (String src : srcSeqs) {
-            for (String tgt : tgtSeqs) {
-                if (src.equals(tgt)) continue;
-                String expandedId = baseId + "_" + src + "_" + tgt;
-                if (!addedExpandedIds.add(expandedId)) continue;
-                result.add(SequenceRelation.newBuilder()
-                        .setRelationId(expandedId)
-                        .setSourceSequenceId(src)
-                        .setTargetSequenceId(tgt)
-                        .setRelationType(relType)
-                        .setLagSteps(lagSteps)
-                        .setConfidence(confidence)
-                        .build());
-            }
+        // 展开与配对复用 C 端下发的同一份实现（TimeseriesRelationExpansionResolver），
+        // 保证 P 端拿到的 relation_id 与 C 端注册的逐条一致（含同设备配对规则）。
+        for (TimeseriesRelationExpansionResolver.ExpandedRelationPair pair
+                : relationExpansionResolver.expand(rel, taskSeqIds)) {
+            if (!addedExpandedIds.add(pair.relationId())) continue;
+            result.add(SequenceRelation.newBuilder()
+                    .setRelationId(pair.relationId())
+                    .setSourceSequenceId(pair.sourceSequenceId())
+                    .setTargetSequenceId(pair.targetSequenceId())
+                    .setRelationType(relType)
+                    .setLagSteps(lagSteps)
+                    .setConfidence(confidence)
+                    .build());
         }
     }
 
@@ -278,22 +270,7 @@ public class TimeseriesTaskContextResolver {
      * all sequences under that category. Otherwise treat as a sequence ID directly.
      */
     private List<String> expandIds(String projectId, Collection<String> ids) {
-        if (ids == null || ids.isEmpty()) return List.of();
-        List<String> result = new ArrayList<>();
-        for (String id : ids) {
-            if (id == null || id.isBlank()) continue;
-            if (memoryCache.getCategory(projectId, id).isPresent()) {
-                for (TimeseriesInstanceConfig inst : memoryCache.listInstanceConfigs()) {
-                    if (java.util.Objects.equals(projectId, inst.getProjectId())
-                            && id.equals(inst.getCategoryId()) && inst.getSequenceId() != null) {
-                        result.add(inst.getSequenceId());
-                    }
-                }
-            } else {
-                result.add(id);
-            }
-        }
-        return result;
+        return relationExpansionResolver.resolveToSequences(projectId, ids);
     }
 
     /**
@@ -388,11 +365,9 @@ public class TimeseriesTaskContextResolver {
     }
 
     private boolean isRelationEnabled(TimeseriesRelation rel) {
-        // 与约束侧 isConstraintActive 对齐：ENABLE + CONFIRMED 才参与任务上下文
-        return rel != null
-                && ("ENABLE".equalsIgnoreCase(rel.getEffectiveStatus())
-                        || "ENABLED".equalsIgnoreCase(rel.getEffectiveStatus()))
-                && "CONFIRMED".equalsIgnoreCase(rel.getConfirmStatus());
+        // 与约束侧 isConstraintActive 对齐：ENABLE|ENABLED + CONFIRMED 才参与任务上下文。
+        // 复用关系展开 resolver，保证 C 端下发与 P 端上下文用的是同一判定。
+        return relationExpansionResolver.isRelationEnabled(rel);
     }
 
     private String nullToEmpty(String value) {

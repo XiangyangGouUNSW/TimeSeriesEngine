@@ -13,5 +13,4 @@ public class CategorySaveRequest {
     private String applicableObjectType;
     private String defaultUnit;
     private String confirmStatus;
-    private String user;
 }

@@ -2,6 +2,7 @@ package com.sfkg.timeseries;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -41,6 +42,8 @@ import com.sfkg.timeseries.grpc.OperationCode;
 import com.sfkg.timeseries.grpc.OperationResult;
 import com.sfkg.timeseries.grpc.RuntimeConstraintConfig;
 import com.sfkg.timeseries.grpc.RuntimeRelationConfig;
+import com.sfkg.timeseries.grpc.SemanticContext;
+import com.sfkg.timeseries.grpc.SequenceRelation;
 import com.sfkg.timeseries.grpc.SyncConfigResponse;
 import com.sfkg.timeseries.grpc.SyncConstraintsRequest;
 import com.sfkg.timeseries.grpc.SyncRelationsRequest;
@@ -51,6 +54,7 @@ import com.sfkg.timeseries.mapper.TimeseriesCategoryMapper;
 import com.sfkg.timeseries.mapper.TimeseriesConstraintMapper;
 import com.sfkg.timeseries.mapper.TimeseriesRelationMapper;
 import com.sfkg.timeseries.service.TimeseriesConstraintExpansionResolver;
+import com.sfkg.timeseries.service.TimeseriesRelationExpansionResolver;
 import com.sfkg.timeseries.service.TimeseriesTaskContextResolver;
 import com.sfkg.timeseries.service.impl.TimeseriesSemanticServiceImpl;
 
@@ -87,7 +91,10 @@ class SemanticDualSyncLargeScaleTests {
         cache = new TimeseriesMemoryCache();
         TimeseriesConstraintExpansionResolver expansionResolver =
                 new TimeseriesConstraintExpansionResolver(cache);
-        contextResolver = new TimeseriesTaskContextResolver(cache, expansionResolver);
+        TimeseriesRelationExpansionResolver relationExpansionResolver =
+                new TimeseriesRelationExpansionResolver(cache);
+        contextResolver = new TimeseriesTaskContextResolver(cache, expansionResolver,
+                relationExpansionResolver);
 
         GrpcClientProperties properties = new GrpcClientProperties();
         String coreName = "core-" + UUID.randomUUID();
@@ -110,7 +117,8 @@ class SemanticDualSyncLargeScaleTests {
         channelRegistry = new TestChannelRegistry();
 
         TimeseriesCoreGrpcClient coreClient = new TimeseriesCoreGrpcClient(
-                properties, new ObjectMapper(), cache, channelRegistry, expansionResolver);
+                properties, new ObjectMapper(), cache, channelRegistry, expansionResolver,
+                relationExpansionResolver);
         AnomalyGrpcClient anomalyClient = new AnomalyGrpcClient(properties, contextResolver, channelRegistry);
         ForecastGrpcClient forecastClient = new ForecastGrpcClient(properties, contextResolver, channelRegistry);
 
@@ -315,7 +323,118 @@ class SemanticDualSyncLargeScaleTests {
         }
     }
 
+    // ── 5. 两端 ID 一致性（ETT 形态：实例无 deviceInstanceId、类别级映射） ──
+
+    @Test
+    void coreAndPAnalysisReceiveIdenticalExpandedIdsForEttShapedWorld() {
+        buildEttWorld(P1);
+        cache.putAnomalyTask(anomalyTask(P1, "ett-anomaly-001", List.of("ETTh1_OT"), List.of()));
+        cache.putForecastTask(forecastTask(P1, "ett-forecast-001", List.of("ETTh1_OT"), List.of()));
+
+        service.saveConstraint(constraintRequest(P1, "ett-ot-upper-limit", "OT bound",
+                Map.of("x", "ETTh1_OT"), "x <= 20"));
+        service.saveRelation(relationRequest(P1, "ett-hufl-ot-lag", List.of("HUFL"), "OT", "CAUSE"));
+
+        // C 端拿到的实例级 ID
+        Set<String> coreConstraintIds = coreConstraintIds();
+        Set<String> coreRelationIds = coreRelationIds();
+        assertEquals(Set.of("ett-ot-upper-limit_ETTh1_OT"), coreConstraintIds);
+        assertEquals(Set.of("ett-hufl-ot-lag_ETTh1_HUFL_ETTh1_OT"), coreRelationIds);
+
+        // P 端任务语义上下文里的 ID 必须逐条落在 C 端已注册的 ID 集合里
+        SemanticContext ctx = lastAnomalyContext();
+        assertEquals(coreConstraintIds, new HashSet<>(ctx.getConstraintIdsList()),
+                "P 端约束 ID 必须与 C 端注册的展开 ID 完全一致");
+
+        Set<String> ctxRelationIds = ctx.getRelationsList().stream()
+                .map(SequenceRelation::getRelationId)
+                .collect(Collectors.toSet());
+        assertFalse(ctxRelationIds.isEmpty(), "任务上下文应带上本设备的实例级关系");
+        assertEquals(coreRelationIds, ctxRelationIds,
+                "P 端关系 ID 必须与 C 端注册的展开 ID 完全一致");
+    }
+
+    // ── 6. 跨设备关系不得泄漏进任务上下文（两端配对规则必须同为"分设备"） ──
+
+    @Test
+    void crossDeviceRelationsNeverLeakIntoTaskContext() {
+        buildWorld(P1, 2, List.of("OT", "HUFL"));
+        cache.putAnomalyTask(anomalyTask(P1, "a-d1", List.of(seqId(P1, 1, "OT")), List.of()));
+
+        service.saveRelation(relationRequest(P1, "r-hfl-ot", List.of("HUFL"), "OT", "CAUSE"));
+
+        // C 端只注册同设备 pair：d1 与 d2 各一条
+        Set<String> coreRelationIds = coreRelationIds();
+        assertEquals(Set.of("r-hfl-ot_" + seqId(P1, 1, "HUFL") + "_" + seqId(P1, 1, "OT"),
+                        "r-hfl-ot_" + seqId(P1, 2, "HUFL") + "_" + seqId(P1, 2, "OT")),
+                coreRelationIds);
+
+        // d1 的任务上下文只能有 d1 的 pair；d2_HUFL -> d1_OT 是 C 端根本不存在的 ID
+        Set<String> ctxRelationIds = lastAnomalyContext().getRelationsList().stream()
+                .map(SequenceRelation::getRelationId)
+                .collect(Collectors.toSet());
+        assertEquals(Set.of("r-hfl-ot_" + seqId(P1, 1, "HUFL") + "_" + seqId(P1, 1, "OT")),
+                ctxRelationIds, "跨设备关系不应出现在任务上下文里");
+        assertTrue(coreRelationIds.containsAll(ctxRelationIds),
+                "P 端拿到的每个 relation_id 都必须是 C 端已注册的");
+    }
+
     // ── helpers ──────────────────────────────────────────────────────
+
+    /** 当前 C 端已收到的全部实例级 constraint_id。 */
+    private Set<String> coreConstraintIds() {
+        Set<String> ids = new HashSet<>();
+        for (SyncConstraintsRequest request : coreFake.constraintRequests) {
+            for (RuntimeConstraintConfig item : request.getItemsList()) {
+                ids.add(item.getRule().getConstraintId());
+            }
+        }
+        return ids;
+    }
+
+    /** 当前 C 端已收到的全部实例级 relation_id。 */
+    private Set<String> coreRelationIds() {
+        Set<String> ids = new HashSet<>();
+        for (SyncRelationsRequest request : coreFake.relationRequests) {
+            for (RuntimeRelationConfig item : request.getItemsList()) {
+                ids.add(item.getRelationId());
+            }
+        }
+        return ids;
+    }
+
+    /** 最近一次推给 P 端的异常任务语义上下文。 */
+    private SemanticContext lastAnomalyContext() {
+        assertFalse(anomalyFake.anomalyRequests.isEmpty(), "P 端未收到任何异常任务同步");
+        return anomalyFake.anomalyRequests.get(anomalyFake.anomalyRequests.size() - 1)
+                .getTask().getSemanticContext();
+    }
+
+    /**
+     * ETT 形态世界：类别 ID 形如 {@code OT}，序列 ID 形如 {@code ETTh1_OT}，
+     * 实例不设 deviceInstanceId（与 command-requests/ett/ett-instance-*.json 一致）。
+     */
+    private void buildEttWorld(String projectId) {
+        List<String> categories = List.of("OT", "HUFL", "LUFL");
+        for (String cat : categories) {
+            TimeseriesCategory c = new TimeseriesCategory();
+            c.setProjectId(projectId);
+            c.setCategoryId(cat);
+            c.setCategoryName(cat);
+            c.setConfirmStatus("CONFIRMED");
+            cache.putCategory(c);
+        }
+        for (String cat : categories) {
+            String sequenceId = "ETTh1_" + cat;
+            TimeseriesInstanceConfig inst = new TimeseriesInstanceConfig();
+            inst.setProjectId(projectId);
+            inst.setSequenceId(sequenceId);
+            inst.setInstanceName(sequenceId);
+            inst.setCategoryId(cat);
+            inst.setDataType("double");
+            cache.putInstanceConfig(inst);
+        }
+    }
 
     private static String seqId(String projectId, int device, String category) {
         return projectId + "_d" + device + "_" + category;

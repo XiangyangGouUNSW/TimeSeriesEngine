@@ -4,6 +4,5 @@
   "categoryName": "Low Useful Load",
   "dataType": "double",
   "applicableObjectType": "TRANSFORMER",
-  "confirmStatus": "CONFIRMED",
-  "user": null
+  "confirmStatus": "CONFIRMED"
 }

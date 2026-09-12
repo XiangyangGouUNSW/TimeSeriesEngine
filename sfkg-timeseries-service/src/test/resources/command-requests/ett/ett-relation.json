@@ -11,6 +11,5 @@
   "confidence": 0.85,
   "relationDescription": "High useful load affects oil temperature with 1 hour lag",
   "effectiveStatus": "ENABLE",
-  "confirmStatus": "CONFIRMED",
-  "user": null
+  "confirmStatus": "CONFIRMED"
 }
