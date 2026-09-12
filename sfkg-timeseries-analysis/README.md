@@ -113,9 +113,9 @@ python app/analysis_server.py
    `import timeseries_analysis_pb2` 会报 ModuleNotFoundError。
 2. **`models/` 是运行时缓存**：gitignore 不提交，首次训练自动创建。容器内可挂载持久卷
    （可选）；不挂载也能跑（每次重启重训一次）。
-3. **`core.provider` 必须从 `mock` 改为 `grpc`**：默认 `mock` 用本地 ETT 假数据、只供
-   联调。部署时改 `config.yaml` 的 `core.address` / `core.port` 指向真 C 端地址（默认
-   `localhost:50051`）。
+3. **C 端地址用 `--core-address` / `--core-port` 指定**：入口无条件走 gRPC 连 C 端
+   （`core.provider` 字段已废弃、代码不读）。启动时用 `app/analysis_server.py --core-address
+   <C端IP> --core-port 50051` 指向真 C 端（默认 `localhost:50051`）。
 4. **对外监听**：`server.address 0.0.0.0` / `server.port 50053`，供 S 端调用；容器内请
    映射该端口。
 5. **依赖较重**：`torch`（建议 CUDA 版，体积几个 GB）+ `transformers`。纯 CPU 也能跑
