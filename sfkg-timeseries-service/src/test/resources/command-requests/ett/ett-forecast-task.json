@@ -14,8 +14,8 @@
     "ETTh1_LULL"
   ],
   "forecastHorizon": "24",
-  "observationWindowMs": 86400000,
-  "minimumPoints": 200,
+  "observationWindowMs": 8640000000,
+  "minimumPoints": 20,
   "modelKey": "ett_ot_lstm_v1",
   "constraintIds": [
     "ett-ot-upper-limit"

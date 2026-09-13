@@ -16,6 +16,7 @@ public class AnomalyTaskVO {
     private Integer contextLength;
     private Long slideStepMs;
     private Integer minimumPoints;
+    private List<String> constraintIds;
     private String status;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;

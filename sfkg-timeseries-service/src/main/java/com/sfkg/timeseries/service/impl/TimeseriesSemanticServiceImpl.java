@@ -12,6 +12,8 @@ import java.util.stream.Collectors;
 
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
@@ -33,6 +35,7 @@ import com.sfkg.timeseries.dto.ConstraintStatusUpdateRequest;
 import com.sfkg.timeseries.dto.RelationQueryRequest;
 import com.sfkg.timeseries.dto.RelationSaveRequest;
 import com.sfkg.timeseries.dto.RelationStatusUpdateRequest;
+import com.sfkg.timeseries.dto.SyncResult;
 import com.sfkg.timeseries.entity.TimeseriesAnomalyTask;
 import com.sfkg.timeseries.entity.TimeseriesCategory;
 import com.sfkg.timeseries.entity.TimeseriesConstraint;
@@ -50,6 +53,8 @@ import com.sfkg.timeseries.vo.RelationVO;
 
 @Service
 public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService {
+
+    private static final Logger LOG = LoggerFactory.getLogger(TimeseriesSemanticServiceImpl.class);
 
     private final TimeseriesCategoryMapper categoryMapper;
     private final TimeseriesConstraintMapper constraintMapper;
@@ -674,16 +679,32 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         if (semanticId == null) return;
         cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
         cacheManager.ensureTableLoaded(CachedTable.RELATION);
-        memoryCache.getConstraint(semanticId).ifPresent(coreGrpcClient::syncConstraintConfig);
-        memoryCache.getRelation(semanticId).ifPresent(coreGrpcClient::syncRelationConfig);
+        memoryCache.getConstraint(semanticId).ifPresent(this::syncConstraintToCore);
+        memoryCache.getRelation(semanticId).ifPresent(this::syncRelationToCore);
     }
 
     public void syncSemanticToCore(String projectId, String semanticId) {
         if (semanticId == null) return;
         cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
         cacheManager.ensureTableLoaded(CachedTable.RELATION);
-        memoryCache.getConstraint(projectId, semanticId).ifPresent(coreGrpcClient::syncConstraintConfig);
-        memoryCache.getRelation(projectId, semanticId).ifPresent(coreGrpcClient::syncRelationConfig);
+        memoryCache.getConstraint(projectId, semanticId).ifPresent(this::syncConstraintToCore);
+        memoryCache.getRelation(projectId, semanticId).ifPresent(this::syncRelationToCore);
+    }
+
+    private void syncConstraintToCore(TimeseriesConstraint constraint) {
+        SyncResult result = coreGrpcClient.syncConstraintConfig(constraint);
+        if (!result.isSuccess()) {
+            LOG.warn("constraint {} sync to Core FAILED: {}",
+                    constraint.getConstraintId(), result.getMessage());
+        }
+    }
+
+    private void syncRelationToCore(TimeseriesRelation relation) {
+        SyncResult result = coreGrpcClient.syncRelationConfig(relation);
+        if (!result.isSuccess()) {
+            LOG.warn("relation {} sync to Core FAILED: {}",
+                    relation.getRelationId(), result.getMessage());
+        }
     }
 
     /**

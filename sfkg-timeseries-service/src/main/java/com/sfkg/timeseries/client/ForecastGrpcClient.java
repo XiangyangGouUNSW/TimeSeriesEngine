@@ -1,5 +1,7 @@
 package com.sfkg.timeseries.client;
 
+import java.util.List;
+
 import com.sfkg.timeseries.config.GrpcClientProperties;
 import com.sfkg.timeseries.dto.ForecastResultQueryRequest;
 import com.sfkg.timeseries.dto.SyncResult;
@@ -160,7 +162,12 @@ public class ForecastGrpcClient {
             ForecastResultVO vo = new ForecastResultVO();
             vo.setTaskId(resp.getTaskId());
             if (resp.getResultsCount() > 0) {
-                vo.setResultId(resp.getResults(0).getRunId());
+                var result = resp.getResults(0);
+                vo.setResultId(result.getRunId());
+                vo.setStatus(result.getStatus().name());
+                vo.setMessage(result.getMessage());
+                vo.setSequenceIds(List.copyOf(result.getSequenceIdsList()));
+                vo.setValues(List.copyOf(result.getValuesList()));
             }
             return vo;
         } catch (StatusRuntimeException e) {
