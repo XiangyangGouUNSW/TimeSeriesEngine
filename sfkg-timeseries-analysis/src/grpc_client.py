@@ -154,6 +154,7 @@ class GrpcCoreDataClient(CoreDataClient):
                 window_query=pb.QueryWindowDataRequest(
                     sequence_ids=list(sequence_ids), project_id=project_id),
                 config=config,
+                project_id=project_id,
             ),
         )
         return self._aligned_to_window(resp.aligned_data, sequence_ids)
@@ -251,6 +252,7 @@ class GrpcCoreDataClient(CoreDataClient):
             window_query=pb.QueryWindowDataRequest(
                 sequence_ids=[target_sequence_id] + list(independent_sequence_ids),
                 project_id=project_id),
+            project_id=project_id,
         )
         resp = self._call(self._stub.computeBasicStatistics, request)
         cv = resp.correlation_vector
