@@ -23,6 +23,25 @@ const props = defineProps({
 
 const base = computed(() => props.config.base)
 
+// 分组展示：config.groupBy = { key, labels } 时按该字段拆成多个分组（事件按来源分开）
+const grouped = computed(() => {
+  const gb = props.config.groupBy
+  if (!gb) return null
+  const key = typeof gb === 'string' ? gb : gb.key
+  const labels = (gb && typeof gb === 'object' && gb.labels) || {}
+  const map = new Map()
+  for (const row of rows.value) {
+    const k = (row[key] ?? '') || 'unknown'
+    if (!map.has(k)) map.set(k, [])
+    map.get(k).push(row)
+  }
+  return Array.from(map.entries()).map(([k, items]) => ({
+    key: k,
+    label: labels[k] || k,
+    items,
+  }))
+})
+
 const form = reactive({})
 const query = reactive({})
 const statusForm = reactive({})
@@ -530,6 +549,32 @@ async function onBatchCreated() {
       <div class="card">
         <h3>列表（共 {{ rows.length }} 条）</h3>
         <div v-if="!rows.length" class="empty">暂无数据</div>
+        <template v-else-if="grouped">
+          <div v-for="g in grouped" :key="g.key" class="group-section">
+            <h4 class="group-title">{{ g.label }}（{{ g.items.length }} 条）</h4>
+            <table>
+              <thead>
+                <tr>
+                  <th v-for="c in config.columns" :key="c.key">{{ c.label }}</th>
+                  <th v-if="config.detailGet" style="width: 60px">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="(row, i) in g.items"
+                  :key="i"
+                  :class="{ clickable: config.fields.length }"
+                  @click="fillFromRow(row)"
+                >
+                  <td v-for="c in config.columns" :key="c.key">{{ cellText(row, c) }}</td>
+                  <td v-if="config.detailGet" @click.stop>
+                    <button @click="showDetail(row)">详情</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
         <table v-else>
           <thead>
             <tr>

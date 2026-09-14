@@ -21,6 +21,9 @@ import com.sfkg.timeseries.vo.AnomalyResultVO;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
@@ -149,11 +152,24 @@ public class AnomalyGrpcClient {
                     resp.getTaskId(), resp.getResultsCount());
             AnomalyResultVO vo = new AnomalyResultVO();
             vo.setTaskId(resp.getTaskId());
+            vo.setProjectId(request.getProjectId());
             if (resp.getResultsCount() > 0) {
                 var first = resp.getResults(0);
                 vo.setResultId(first.getRunId());
+                vo.setStatus(first.getStatus().name());
+                vo.setMessage(first.getMessage());
                 if (first.getFindingsCount() > 0) {
-                    vo.setAnomalyLevel(first.getFindings(0).getSeverity());
+                    var finding = first.getFindings(0);
+                    vo.setAnomalyLevel(finding.getSeverity());
+                    vo.setEventType(finding.getAnomalyType());
+                    if (finding.hasDetectedTimeMs()) {
+                        vo.setEventTime(LocalDateTime.ofInstant(
+                                Instant.ofEpochMilli(finding.getDetectedTimeMs()), ZoneId.systemDefault()));
+                    }
+                    if (finding.getRelatedSequenceIdsCount() > 0) {
+                        vo.setSequenceIds(finding.getRelatedSequenceIdsList());
+                        vo.setSequenceId(finding.getRelatedSequenceIds(0));
+                    }
                 }
             }
             return vo;

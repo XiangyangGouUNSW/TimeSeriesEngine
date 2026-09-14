@@ -18,4 +18,6 @@ public class AnomalyResultVO {
     private String source;
     private List<String> constraintIds;
     private List<Double> values;
+    private String status;
+    private String message;
 }

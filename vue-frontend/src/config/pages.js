@@ -280,6 +280,14 @@ export const pages = {
     title: '事件管理',
     base: '/api/timeseries/events',
     idField: 'eventId',
+    groupBy: {
+      key: 'eventSource',
+      labels: {
+        ANOMALY_SOURCE_MODEL_ANOMALY_DETECTION: '模型检测异常',
+        CONSTRAINT_CHECK: '约束违规',
+        ANOMALY_SOURCE_FORECAST: '预测预警',
+      },
+    },
     fields: [
       { name: 'projectId', label: '项目ID', type: 'text', placeholder: '留空 = 默认项目' },
       { name: 'eventId', label: '事件ID', type: 'text', hint: '创建时留空则自动生成' },

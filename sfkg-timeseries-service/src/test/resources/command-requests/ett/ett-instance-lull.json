@@ -4,6 +4,7 @@
   "instanceName": "ETTh1 Low Useful Load Rear",
   "externalSequenceId": "ETTh1_LULL",
   "categoryId": "LULL",
+  "deviceInstanceId": "device-3001",
   "dataSourceId": "ETTh1.csv",
   "dataType": "double",
   "seriesKind": "CONTINUOUS",

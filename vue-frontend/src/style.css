@@ -719,6 +719,17 @@ tr.clickable {
   font-size: 12px;
 }
 
+.group-section {
+  margin-bottom: 18px;
+}
+
+.group-title {
+  margin: 8px 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+}
+
 @media (max-width: 720px) {
   .project-current,
   .project-create {

@@ -63,7 +63,9 @@ async function run(promise, collect) {
     const res = await promise
     response.value = res
     if (res && res.success === false) error.value = res.message || '请求失败'
-    if (collect && res && res.data) rows.value = res.data
+    if (collect && res && res.data) {
+      rows.value = Array.isArray(res.data) ? res.data : [res.data]
+    }
   } catch (e) {
     error.value = e.message || String(e)
   } finally {
@@ -155,7 +157,7 @@ watch(
             <thead>
               <tr>
                 <th>结果ID</th><th>项目ID</th><th>任务ID</th><th>序列</th>
-                <th>级别</th><th>事件类型</th><th>事件时间</th><th>来源</th><th>约束</th>
+                <th>级别</th><th>事件类型</th><th>事件时间</th><th>来源</th><th>约束</th><th>状态</th><th>说明</th>
               </tr>
             </thead>
             <tbody>
@@ -164,6 +166,7 @@ watch(
                 <td>{{ Array.isArray(r.sequenceIds) ? r.sequenceIds.join(', ') : r.sequenceId }}</td>
                 <td>{{ r.anomalyLevel }}</td><td>{{ r.eventType }}</td><td>{{ r.eventTime }}</td>
                 <td>{{ r.source }}</td><td>{{ Array.isArray(r.constraintIds) ? r.constraintIds.join(', ') : '' }}</td>
+                <td>{{ r.status }}</td><td>{{ r.message }}</td>
               </tr>
             </tbody>
           </table>
@@ -192,13 +195,14 @@ watch(
           <table>
             <thead>
               <tr>
-                <th>结果ID</th><th>项目ID</th><th>任务ID</th><th>序列</th><th>预警级别</th>
+                <th>结果ID</th><th>项目ID</th><th>任务ID</th><th>序列</th><th>预警级别</th><th>状态</th><th>说明</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="(r, i) in rows" :key="i">
                 <td>{{ r.resultId }}</td><td>{{ r.projectId }}</td><td>{{ r.taskId }}</td>
                 <td>{{ r.sequenceId }}</td><td>{{ r.warningLevel }}</td>
+                <td>{{ r.status }}</td><td>{{ r.message }}</td>
               </tr>
             </tbody>
           </table>

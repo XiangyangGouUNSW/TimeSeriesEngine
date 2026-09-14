@@ -19,7 +19,7 @@ const nav = [
   { path: '/forecast-tasks', label: '预测任务', permission: 'TASK_INFO' },
   { path: '/events', label: '事件管理', permission: 'TASK_INFO' },
   { path: '/results', label: '结果查询', permission: 'TASK_INFO' },
-  { path: '/statistics', label: '相关性统计', permission: 'HISTORY_DATA' },
+  // { path: '/statistics', label: '相关性统计', permission: 'HISTORY_DATA' }, // 暂时隐藏
   { path: '/decision', label: '决策辅助', permission: 'TASK_INFO' },
 ]
 

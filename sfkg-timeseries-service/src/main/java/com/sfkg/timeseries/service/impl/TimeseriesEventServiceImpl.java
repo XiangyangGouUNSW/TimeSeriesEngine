@@ -1,6 +1,7 @@
 package com.sfkg.timeseries.service.impl;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,7 +16,6 @@ import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.common.BusinessException;
 import com.sfkg.timeseries.auth.CurrentAuditUser;
 import com.sfkg.timeseries.common.ProjectIdValidator;
-import com.sfkg.timeseries.common.SemanticId;
 import com.sfkg.timeseries.dto.EventQueryRequest;
 import com.sfkg.timeseries.dto.EventSaveRequest;
 import com.sfkg.timeseries.entity.TimeseriesEvent;
@@ -86,7 +86,7 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
         }
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
         String eventId = request.getEventId() == null
-                ? generateEventId(request.getEventType(), request.getEventName())
+                ? generateEventId(request.getEventType(), request.getEventName(), request.getEventTime())
                 : request.getEventId();
 
         String user = CurrentAuditUser.username();
@@ -128,7 +128,7 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
         String eventId = entity.getEventId() != null
                 ? entity.getEventId()
-                : generateEventId(entity.getEventType(), entity.getEventName());
+                : generateEventId(entity.getEventType(), entity.getEventName(), entity.getEventTime());
 
         TimeseriesEvent merged = memoryCache.computeEvent(entity.getProjectId(), eventId, existing -> {
             TimeseriesEvent e = existing != null ? existing : new TimeseriesEvent();
@@ -168,8 +168,22 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
         // TODO: Restore graph synchronization here.
     }
 
-    private String generateEventId(String eventType, String eventName) {
-        return SemanticId.generate(eventType, eventName);
+    private String generateEventId(String eventType, String eventName, LocalDateTime eventTime) {
+        // 可读前缀 + 事件发生时间的 yyMMddHHmmssSSS（前 6 位即 yymmdd），代替随机后缀
+        String base = eventName != null && !eventName.isBlank() ? eventName : eventType;
+        String cleaned = base == null ? ""
+                : base.trim().toLowerCase()
+                        .replaceAll("[^a-z0-9]+", "_")
+                        .replaceAll("^_+|_+$", "");
+        if (cleaned.isEmpty()) {
+            cleaned = "event";
+        }
+        if (cleaned.length() > 24) {
+            cleaned = cleaned.substring(0, 24);
+        }
+        LocalDateTime t = eventTime != null ? eventTime : LocalDateTime.now();
+        String ts = t.format(DateTimeFormatter.ofPattern("yyMMddHHmmssSSS"));
+        return cleaned + "_" + ts;
     }
 
     private EventListVO toListVO(TimeseriesEvent entity) {
@@ -208,7 +222,8 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
         if (request == null) {
             return true;
         }
-        return equalsTextIfPresent(request.getEventType(), entity.getEventType())
+        return equalsTextIfPresent(request.getEventId(), entity.getEventId())
+                && equalsTextIfPresent(request.getEventType(), entity.getEventType())
                 && equalsTextIfPresent(request.getProjectId(), entity.getProjectId())
                 && equalsTextIfPresent(request.getEventSource(), entity.getEventSource())
                 && equalsTextIfPresent(request.getEventLevel(), entity.getEventLevel())

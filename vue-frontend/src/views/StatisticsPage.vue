@@ -132,20 +132,21 @@ watch(
       <table>
         <thead>
           <tr>
-            <th>统计ID</th><th>项目ID</th><th>序列</th><th>依赖序列</th>
-            <th>关系ID</th><th>开始时间</th><th>结束时间</th><th>指标</th>
+            <th>结果ID</th><th>项目ID</th><th>序列</th><th>依赖序列</th>
+            <th>关系ID</th><th>开始时间</th><th>结束时间</th><th>指标</th><th>相关系数</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="(r, i) in rows" :key="i">
-            <td>{{ r.statisticsId }}</td>
+            <td>{{ r.resultId }}</td>
             <td>{{ r.projectId }}</td>
             <td>{{ Array.isArray(r.sequenceIds) ? r.sequenceIds.join(', ') : r.sequenceId }}</td>
             <td>{{ r.dependentSequenceId }}</td>
             <td>{{ Array.isArray(r.relationIds) ? r.relationIds.join(', ') : r.relationId }}</td>
             <td>{{ r.startTime }}</td>
             <td>{{ r.endTime }}</td>
-            <td>{{ typeof r.metrics === 'object' ? JSON.stringify(r.metrics) : r.metrics }}</td>
+            <td>{{ r.sequenceMetrics && typeof r.sequenceMetrics === 'object' ? JSON.stringify(r.sequenceMetrics) : (r.sequenceMetrics || '') }}</td>
+            <td>{{ r.correlationCoefficients && typeof r.correlationCoefficients === 'object' ? JSON.stringify(r.correlationCoefficients) : (r.correlationCoefficients || '') }}</td>
           </tr>
         </tbody>
       </table>

@@ -770,7 +770,8 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 && containsIfPresent(request.getCategoryName(), entity.getCategoryName())
                 && equalsTextIfPresent(request.getDataType(), entity.getDataType())
                 && equalsTextIfPresent(request.getApplicableObjectType(), entity.getApplicableObjectType())
-                && equalsTextIfPresent(request.getConfirmStatus(), entity.getConfirmStatus());
+                && equalsTextIfPresent(request.getConfirmStatus(), entity.getConfirmStatus())
+                && matchesCategoryKeyword(request.getKeyword(), entity);
     }
 
     private boolean matches(ConstraintQueryRequest request, TimeseriesConstraint entity) {
@@ -816,6 +817,14 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
     private boolean containsIfPresent(String keyword, String actual) {
         return keyword == null
                 || (actual != null && actual.toLowerCase().contains(keyword.toLowerCase()));
+    }
+
+    private boolean matchesCategoryKeyword(String keyword, TimeseriesCategory entity) {
+        if (keyword == null) {
+            return true;
+        }
+        return containsIfPresent(keyword, entity.getCategoryName())
+                || containsIfPresent(keyword, entity.getCategoryDescription());
     }
 
     private boolean matchesConstraintKeyword(String keyword, TimeseriesConstraint entity) {

@@ -4,6 +4,7 @@
   "instanceName": "ETTh1 Medium Useful Load Front",
   "externalSequenceId": "ETTh1_MUFL",
   "categoryId": "MUFL",
+  "deviceInstanceId": "device-3001",
   "dataSourceId": "ETTh1.csv",
   "dataType": "double",
   "seriesKind": "CONTINUOUS",

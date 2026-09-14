@@ -17,6 +17,10 @@ const seqMultiField = { name: 'sequenceIds', placeholder: '输入后回车/逗�
 const loading = ref(false)
 const response = ref(null)
 const error = ref('')
+const resultModal = reactive({ visible: false, title: '', mode: '' })
+const historyResult = ref({ points: [] })
+const overviewResult = ref({ totalPointCount: 0, sequenceCount: 0, series: [] })
+const windowResult = ref({ rows: [] })
 
 async function run(promise) {
   loading.value = true
@@ -44,6 +48,22 @@ function parseIds(str) {
 
 function dt(v) {
   return v && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(v) ? v + ':00' : v || undefined
+}
+
+function fmtTime(v) {
+  return v === undefined || v === null || v === '' ? '' : String(v).replace('T', ' ')
+}
+
+function fmtMs(v) {
+  if (v === undefined || v === null || v === '') return ''
+  const d = new Date(Number(v))
+  return Number.isNaN(d.getTime()) ? v : d.toLocaleString()
+}
+
+function openResultModal(title, mode) {
+  resultModal.title = title
+  resultModal.mode = mode
+  resultModal.visible = true
 }
 
 // ── 数据写入 ──────────────────────────────────────────────
@@ -246,8 +266,19 @@ async function doHistoryQuery() {
   const e = dt(history.endTime)
   if (s) payload.startTime = s
   if (e) payload.endTime = e
-  if (history.granularity) payload.granularity = history.granularity
-  await run(api.queryHistory(payload))
+  if (history.granularity !== '' && history.granularity !== null && history.granularity !== undefined) {
+    const g = Number(history.granularity)
+    if (Number.isNaN(g)) {
+      toastError('粒度 granularity 必须是数字（毫秒）')
+      return
+    }
+    payload.granularity = g
+  }
+  const res = await run(api.queryHistory(payload))
+  if (res && res.success !== false) {
+    historyResult.value = { points: (res.data && res.data.points) || [] }
+    openResultModal('历史数据查询结果', 'history')
+  }
 }
 
 // ── 历史数据概览 ──────────────────────────────────────────
@@ -265,7 +296,15 @@ async function doOverview() {
   const e = dt(overview.endTime)
   if (s) payload.startTime = s
   if (e) payload.endTime = e
-  await run(api.queryHistoryOverview(payload))
+  const res = await run(api.queryHistoryOverview(payload))
+  if (res && res.success !== false) {
+    overviewResult.value = {
+      totalPointCount: (res.data && res.data.totalPointCount) ?? 0,
+      sequenceCount: (res.data && res.data.sequenceCount) ?? 0,
+      series: (res.data && res.data.series) || [],
+    }
+    openResultModal('历史数据概览', 'overview')
+  }
 }
 
 // ── 窗口数据查询 ──────────────────────────────────────────
@@ -283,7 +322,17 @@ async function doWindowQuery() {
   const e = dt(windowQ.endTime)
   if (s) payload.startTime = s
   if (e) payload.endTime = e
-  await run(api.queryWindow(payload))
+  const res = await run(api.queryWindow(payload))
+  if (res && res.success !== false) {
+    const rows = []
+    for (const seq of (res.data && res.data.sequences) || []) {
+      for (const p of (seq && seq.points) || []) {
+        rows.push({ sequenceId: seq.sequenceId, time: p.time, value: p.value })
+      }
+    }
+    windowResult.value = { rows }
+    openResultModal('窗口数据查询结果', 'window')
+  }
 }
 
 watch(
@@ -368,7 +417,7 @@ watch(
         </div>
         <div class="field"><label>开始时间</label><input type="datetime-local" v-model="history.startTime" /></div>
         <div class="field"><label>结束时间</label><input type="datetime-local" v-model="history.endTime" /></div>
-        <div class="field"><label>粒度 granularity</label><input v-model="history.granularity" placeholder="如 1m / 1h / 1d" /></div>
+        <div class="field"><label>粒度 granularity（毫秒）</label><input type="number" v-model="history.granularity" placeholder="如 60000（1 分钟）" /></div>
       </div>
       <div class="actions">
         <button class="primary" :disabled="loading" @click="doHistoryQuery">查询历史数据</button>
@@ -404,6 +453,66 @@ watch(
       </div>
       <div class="actions">
         <button class="primary" :disabled="loading" @click="doWindowQuery">查询窗口数据</button>
+      </div>
+    </div>
+
+    <!-- 查询结果弹窗 -->
+    <div v-if="resultModal.visible" class="modal-mask" @click.self="resultModal.visible = false">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h3>{{ resultModal.title }}</h3>
+          <button class="modal-close" @click="resultModal.visible = false">×</button>
+        </div>
+        <div class="modal-body">
+          <template v-if="resultModal.mode === 'history'">
+            <div v-if="!historyResult.points.length" class="empty">暂无数据</div>
+            <table v-else>
+              <thead><tr><th>时间</th><th>序列ID</th><th>值</th></tr></thead>
+              <tbody>
+                <tr v-for="(p, i) in historyResult.points" :key="i">
+                  <td>{{ fmtTime(p.timestamp) }}</td>
+                  <td>{{ p.sequenceId }}</td>
+                  <td>{{ p.value }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </template>
+
+          <template v-else-if="resultModal.mode === 'overview'">
+            <p class="overview-summary">总点数：{{ overviewResult.totalPointCount }} ｜ 序列数：{{ overviewResult.sequenceCount }}</p>
+            <table v-if="overviewResult.series.length">
+              <thead><tr><th>序列ID</th><th>点数</th><th>最早时间</th><th>最晚时间</th></tr></thead>
+              <tbody>
+                <tr v-for="(s, i) in overviewResult.series" :key="i">
+                  <td>{{ s.sequenceId }}</td>
+                  <td>{{ s.pointCount }}</td>
+                  <td>{{ fmtMs(s.firstTime) }}</td>
+                  <td>{{ fmtMs(s.lastTime) }}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-else class="empty">暂无数据</div>
+          </template>
+
+          <template v-else-if="resultModal.mode === 'window'">
+            <div v-if="!windowResult.rows.length" class="empty">暂无数据</div>
+            <table v-else>
+              <thead><tr><th>时间</th><th>序列ID</th><th>值</th></tr></thead>
+              <tbody>
+                <tr v-for="(r, i) in windowResult.rows" :key="i">
+                  <td>{{ fmtMs(r.time) }}</td>
+                  <td>{{ r.sequenceId }}</td>
+                  <td>{{ r.value }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </template>
+
+          <details v-if="response">
+            <summary>原始 JSON</summary>
+            <pre>{{ JSON.stringify(response, null, 2) }}</pre>
+          </details>
+        </div>
       </div>
     </div>
 

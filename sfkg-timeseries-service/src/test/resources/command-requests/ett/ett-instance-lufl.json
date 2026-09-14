@@ -4,6 +4,7 @@
   "instanceName": "ETTh1 Low Useful Load Front",
   "externalSequenceId": "ETTh1_LUFL",
   "categoryId": "LUFL",
+  "deviceInstanceId": "device-3001",
   "dataSourceId": "ETTh1.csv",
   "dataType": "double",
   "seriesKind": "CONTINUOUS",

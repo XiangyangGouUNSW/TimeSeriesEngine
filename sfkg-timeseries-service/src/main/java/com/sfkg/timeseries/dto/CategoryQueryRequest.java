@@ -11,4 +11,5 @@ public class CategoryQueryRequest {
     private String dataType;
     private String applicableObjectType;
     private String confirmStatus;
+    private String keyword;
 }

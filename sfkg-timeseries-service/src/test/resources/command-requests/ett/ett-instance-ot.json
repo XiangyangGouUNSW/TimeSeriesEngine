@@ -4,6 +4,7 @@
   "instanceName": "ETTh1 Oil Temperature",
   "externalSequenceId": "ETTh1_OT",
   "categoryId": "OT",
+  "deviceInstanceId": "device-3001",
   "dataSourceId": "ETTh1.csv",
   "dataType": "double",
   "seriesKind": "CONTINUOUS",

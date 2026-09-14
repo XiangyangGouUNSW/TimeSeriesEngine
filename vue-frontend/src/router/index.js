@@ -5,7 +5,7 @@ import { pages } from '../config/pages'
 import DataPage from '../views/DataPage.vue'
 import WindowConfigPage from '../views/WindowConfigPage.vue'
 import DerivedSeriesPage from '../views/DerivedSeriesPage.vue'
-import StatisticsPage from '../views/StatisticsPage.vue'
+// import StatisticsPage from '../views/StatisticsPage.vue' // 相关性统计暂时隐藏
 import DecisionPage from '../views/DecisionPage.vue'
 import ResultsPage from '../views/ResultsPage.vue'
 import LoginPage from '../views/LoginPage.vue'
@@ -29,7 +29,7 @@ const routes = [
       { path: 'data', component: DataPage, meta: { permission: 'HISTORY_DATA' } },
       { path: 'window-config', component: WindowConfigPage, meta: { permission: 'CONFIG_INFO' } },
       { path: 'derived-series', component: DerivedSeriesPage, meta: { permission: 'CONFIG_INFO' } },
-      { path: 'statistics', component: StatisticsPage, meta: { permission: 'HISTORY_DATA' } },
+      // { path: 'statistics', component: StatisticsPage, meta: { permission: 'HISTORY_DATA' } }, // 暂时隐藏
       { path: 'decision', component: DecisionPage, meta: { permission: 'TASK_INFO' } },
       { path: 'results', component: ResultsPage, meta: { permission: 'TASK_INFO' } },
     ],

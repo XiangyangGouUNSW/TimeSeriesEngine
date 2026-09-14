@@ -8,6 +8,7 @@ import lombok.Data;
 public class EventQueryRequest {
     private String projectId;
 
+    private String eventId;
     private String eventType;
     private String eventSource;
     private String eventLevel;

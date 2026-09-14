@@ -7,8 +7,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-import com.sfkg.timeseries.cache.CachedTable;
-import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.AnomalyGrpcClient;
 import com.sfkg.timeseries.dto.AnomalyResultQueryRequest;
@@ -24,32 +22,21 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
 
     private final TimeseriesEventMapper eventMapper;
     private final TimeseriesMemoryCache memoryCache;
-    private final TimeseriesCacheManager cacheManager;
     private final AnomalyGrpcClient anomalyGrpcClient;
 
     public TimeseriesAnomalyResultServiceImpl(
             TimeseriesEventMapper eventMapper,
             TimeseriesMemoryCache memoryCache,
-            TimeseriesCacheManager cacheManager,
             AnomalyGrpcClient anomalyGrpcClient) {
         this.eventMapper = eventMapper;
         this.memoryCache = memoryCache;
-        this.cacheManager = cacheManager;
         this.anomalyGrpcClient = anomalyGrpcClient;
     }
 
     @Override
     public AnomalyResultVO queryAnomalyResults(AnomalyResultQueryRequest request) {
-        cacheManager.ensureTableLoaded(CachedTable.EVENT);
-        List<TimeseriesEvent> source = request != null && request.getProjectId() != null
-                && !request.getProjectId().isBlank()
-                ? memoryCache.listEvents(request.getProjectId())
-                : memoryCache.listEvents();
-        return source.stream()
-                .filter(event -> matches(request, event))
-                .findFirst()
-                .map(event -> toVO(request, event))
-                .orElseGet(() -> anomalyGrpcClient.queryAnomalyResult(request));
+        // 直接查询分析端(P端)，不再回退事件缓存，保证结果字段完整
+        return anomalyGrpcClient.queryAnomalyResult(request);
     }
 
     @Override
@@ -101,57 +88,6 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
             return event;
         });
         return eventId;
-    }
-
-    private boolean matches(AnomalyResultQueryRequest request, TimeseriesEvent event) {
-        if (event == null || !"ANOMALY".equalsIgnoreCase(event.getEventType())) {
-            return false;
-        }
-        if (request == null) {
-            return true;
-        }
-        return sequenceMatches(request.getSequenceId(), event)
-                && equalsTextIfPresent(request.getProjectId(), event.getProjectId())
-                && equalsTextIfPresent(request.getEventLevel(), event.getEventLevel())
-                && afterOrEqual(request.getStartTime(), event.getEventTime())
-                && beforeOrEqual(request.getEndTime(), event.getEventTime());
-    }
-
-    private AnomalyResultVO toVO(AnomalyResultQueryRequest request, TimeseriesEvent event) {
-        AnomalyResultVO vo = emptyVO(request);
-        vo.setResultId(event.getEventId());
-        vo.setAnomalyLevel(event.getEventLevel());
-        if (vo.getSequenceId() == null && event.getRelatedSequences() != null && !event.getRelatedSequences().isEmpty()) {
-            vo.setSequenceId(event.getRelatedSequences().iterator().next());
-        }
-        return vo;
-    }
-
-    private AnomalyResultVO emptyVO(AnomalyResultQueryRequest request) {
-        AnomalyResultVO vo = new AnomalyResultVO();
-        if (request != null) {
-            vo.setTaskId(request.getTaskId());
-            vo.setSequenceId(request.getSequenceId());
-            vo.setAnomalyLevel(request.getEventLevel());
-        }
-        return vo;
-    }
-
-    private boolean sequenceMatches(String sequenceId, TimeseriesEvent event) {
-        return sequenceId == null
-                || (event.getRelatedSequences() != null && event.getRelatedSequences().contains(sequenceId));
-    }
-
-    private boolean equalsTextIfPresent(String expected, String actual) {
-        return expected == null || (actual != null && expected.equalsIgnoreCase(actual));
-    }
-
-    private boolean afterOrEqual(LocalDateTime startTime, LocalDateTime actual) {
-        return startTime == null || (actual != null && !actual.isBefore(startTime));
-    }
-
-    private boolean beforeOrEqual(LocalDateTime endTime, LocalDateTime actual) {
-        return endTime == null || (actual != null && !actual.isAfter(endTime));
     }
 
     private String stripSeverityPrefix(String raw) {

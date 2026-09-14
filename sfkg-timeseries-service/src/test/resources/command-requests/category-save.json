@@ -2,9 +2,9 @@
   "projectId": "project-a",
   "categoryId": "2001",
   "categoryName": "temperature",
-  "dataType": "DOUBLE",
+  "dataType": "double",
   "categoryDescription": "temperature semantic category",
-  "applicableObjectType": "transformer",
+  "applicableObjectType": "TRANSFORMER",
   "defaultUnit": "celsius",
   "confirmStatus": "CONFIRMED"
 }

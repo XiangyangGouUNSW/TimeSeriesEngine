@@ -7,5 +7,6 @@
   "deviceInstanceId": "device-3001",
   "dataSourceId": "source-a",
   "dataType": "double",
+  "seriesKind": "CONTINUOUS",
   "accessStatus": "ENABLE"
 }

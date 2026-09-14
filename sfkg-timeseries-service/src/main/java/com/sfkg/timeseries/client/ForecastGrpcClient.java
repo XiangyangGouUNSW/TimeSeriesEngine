@@ -161,13 +161,20 @@ public class ForecastGrpcClient {
                     .queryForecastResults(req);
             ForecastResultVO vo = new ForecastResultVO();
             vo.setTaskId(resp.getTaskId());
+            vo.setProjectId(request.getProjectId());
             if (resp.getResultsCount() > 0) {
                 var result = resp.getResults(0);
                 vo.setResultId(result.getRunId());
                 vo.setStatus(result.getStatus().name());
                 vo.setMessage(result.getMessage());
                 vo.setSequenceIds(List.copyOf(result.getSequenceIdsList()));
+                if (result.getSequenceIdsCount() > 0) {
+                    vo.setSequenceId(result.getSequenceIds(0));
+                }
                 vo.setValues(List.copyOf(result.getValuesList()));
+                if (result.getRiskFindingsCount() > 0) {
+                    vo.setWarningLevel(result.getRiskFindings(0).getSeverity());
+                }
             }
             return vo;
         } catch (StatusRuntimeException e) {

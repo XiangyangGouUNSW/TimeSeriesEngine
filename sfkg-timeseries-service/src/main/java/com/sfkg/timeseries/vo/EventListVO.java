@@ -1,5 +1,7 @@
 package com.sfkg.timeseries.vo;
 
+import java.time.LocalDateTime;
+
 import lombok.Data;
 
 @Data
@@ -9,6 +11,8 @@ public class EventListVO {
     private String eventId;
     private String eventName;
     private String eventType;
+    private String eventSource;
     private String eventLevel;
     private String handleStatus;
+    private LocalDateTime eventTime;
 }
