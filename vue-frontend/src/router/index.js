@@ -39,6 +39,10 @@ const routes = [
 const router = createRouter({
   history: createWebHashHistory(),
   routes,
+  scrollBehavior() {
+    // 切换页面时自动回到顶部
+    return { top: 0 }
+  },
 })
 
 router.beforeEach(async (to) => {

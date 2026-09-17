@@ -69,7 +69,6 @@ function openResultModal(title, mode) {
 // ── 数据写入 ──────────────────────────────────────────────
 const ingest = reactive({
   projectId: projectContext.currentProjectId.value,
-  returnResolvedData: 'true',
   pointsJson: '[\n  {\n    "sequenceId": "ETTh1_HUFL",\n    "time": "2024-01-01T00:00:00",\n    "doubleValue": 5.827\n  }\n]',
 })
 
@@ -86,16 +85,11 @@ async function doIngest() {
     toastError('请先选择当前项目，且请求项目必须与当前项目一致')
     return
   }
-  if (ingest.returnResolvedData) payload.returnResolvedData = ingest.returnResolvedData === 'true'
   const res = await run(api.ingestData(payload))
   if (res && res.success !== false) toastSuccess((res && res.message) || '数据写入成功')
 }
 
 // ── 文件导入（CSV / XLSX） ─────────────────────────────────
-const importOpts = reactive({
-  prefix: 'ETTh1_',
-  timeColumn: 0,
-})
 const importPreview = ref(null)
 const importedPoints = ref([])
 
@@ -190,8 +184,7 @@ function buildImportPoints(rows, fileName) {
   if (!rows || rows.length < 2) {
     throw new Error('至少需要表头 + 一行数据')
   }
-  const timeIdx = Math.max(0, Number(importOpts.timeColumn) || 0)
-  const prefix = importOpts.prefix.trim()
+  const timeIdx = 0
   const headers = rows[0].map((h) => String(h ?? '').trim())
   const valueCols = headers
     .map((header, index) => ({ header, index }))
@@ -212,7 +205,7 @@ function buildImportPoints(rows, fileName) {
     for (const { header, index } of valueCols) {
       const raw = row[index]
       if (raw === '' || raw === undefined || raw === null) continue
-      const point = { sequenceId: prefix + header, dataSourceId: fileName, time: timeMs }
+      const point = { sequenceId: header, dataSourceId: fileName, time: timeMs }
       const text = String(raw).trim()
       const num = Number(text)
       if (text !== '' && !Number.isNaN(num)) point.doubleValue = num
@@ -222,7 +215,7 @@ function buildImportPoints(rows, fileName) {
   }
   return {
     fileName,
-    valueCols: valueCols.map((c) => prefix + c.header),
+    valueCols: valueCols.map((c) => c.header),
     dataRows: rows.length - 1,
     points,
     skipped,
@@ -361,30 +354,21 @@ watch(
         <div class="field">
           <label>项目ID</label>
           <input v-model="ingest.projectId" placeholder="留空 = 默认项目" />
-        </div>
-        <div class="field">
-          <label>返回解析数据</label>
-          <select v-model="ingest.returnResolvedData">
-            <option value="true">true</option>
-            <option value="false">false</option>
-          </select>
+          <small>数据归属项目，留空 = 当前项目</small>
         </div>
         <div class="field full">
-          <label>points（JSON 数组，time 为 ISO 时间，值字段 doubleValue/int64Value/boolValue/stringValue）</label>
+          <label>points</label>
           <textarea v-model="ingest.pointsJson" rows="10"></textarea>
+          <small>每个点：sequenceId + time + 值（doubleValue / int64Value / boolValue / stringValue）</small>
         </div>
         <div class="field full">
           <label>从文件导入（.csv / .xlsx / .xls）</label>
           <div class="import-row">
             <input type="file" accept=".csv,.xlsx,.xls" @change="onFileSelected" />
-            <input v-model="importOpts.prefix" placeholder="序列ID前缀，如 ETTh1_" title="序列ID = 前缀 + 列名" />
-            <label class="import-time-col">时间列
-              <input v-model.number="importOpts.timeColumn" type="number" min="0" />
-            </label>
           </div>
           <small class="t-hint">
-            第一行为表头；时间列默认第 0 列（支持 yyyy-MM-dd HH:mm:ss 或秒/毫秒时间戳）；
-            其余列按「序列ID = 前缀 + 列名」生成点位，数值写 doubleValue，非数值写 stringValue。
+            第一行为表头、第一列为时间（支持 yyyy-MM-dd HH:mm:ss 或秒/毫秒时间戳）；
+            其余每列按列名直接作为序列ID，数值写 doubleValue，非数值写 stringValue。
           </small>
           <div v-if="importPreview" class="import-preview">
             <span class="badge ok">已解析 {{ importPreview.fileName }}</span>
