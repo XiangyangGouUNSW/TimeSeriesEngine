@@ -1,5 +1,7 @@
 #include "sfkg/timeseries/core/window_service.hpp"
 
+#include "sfkg/timeseries/core/data_validation.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -507,7 +509,15 @@ OperationResult WindowService::replaceDerivedSequence(
         return internal::invalidArgument(
             "derived sequence_id must not be empty");
     }
+    if (const auto* error = validation::validateBatchContext(
+            effectiveProject(project_id), data)) {
+        return internal::invalidArgument(error);
+    }
     for (const auto& point : data.points) {
+        if (const auto* error = validation::validateRawPoint(
+                effectiveProject(project_id), point)) {
+            return internal::invalidArgument(error);
+        }
         if (point.sequence_id != sequence_id) {
             return internal::invalidArgument(
                 "derived point sequence_id does not match output sequence");
@@ -567,7 +577,15 @@ OperationResult WindowService::patchDerivedSequence(
         return internal::invalidArgument(
             "derived patch start time must not be after end time");
     }
+    if (const auto* error = validation::validateBatchContext(
+            effectiveProject(project_id), data)) {
+        return internal::invalidArgument(error);
+    }
     for (const auto& point : data.points) {
+        if (const auto* error = validation::validateRawPoint(
+                effectiveProject(project_id), point)) {
+            return internal::invalidArgument(error);
+        }
         if (point.sequence_id != sequence_id) {
             return internal::invalidArgument(
                 "derived point sequence_id does not match output sequence");
@@ -664,20 +682,22 @@ WindowUpdateResult WindowService::updateWindowIncremental(
             "window_size must be positive");
         return result;
     }
-    for (const auto& point : data.points) {
-        if (point.sequence_id.empty()) {
-            result.operation = internal::invalidArgument(
-                "window point sequence_id must not be empty");
-            return result;
-        }
+    if (const auto* error = validation::validateBatchContext(
+            scoped_project, data)) {
+        result.operation = internal::invalidArgument(error);
+        return result;
     }
-
     std::unordered_map<SequenceId, std::vector<RawTimeseriesPoint>>
         incoming_by_sequence;
     incoming_by_sequence.reserve(data.points.size());
     std::unordered_set<SequenceId> seen_sequence_ids;
     result.changed_sequence_ids.reserve(data.points.size());
     for (const auto& point : data.points) {
+        if (const auto* error = validation::validateRawPoint(
+                scoped_project, point)) {
+            result.operation = internal::invalidArgument(error);
+            return result;
+        }
         if (seen_sequence_ids.insert(point.sequence_id).second) {
             result.changed_sequence_ids.push_back(point.sequence_id);
         }
@@ -1120,6 +1140,11 @@ WindowQueryResult WindowService::queryWindowData(
             : size_found->second;
         sequences.reserve(query.sequence_ids.size());
         for (const auto& sequence_id : query.sequence_ids) {
+            if (sequence_id.empty()) {
+                result.operation = internal::invalidArgument(
+                    "window query sequence_id must not be empty");
+                return result;
+            }
             const auto found = sequence_windows_.find(
                 scopedSequenceKey(result.project_id, sequence_id));
             if (found != sequence_windows_.end() && found->second) {
@@ -1309,6 +1334,11 @@ WindowStatisticsResult WindowService::queryWindowStatistics(
             : size_found->second;
         sequences.reserve(sequence_ids.size());
         for (const auto& sequence_id : sequence_ids) {
+            if (sequence_id.empty()) {
+                result.operation = internal::invalidArgument(
+                    "window statistics sequence_id must not be empty");
+                return result;
+            }
             const auto found = sequence_windows_.find(
                 scopedSequenceKey(result.data.project_id, sequence_id));
             if (found != sequence_windows_.end() && found->second) {

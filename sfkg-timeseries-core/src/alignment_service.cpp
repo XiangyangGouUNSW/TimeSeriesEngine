@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "sfkg/timeseries/core/data_validation.hpp"
 #include "operation_helpers.hpp"
 #include "sfkg/timeseries/core/runtime_config_registry.hpp"
 
@@ -541,6 +542,12 @@ AlignmentResult AlignmentService::alignWindowData(
             "alignment range start time must not be after end time");
         return result;
     }
+    if (const auto* error = validation::validateWindowData(
+            project_id, window_data)) {
+        AlignmentResult result;
+        result.operation = internal::invalidArgument(error);
+        return result;
+    }
 
     const auto cropFullResult = [&](AlignmentResult result) {
         if (result.operation.code != OperationCode::Ok &&
@@ -802,6 +809,11 @@ AlignmentResult AlignmentService::alignWindowData(
     AlignmentResult result;
     result.project_id = project_id;
     result.aligned_data.project_id = project_id;
+    if (const auto* error = validation::validateWindowData(
+            project_id, window_data)) {
+        result.operation = internal::invalidArgument(error);
+        return result;
+    }
     if (window_data.window_start_time > window_data.window_end_time) {
         result.operation = internal::invalidArgument(
             "alignment window start time must not be after end time");

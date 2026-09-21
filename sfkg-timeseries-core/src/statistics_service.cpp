@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "sfkg/timeseries/core/data_validation.hpp"
 #include "operation_helpers.hpp"
 
 namespace sfkg::timeseries::core {
@@ -123,6 +124,10 @@ StatisticsResult StatisticsService::computeBasicStatistics(
     const WindowData& data) const {
     StatisticsResult result;
     result.project_id = project_id;
+    if (const auto* error = validation::validateWindowData(project_id, data)) {
+        result.operation = internal::invalidArgument(error);
+        return result;
+    }
     if (data.window_start_time > data.window_end_time) {
         result.operation = internal::invalidArgument(
             "statistics window start time must not be after end time");
@@ -224,6 +229,11 @@ StatisticsResult StatisticsService::computeBasicStatistics(
     const RuntimeRelationConfig& relation) const {
     StatisticsResult result;
     result.project_id = project_id;
+    if (const auto* error = validation::validateAlignedWindowData(
+            project_id, data)) {
+        result.operation = internal::invalidArgument(error);
+        return result;
+    }
     if (data.window_start_time > data.window_end_time) {
         result.operation = internal::invalidArgument(
             "statistics window start time must not be after end time");

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "constraint_rule_helpers.hpp"
+#include "sfkg/timeseries/core/data_validation.hpp"
 #include "operation_helpers.hpp"
 
 namespace sfkg::timeseries::core {
@@ -355,6 +356,10 @@ ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
         return failure(internal::invalidArgument(
             "window data must contain at least one sequence"));
     }
+    if (const auto* error = validation::validateWindowData(
+            project_id, data)) {
+        return failure(internal::invalidArgument(error));
+    }
 
     std::vector<RuleCheckOutcome> outcomes;
     outcomes.reserve(rules.size());
@@ -508,6 +513,10 @@ ConstraintCheckResult ConstraintCheckEngine::checkConstraints(
             return failure(internal::invalidArgument(
                 "aligned sample times must be strictly increasing"));
         }
+    }
+    if (const auto* error = validation::validateAlignedWindowData(
+            project_id, data)) {
+        return failure(internal::invalidArgument(error));
     }
 
     std::vector<RuleCheckOutcome> outcomes;

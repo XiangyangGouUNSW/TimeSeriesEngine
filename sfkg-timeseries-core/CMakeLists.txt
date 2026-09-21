@@ -46,6 +46,7 @@ endif()
 add_library(sfkg_timeseries_domain
     src/alignment_service.cpp
     src/constraint_check_engine.cpp
+    src/data_validation.cpp
     src/derived_series_service.cpp
     src/history_query_service.cpp
     src/ingest_service.cpp
@@ -202,6 +203,13 @@ if(SFKG_BUILD_TESTS)
         PRIVATE sfkg_timeseries_domain)
     add_test(NAME runtime_config_registry_test
         COMMAND runtime_config_registry_test)
+
+    add_executable(data_validation_test
+        tests/data_validation_test.cpp)
+    target_link_libraries(data_validation_test
+        PRIVATE sfkg_timeseries_domain)
+    add_test(NAME data_validation_test
+        COMMAND data_validation_test)
 
     add_executable(constraint_check_engine_test
         tests/constraint_check_engine_test.cpp)

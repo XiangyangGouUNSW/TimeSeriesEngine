@@ -14,8 +14,10 @@ namespace sfkg::timeseries::core::grpc {
 namespace pb = ::sfkg::timeseries::core::v1;
 
 // Outbound client used by Core to report violations after an ingest check.
-// It owns no business state; the unified service remains the owner of event
-// persistence and task lifecycle.
+// Transport failures are retried after 10, 20 and 40 seconds; an explicit
+// business response from the receiver is never retried. It owns no business
+// state; the unified service remains the owner of event persistence and task
+// lifecycle.
 class ConstraintResultReceiverClient final {
 public:
     explicit ConstraintResultReceiverClient(std::string address);
