@@ -1,3 +1,4 @@
+#include <chrono>
 #include <cassert>
 #include <memory>
 #include <string>
@@ -24,12 +25,18 @@ public:
         sequence_ids.assign(
             request->sequence_ids().begin(),
             request->sequence_ids().end());
+        if (transport_failure) {
+            return {
+                ::grpc::StatusCode::UNAVAILABLE,
+                "receiver unavailable"};
+        }
         response->set_success(should_accept);
         response->set_message(should_accept ? "accepted" : "rejected");
         return ::grpc::Status::OK;
     }
 
     bool should_accept{true};
+    bool transport_failure{false};
     core::Timestamp check_time_ms{};
     std::vector<std::string> violated_constraint_ids;
     std::vector<std::string> sequence_ids;
@@ -64,6 +71,14 @@ int main() {
     const auto rejected = client.receiveConstraintResult(
         123457, {"constraint-c"}, {"temperature-1"});
     assert(rejected.code == core::OperationCode::InternalError);
+
+    receiver.transport_failure = true;
+    const auto retry_started = std::chrono::steady_clock::now();
+    const auto unavailable = client.receiveConstraintResult(
+        123458, {"constraint-d"}, {"temperature-1"});
+    const auto retry_elapsed = std::chrono::steady_clock::now() - retry_started;
+    assert(unavailable.code == core::OperationCode::Unavailable);
+    assert(retry_elapsed < std::chrono::seconds{10});
 
     server->Shutdown();
     return 0;

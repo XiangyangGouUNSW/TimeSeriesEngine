@@ -1,5 +1,6 @@
 #include "sfkg/timeseries/core/grpc/constraint_result_receiver_client.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <thread>
@@ -11,10 +12,12 @@ namespace sfkg::timeseries::core::grpc {
 
 namespace {
 
+constexpr auto kAttemptDeadline = std::chrono::seconds{1};
+constexpr auto kTotalRetryBudget = std::chrono::seconds{10};
 constexpr std::array<std::chrono::seconds, 3> kRetryDelays{
-    std::chrono::seconds{10},
-    std::chrono::seconds{20},
-    std::chrono::seconds{40}};
+    std::chrono::seconds{1},
+    std::chrono::seconds{2},
+    std::chrono::seconds{3}};
 
 }  // namespace
 
@@ -51,12 +54,29 @@ OperationResult ConstraintResultReceiverClient::receiveConstraintResult(
         request.add_sequence_ids(sequence_id);
     }
 
+    const auto retry_deadline =
+        std::chrono::steady_clock::now() + kTotalRetryBudget;
     std::string last_error;
     for (std::size_t attempt = 0;; ++attempt) {
+        const auto remaining = retry_deadline -
+            std::chrono::steady_clock::now();
+        if (remaining <= std::chrono::steady_clock::duration::zero()) {
+            return internal::makeOperationResult(
+                OperationCode::Unavailable,
+                0,
+                violated_constraint_ids.size(),
+                "constraint result receiver RPC exceeded the 10-second "
+                "retry budget: " + last_error);
+        }
+
+        const auto attempt_timeout = std::min(
+            std::chrono::duration_cast<std::chrono::milliseconds>(remaining),
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                kAttemptDeadline));
         pb::SyncResponse response;
         ::grpc::ClientContext context;
         context.set_deadline(
-            std::chrono::system_clock::now() + std::chrono::seconds(1));
+            std::chrono::system_clock::now() + attempt_timeout);
         const ::grpc::Status status = stub_->ReceiveConstraintResult(
             &context, request, &response);
         if (status.ok()) {
@@ -89,7 +109,13 @@ OperationResult ConstraintResultReceiverClient::receiveConstraintResult(
                     last_error);
         }
 
-        std::this_thread::sleep_for(kRetryDelays[attempt]);
+        const auto delay = std::min(
+            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                kRetryDelays[attempt]),
+            retry_deadline - std::chrono::steady_clock::now());
+        if (delay > std::chrono::steady_clock::duration::zero()) {
+            std::this_thread::sleep_for(delay);
+        }
     }
 }
 
