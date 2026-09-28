@@ -23,8 +23,10 @@ import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.AnomalyGrpcClient;
 import com.sfkg.timeseries.client.ForecastGrpcClient;
+import com.sfkg.timeseries.client.GrpcRetryExecutor;
 import com.sfkg.timeseries.client.GrpcChannelRegistry;
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
+import com.sfkg.timeseries.config.RetryPolicyProperties;
 import com.sfkg.timeseries.config.GrpcClientProperties;
 import com.sfkg.timeseries.dto.ConstraintSaveRequest;
 import com.sfkg.timeseries.dto.ConstraintStatusUpdateRequest;
@@ -116,11 +118,15 @@ class SemanticDualSyncLargeScaleTests {
 
         channelRegistry = new TestChannelRegistry();
 
+        RetryPolicyProperties retryProperties = new RetryPolicyProperties();
+        GrpcRetryExecutor retryExecutor = new GrpcRetryExecutor(retryProperties);
         TimeseriesCoreGrpcClient coreClient = new TimeseriesCoreGrpcClient(
                 properties, new ObjectMapper(), cache, channelRegistry, expansionResolver,
-                relationExpansionResolver);
-        AnomalyGrpcClient anomalyClient = new AnomalyGrpcClient(properties, contextResolver, channelRegistry);
-        ForecastGrpcClient forecastClient = new ForecastGrpcClient(properties, contextResolver, channelRegistry);
+                relationExpansionResolver, retryExecutor, retryProperties);
+        AnomalyGrpcClient anomalyClient = new AnomalyGrpcClient(
+                properties, contextResolver, channelRegistry, retryExecutor, retryProperties);
+        ForecastGrpcClient forecastClient = new ForecastGrpcClient(
+                properties, contextResolver, channelRegistry, retryExecutor, retryProperties);
 
         service = new TimeseriesSemanticServiceImpl(
                 mock(TimeseriesCategoryMapper.class),
@@ -145,7 +151,7 @@ class SemanticDualSyncLargeScaleTests {
         buildWorld(P1, 3, List.of("OT", "HUFL"));
 
         // 新增：ENABLE，映射到类别 OT → 展开为 3 条实例规则
-        service.saveConstraint(constraintRequest(P1, "c-ot", "OT bound", Map.of("x", "OT"), "x <= 100"));
+        service.createConstraint(constraintRequest(P1, "c-ot", "OT bound", Map.of("x", "OT"), "x <= 100"));
         assertEquals(1, coreFake.constraintRequests.size());
         SyncConstraintsRequest first = coreFake.constraintRequests.get(0);
         assertEquals(P1, first.getProjectId());
@@ -199,7 +205,7 @@ class SemanticDualSyncLargeScaleTests {
         cache.putAnomalyTask(anomalyTask(P1, "a-d1", List.of(seqId(P1, 1, "OT")), List.of()));
         cache.putForecastTask(forecastTask(P1, "f-d2", List.of(seqId(P1, 2, "OT")), List.of()));
 
-        service.saveRelation(relationRequest(P1, "r-hfl-ot", List.of("HUFL"), "OT", "CAUSE"));
+        service.createRelation(relationRequest(P1, "r-hfl-ot", List.of("HUFL"), "OT", "CAUSE"));
 
         assertEquals(1, coreFake.relationRequests.size());
         SyncRelationsRequest request = coreFake.relationRequests.get(0);
@@ -248,7 +254,7 @@ class SemanticDualSyncLargeScaleTests {
     void instanceLevelConstraintAndRelationMapOneToOneOnCore() {
         buildWorld(P1, 3, List.of("OT", "HUFL"));
 
-        service.saveConstraint(constraintRequest(P1, "c-seq", "seq bound",
+        service.createConstraint(constraintRequest(P1, "c-seq", "seq bound",
                 Map.of("x", seqId(P1, 1, "OT")), "x <= 50"));
         assertEquals(1, coreFake.constraintRequests.size());
         SyncConstraintsRequest cReq = coreFake.constraintRequests.get(0);
@@ -256,7 +262,7 @@ class SemanticDualSyncLargeScaleTests {
         assertEquals("c-seq_" + seqId(P1, 1, "OT"), cReq.getItems(0).getRule().getConstraintId());
         assertEquals(Map.of("x", seqId(P1, 1, "OT")), cReq.getItems(0).getRule().getVariableMappingMap());
 
-        service.saveRelation(relationRequest(P1, "r-seq",
+        service.createRelation(relationRequest(P1, "r-seq",
                 List.of(seqId(P1, 1, "HUFL")), seqId(P1, 1, "OT"), "CAUSE"));
         assertEquals(1, coreFake.relationRequests.size());
         SyncRelationsRequest rReq = coreFake.relationRequests.get(0);
@@ -288,7 +294,7 @@ class SemanticDualSyncLargeScaleTests {
                     List.of(seqId(P1, 1 + (i % 3), "OT")), List.of()));
         }
 
-        service.saveConstraint(constraintRequest(P1, "c-bulk", "bulk", Map.of("x", "OT"), "x <= 100"));
+        service.createConstraint(constraintRequest(P1, "c-bulk", "bulk", Map.of("x", "OT"), "x <= 100"));
 
         // Core 端：一次请求，3 条实例规则，仅 P1
         assertEquals(1, coreFake.constraintRequests.size());
@@ -331,9 +337,9 @@ class SemanticDualSyncLargeScaleTests {
         cache.putAnomalyTask(anomalyTask(P1, "ett-anomaly-001", List.of("ETTh1_OT"), List.of()));
         cache.putForecastTask(forecastTask(P1, "ett-forecast-001", List.of("ETTh1_OT"), List.of()));
 
-        service.saveConstraint(constraintRequest(P1, "ett-ot-upper-limit", "OT bound",
+        service.createConstraint(constraintRequest(P1, "ett-ot-upper-limit", "OT bound",
                 Map.of("x", "ETTh1_OT"), "x <= 20"));
-        service.saveRelation(relationRequest(P1, "ett-hufl-ot-lag", List.of("HUFL"), "OT", "CAUSE"));
+        service.createRelation(relationRequest(P1, "ett-hufl-ot-lag", List.of("HUFL"), "OT", "CAUSE"));
 
         // C 端拿到的实例级 ID
         Set<String> coreConstraintIds = coreConstraintIds();
@@ -361,7 +367,7 @@ class SemanticDualSyncLargeScaleTests {
         buildWorld(P1, 2, List.of("OT", "HUFL"));
         cache.putAnomalyTask(anomalyTask(P1, "a-d1", List.of(seqId(P1, 1, "OT")), List.of()));
 
-        service.saveRelation(relationRequest(P1, "r-hfl-ot", List.of("HUFL"), "OT", "CAUSE"));
+        service.createRelation(relationRequest(P1, "r-hfl-ot", List.of("HUFL"), "OT", "CAUSE"));
 
         // C 端只注册同设备 pair：d1 与 d2 各一条
         Set<String> coreRelationIds = coreRelationIds();

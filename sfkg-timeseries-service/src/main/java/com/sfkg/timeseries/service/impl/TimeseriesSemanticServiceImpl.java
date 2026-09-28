@@ -10,11 +10,12 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import org.springframework.beans.BeanUtils;
-import org.springframework.stereotype.Service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.BeanUtils;
+import org.springframework.stereotype.Service;
 
+import com.sfkg.timeseries.auth.CurrentAuditUser;
 import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
@@ -22,7 +23,7 @@ import com.sfkg.timeseries.client.AnomalyGrpcClient;
 import com.sfkg.timeseries.client.ForecastGrpcClient;
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
-import com.sfkg.timeseries.auth.CurrentAuditUser;
+import com.sfkg.timeseries.common.DownstreamSyncValidator;
 import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.common.SemanticId;
 import com.sfkg.timeseries.dto.CategoryQueryRequest;
@@ -42,6 +43,7 @@ import com.sfkg.timeseries.entity.TimeseriesConstraint;
 import com.sfkg.timeseries.entity.TimeseriesForecastTask;
 import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.entity.TimeseriesRelation;
+import com.sfkg.timeseries.enums.RelationTypeEnum;
 import com.sfkg.timeseries.mapper.TimeseriesCategoryMapper;
 import com.sfkg.timeseries.mapper.TimeseriesConstraintMapper;
 import com.sfkg.timeseries.mapper.TimeseriesRelationMapper;
@@ -102,10 +104,20 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
 
     @Override
     public String saveCategory(CategorySaveRequest request) {
+        requireExistingCategory(request);
         return doSaveCategory(request);
     }
 
     public String createCategory(CategorySaveRequest request) {
+        if (request == null) {
+            throw new BusinessException("category request must not be null");
+        }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
+        if (request.getCategoryName() != null && memoryCache.listCategories(request.getProjectId()).stream()
+                .anyMatch(item -> request.getCategoryName().equalsIgnoreCase(item.getCategoryName()))) {
+            throw new BusinessException("categoryName already exists: " + request.getCategoryName());
+        }
         String categoryId = request != null ? request.getCategoryId() : null;
         if (categoryId != null) {
             cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
@@ -131,10 +143,20 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             throw new BusinessException("unsupported dataType: " + request.getDataType()
                     + " (expected double/int64/bool/string)");
         }
+        request.setDataType(request.getDataType().trim().toLowerCase());
+        validateConfirmStatus(request.getConfirmStatus());
         cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
+        cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
         String categoryId = request.getCategoryId() == null
                 ? SemanticId.generate(request.getCategoryName())
                 : request.getCategoryId();
+        TimeseriesCategory currentCategory = memoryCache.getCategory(request.getProjectId(), categoryId).orElse(null);
+        ensureUniqueCategoryName(request.getProjectId(), request.getCategoryName(), categoryId);
+        if (currentCategory != null && !request.getDataType().equalsIgnoreCase(currentCategory.getDataType())
+                && memoryCache.listInstanceConfigs(request.getProjectId()).stream()
+                        .anyMatch(instance -> categoryId.equals(instance.getCategoryId()))) {
+            throw new BusinessException("cannot change dataType for referenced category: " + categoryId);
+        }
 
         String user = CurrentAuditUser.username();
         TimeseriesCategory entity = memoryCache.computeCategory(
@@ -165,11 +187,15 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
 
     @Override
     public void updateCategoryStatus(CategoryStatusUpdateRequest request) {
-        if (request == null || request.getCategoryId() == null) {
-            return;
+        if (request == null || request.getCategoryId() == null || request.getCategoryId().isBlank()) {
+            throw new BusinessException("categoryId must not be empty");
         }
         request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        validateConfirmStatus(request.getConfirmStatus());
         cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
+        if (memoryCache.getCategory(request.getProjectId(), request.getCategoryId()).isEmpty()) {
+            throw new BusinessException("category not found: " + request.getCategoryId());
+        }
         String user = CurrentAuditUser.username();
         TimeseriesCategory entity = memoryCache.computeCategory(
                 request.getProjectId(), request.getCategoryId(), existing -> {
@@ -210,10 +236,20 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
 
     @Override
     public String saveConstraint(ConstraintSaveRequest request) {
+        requireExistingConstraint(request);
         return doSaveConstraint(request);
     }
 
     public String createConstraint(ConstraintSaveRequest request) {
+        if (request == null) {
+            throw new BusinessException("constraint request must not be null");
+        }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
+        if (request.getConstraintName() != null && memoryCache.listConstraints(request.getProjectId()).stream()
+                .anyMatch(item -> request.getConstraintName().equalsIgnoreCase(item.getConstraintName()))) {
+            throw new BusinessException("constraintName already exists: " + request.getConstraintName());
+        }
         String constraintId = request != null ? request.getConstraintId() : null;
         if (constraintId != null) {
             cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
@@ -240,6 +276,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         List<TimeseriesConstraint> entities = new ArrayList<>();
         List<String> createdIds = new ArrayList<>();
         Set<String> seenIds = new HashSet<>();
+        Set<String> seenNames = new HashSet<>();
         for (ConstraintSaveRequest member : request.getConstraints()) {
             if (member == null) {
                 throw new BusinessException("constraint batch contains null member");
@@ -252,6 +289,11 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 throw new BusinessException("constraint terms must not be empty: " + member.getConstraintName());
             }
             validateConstraintTerms(member.getTerms());
+            validateConstraintFields(member);
+            validateConstraintVariableCoverage(member);
+            if (!seenNames.add(member.getConstraintName().trim().toLowerCase())) {
+                throw new BusinessException("duplicate constraint name in batch: " + member.getConstraintName());
+            }
 
             String constraintId = member.getConstraintId() == null
                     ? SemanticId.generate(
@@ -265,6 +307,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             if (memoryCache.getConstraint(projectId, constraintId).isPresent()) {
                 throw new BusinessException("constraint already exists: " + constraintId);
             }
+            ensureUniqueConstraintName(projectId, member.getConstraintName(), constraintId);
 
             TimeseriesConstraint entity = new TimeseriesConstraint();
             BeanUtils.copyProperties(member, entity);
@@ -292,12 +335,12 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             createdIds.add(constraintId);
         }
 
-        // 先整体落盘 + 更新内存缓存，再一次性同步 Core，保证 OR 组原子送达
+        // 先让 Core 原子确认整组规则，避免本地保存了无法执行的 OR 配置。
+        DownstreamSyncValidator.requireSuccess("Core", coreGrpcClient.syncConstraintConfigs(entities));
         for (TimeseriesConstraint entity : entities) {
             constraintMapper.insert(entity);
             memoryCache.putConstraint(entity);
         }
-        coreGrpcClient.syncConstraintConfigs(entities);
         return createdIds;
     }
 
@@ -306,12 +349,14 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             throw new BusinessException("constraint request must not be null");
         }
         request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        validateConstraintFields(request);
         validateConstraintExpression(request.getConstraintExpression());
         validateVariableMapping(request.getProjectId(), request.getVariableMapping());
         if (request.getTerms() == null || request.getTerms().isEmpty()) {
             throw new BusinessException("constraint terms must not be empty");
         }
         validateConstraintTerms(request.getTerms());
+        validateConstraintVariableCoverage(request);
         validateOrGroupId(request.getOrGroupId());
         cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
         String constraintId = request.getConstraintId() == null
@@ -321,6 +366,7 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                                 && !request.getVariableMapping().isEmpty()
                                 ? request.getVariableMapping().values().iterator().next() : null)
                 : request.getConstraintId();
+        ensureUniqueConstraintName(request.getProjectId(), request.getConstraintName(), constraintId);
 
         TimeseriesConstraint previous = snapshotConstraint(
                 memoryCache.getConstraint(
@@ -361,19 +407,31 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             return e;
         });
 
+        try {
+            syncSemanticToCore(entity.getProjectId(), constraintId);
+        } catch (RuntimeException exception) {
+            restoreConstraintCache(entity.getProjectId(), constraintId, previous);
+            throw exception;
+        }
         constraintMapper.insert(entity);
-        syncSemanticToCore(entity.getProjectId(), constraintId);
         reSyncTasksForConstraint(entity.getProjectId(), constraintId, previous);
         return constraintId;
     }
 
     @Override
     public void updateConstraintStatus(ConstraintStatusUpdateRequest request) {
-        if (request == null || request.getConstraintId() == null) {
-            return;
+        if (request == null || request.getConstraintId() == null || request.getConstraintId().isBlank()) {
+            throw new BusinessException("constraintId must not be empty");
         }
         request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        validateConfirmStatus(request.getConfirmStatus());
+        validateEffectiveStatus(request.getEffectiveStatus());
         cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
+        TimeseriesConstraint previous = snapshotConstraint(memoryCache
+                .getConstraint(request.getProjectId(), request.getConstraintId()).orElse(null));
+        if (previous == null) {
+            throw new BusinessException("constraint not found: " + request.getConstraintId());
+        }
         String user = CurrentAuditUser.username();
         TimeseriesConstraint entity = memoryCache.computeConstraint(
                 request.getProjectId(), request.getConstraintId(), existing -> {
@@ -399,8 +457,13 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             e.setUpdateUser(user);
             return e;
         });
+        try {
+            syncSemanticToCore(entity.getProjectId(), entity.getConstraintId());
+        } catch (RuntimeException exception) {
+            restoreConstraintCache(entity.getProjectId(), entity.getConstraintId(), previous);
+            throw exception;
+        }
         constraintMapper.updateById(entity);
-        syncSemanticToCore(entity.getProjectId(), entity.getConstraintId());
         reSyncTasksForConstraint(entity.getProjectId(), entity.getConstraintId());
     }
 
@@ -430,10 +493,20 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
 
     @Override
     public String saveRelation(RelationSaveRequest request) {
+        requireExistingRelation(request);
         return doSaveRelation(request);
     }
 
     public String createRelation(RelationSaveRequest request) {
+        if (request == null) {
+            throw new BusinessException("relation config must not be null");
+        }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        cacheManager.ensureTableLoaded(CachedTable.RELATION);
+        if (request.getRelationName() != null && memoryCache.listRelations(request.getProjectId()).stream()
+                .anyMatch(item -> request.getRelationName().equalsIgnoreCase(item.getRelationName()))) {
+            throw new BusinessException("relationName already exists: " + request.getRelationName());
+        }
         String relationId = request != null ? request.getRelationId() : null;
         if (relationId != null) {
             cacheManager.ensureTableLoaded(CachedTable.RELATION);
@@ -456,6 +529,9 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                         request != null ? request.getTargetSequenceId() : null,
                         request != null ? request.getRelationType() : null)
                 : request.getRelationId();
+        ensureUniqueRelation(request, relationId);
+        TimeseriesRelation previous = snapshotRelation(memoryCache
+                .getRelation(request.getProjectId(), relationId).orElse(null));
 
         String user = CurrentAuditUser.username();
         TimeseriesRelation entity = memoryCache.computeRelation(
@@ -481,19 +557,31 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             return e;
         });
 
+        try {
+            syncSemanticToCore(entity.getProjectId(), relationId);
+        } catch (RuntimeException exception) {
+            restoreRelationCache(entity.getProjectId(), relationId, previous);
+            throw exception;
+        }
         relationMapper.insert(entity);
-        syncSemanticToCore(entity.getProjectId(), relationId);
         reSyncTasksForRelation(entity.getProjectId(), relationId);
         return relationId;
     }
 
     @Override
     public void updateRelationStatus(RelationStatusUpdateRequest request) {
-        if (request == null || request.getRelationId() == null) {
-            return;
+        if (request == null || request.getRelationId() == null || request.getRelationId().isBlank()) {
+            throw new BusinessException("relationId must not be empty");
         }
         request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        validateConfirmStatus(request.getConfirmStatus());
+        validateEffectiveStatus(request.getEffectiveStatus());
         cacheManager.ensureTableLoaded(CachedTable.RELATION);
+        TimeseriesRelation previous = snapshotRelation(memoryCache
+                .getRelation(request.getProjectId(), request.getRelationId()).orElse(null));
+        if (previous == null) {
+            throw new BusinessException("relation not found: " + request.getRelationId());
+        }
         String user = CurrentAuditUser.username();
         TimeseriesRelation entity = memoryCache.computeRelation(
                 request.getProjectId(), request.getRelationId(), existing -> {
@@ -519,8 +607,13 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             e.setUpdateUser(user);
             return e;
         });
+        try {
+            syncSemanticToCore(entity.getProjectId(), entity.getRelationId());
+        } catch (RuntimeException exception) {
+            restoreRelationCache(entity.getProjectId(), entity.getRelationId(), previous);
+            throw exception;
+        }
         relationMapper.updateById(entity);
-        syncSemanticToCore(entity.getProjectId(), entity.getRelationId());
         reSyncTasksForRelation(entity.getProjectId(), entity.getRelationId());
     }
 
@@ -535,24 +628,86 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         updateRelationStatus(request);
     }
 
-    private static final Set<String> VALID_RELATION_TYPES = Set.of("CAUSE", "CAUSAL", "CORRELATION", "ASSOCIATION");
-
     private static final Set<String> VALID_DATA_TYPES = Set.of("double", "int64", "bool", "string");
 
     private static final Set<String> VALID_CONSTRAINT_AGGREGATIONS = Set.of(
             "SAMPLE", "AVERAGE", "MAXIMUM", "MINIMUM");
 
-    /** 校验每个 term 的聚合方式；空值允许（同步时回退到 SAMPLE）。 */
+    private static final Set<String> VALID_CONFIRM_STATUSES = Set.of(
+            "PENDING", "CONFIRMED", "REJECTED");
+
+    private static final Set<String> VALID_EFFECTIVE_STATUSES = Set.of(
+            "ENABLE", "ENABLED", "DISABLE", "DISABLED");
+
+    /** 校验每个 term 的变量、系数、偏移和聚合方式。 */
     private void validateConstraintTerms(List<ConstraintSaveRequest.ConstraintTermDTO> terms) {
+        Set<String> variables = new HashSet<>();
         for (ConstraintSaveRequest.ConstraintTermDTO term : terms) {
+            if (term == null) {
+                throw new BusinessException("constraint term must not be null");
+            }
             if (term.getVariable() == null || term.getVariable().isBlank()) {
                 throw new BusinessException("constraint term variable must not be empty");
+            }
+            if (!variables.add(term.getVariable())) {
+                throw new BusinessException("duplicate constraint term variable: " + term.getVariable());
+            }
+            if (term.getCoefficient() == null || !Double.isFinite(term.getCoefficient())) {
+                throw new BusinessException("constraint term coefficient must be finite: " + term.getVariable());
+            }
+            if (term.getSampleOffset() != null && term.getSampleOffset() < 0) {
+                throw new BusinessException("constraint term sampleOffset must not be negative: " + term.getVariable());
             }
             if (term.getAggregation() != null && !term.getAggregation().isBlank()
                     && !VALID_CONSTRAINT_AGGREGATIONS.contains(term.getAggregation().trim().toUpperCase())) {
                 throw new BusinessException("unsupported constraint aggregation: " + term.getAggregation()
                         + ". Supported: " + VALID_CONSTRAINT_AGGREGATIONS);
             }
+        }
+    }
+
+    private void validateConstraintFields(ConstraintSaveRequest request) {
+        if (request.getConstraintName() == null || request.getConstraintName().isBlank()) {
+            throw new BusinessException("constraintName must not be empty");
+        }
+        validateFiniteBound("lowerBound", request.getLowerBound());
+        validateFiniteBound("upperBound", request.getUpperBound());
+        if (request.getLowerBound() != null && request.getUpperBound() != null
+                && request.getLowerBound() > request.getUpperBound()) {
+            throw new BusinessException("lowerBound must not exceed upperBound");
+        }
+        validateEffectiveStatus(request.getEffectiveStatus());
+        validateConfirmStatus(request.getConfirmStatus());
+    }
+
+    private void validateFiniteBound(String fieldName, Double value) {
+        if (value != null && !Double.isFinite(value)) {
+            throw new BusinessException(fieldName + " must be finite");
+        }
+    }
+
+    private void validateConstraintVariableCoverage(ConstraintSaveRequest request) {
+        Set<String> mappedVariables = new HashSet<>(request.getVariableMapping().keySet());
+        Set<String> termVariables = request.getTerms().stream()
+                .map(ConstraintSaveRequest.ConstraintTermDTO::getVariable)
+                .collect(Collectors.toSet());
+        if (!mappedVariables.equals(termVariables)) {
+            throw new BusinessException("constraint terms must match variableMapping keys");
+        }
+    }
+
+    private void validateConfirmStatus(String status) {
+        validateOptionalEnum("confirmStatus", status, VALID_CONFIRM_STATUSES);
+    }
+
+    private void validateEffectiveStatus(String status) {
+        validateOptionalEnum("effectiveStatus", status, VALID_EFFECTIVE_STATUSES);
+    }
+
+    private void validateOptionalEnum(String fieldName, String value, Set<String> supportedValues) {
+        if (value != null && !value.isBlank() && !supportedValues.contains(value.trim().toUpperCase())) {
+            throw new BusinessException("unsupported " + fieldName + ": " + value
+                    + ". Supported: " + supportedValues);
         }
     }
 
@@ -625,6 +780,11 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             throw new BusinessException("relation config must not be null");
         }
         request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        if (request.getRelationName() == null || request.getRelationName().isBlank()) {
+            throw new BusinessException("relationName must not be empty");
+        }
+        validateConfirmStatus(request.getConfirmStatus());
+        validateEffectiveStatus(request.getEffectiveStatus());
         if (request.getSourceSequences() == null || request.getSourceSequences().isEmpty()) {
             throw new BusinessException("sourceSequences must not be empty");
         }
@@ -635,11 +795,15 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
         Set<String> sourceSet = new HashSet<>();
         for (String src : request.getSourceSequences()) {
-            if (src == null || src.isBlank()) continue;
+            if (src == null || src.isBlank()) {
+                throw new BusinessException("source sequence must not be empty");
+            }
             if (src.equals(request.getTargetSequenceId())) {
                 throw new BusinessException("source sequence cannot equal target: " + src);
             }
-            sourceSet.add(src);
+            if (!sourceSet.add(src)) {
+                throw new BusinessException("duplicate source sequence: " + src);
+            }
             if (!isValidSequenceOrCategory(request.getProjectId(), src)) {
                 throw new BusinessException("source sequence or category not found: " + src);
             }
@@ -650,11 +814,15 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
         if (!isValidSequenceOrCategory(request.getProjectId(), request.getTargetSequenceId())) {
             throw new BusinessException("target sequence or category not found: " + request.getTargetSequenceId());
         }
-        if (request.getRelationType() != null && !request.getRelationType().isBlank()
-                && !VALID_RELATION_TYPES.contains(request.getRelationType().toUpperCase())) {
+        // relationType 必填：空值在 P 端既不算因果型、也没有互耦标记，会被静默忽略，
+        // 等同于"配置了一条永不生效的关系"，因此直接拒绝。
+        // 存储统一归一化为大写；下发 C 端时再转小写（C 端按 "correlation" 精确匹配）。
+        RelationTypeEnum relationType = RelationTypeEnum.from(request.getRelationType());
+        if (relationType == null) {
             throw new BusinessException("unsupported relationType: " + request.getRelationType()
-                    + ". Supported: " + VALID_RELATION_TYPES);
+                    + ". Supported: " + RelationTypeEnum.supportedValues());
         }
+        request.setRelationType(relationType.name());
         if (request.getConfidence() != null) {
             BigDecimal conf = request.getConfidence();
             if (conf.compareTo(BigDecimal.ZERO) < 0 || conf.compareTo(BigDecimal.ONE) > 0) {
@@ -666,6 +834,70 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
             if (!lag.matches("^\\d+[mhd]?-\\d+[mhd]?$") && !lag.matches("^\\d+$")) {
                 throw new BusinessException("invalid lagRange format: " + lag + ". Expected e.g. 0m-10m or 5");
             }
+        }
+    }
+
+    private void ensureUniqueCategoryName(String projectId, String categoryName, String categoryId) {
+        boolean duplicated = memoryCache.listCategories(projectId).stream()
+                .anyMatch(item -> !Objects.equals(categoryId, item.getCategoryId())
+                        && categoryName.equalsIgnoreCase(item.getCategoryName()));
+        if (duplicated) {
+            throw new BusinessException("categoryName already exists: " + categoryName);
+        }
+    }
+
+    private void ensureUniqueConstraintName(String projectId, String constraintName, String constraintId) {
+        boolean duplicated = memoryCache.listConstraints(projectId).stream()
+                .anyMatch(item -> !Objects.equals(constraintId, item.getConstraintId())
+                        && constraintName.equalsIgnoreCase(item.getConstraintName()));
+        if (duplicated) {
+            throw new BusinessException("constraintName already exists: " + constraintName);
+        }
+    }
+
+    private void ensureUniqueRelation(RelationSaveRequest request, String relationId) {
+        Set<String> sourceSet = new HashSet<>(request.getSourceSequences());
+        boolean duplicated = memoryCache.listRelations(request.getProjectId()).stream()
+                .filter(item -> !Objects.equals(relationId, item.getRelationId()))
+                .anyMatch(item -> request.getRelationName().equalsIgnoreCase(item.getRelationName())
+                        || (Objects.equals(request.getTargetSequenceId(), item.getTargetSequenceId())
+                                && request.getRelationType().equalsIgnoreCase(item.getRelationType())
+                                && sourceSet.equals(new HashSet<>(item.getSourceSequences()))));
+        if (duplicated) {
+            throw new BusinessException("duplicate relation name or endpoint configuration: " + request.getRelationName());
+        }
+    }
+
+    private void requireExistingCategory(CategorySaveRequest request) {
+        if (request == null || request.getCategoryId() == null || request.getCategoryId().isBlank()) {
+            throw new BusinessException("categoryId must be provided when updating a category");
+        }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        cacheManager.ensureTableLoaded(CachedTable.CATEGORY);
+        if (memoryCache.getCategory(request.getProjectId(), request.getCategoryId()).isEmpty()) {
+            throw new BusinessException("category not found: " + request.getCategoryId());
+        }
+    }
+
+    private void requireExistingConstraint(ConstraintSaveRequest request) {
+        if (request == null || request.getConstraintId() == null || request.getConstraintId().isBlank()) {
+            throw new BusinessException("constraintId must be provided when updating a constraint");
+        }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
+        if (memoryCache.getConstraint(request.getProjectId(), request.getConstraintId()).isEmpty()) {
+            throw new BusinessException("constraint not found: " + request.getConstraintId());
+        }
+    }
+
+    private void requireExistingRelation(RelationSaveRequest request) {
+        if (request == null || request.getRelationId() == null || request.getRelationId().isBlank()) {
+            throw new BusinessException("relationId must be provided when updating a relation");
+        }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        cacheManager.ensureTableLoaded(CachedTable.RELATION);
+        if (memoryCache.getRelation(request.getProjectId(), request.getRelationId()).isEmpty()) {
+            throw new BusinessException("relation not found: " + request.getRelationId());
         }
     }
 
@@ -693,18 +925,12 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
 
     private void syncConstraintToCore(TimeseriesConstraint constraint) {
         SyncResult result = coreGrpcClient.syncConstraintConfig(constraint);
-        if (!result.isSuccess()) {
-            LOG.warn("constraint {} sync to Core FAILED: {}",
-                    constraint.getConstraintId(), result.getMessage());
-        }
+        DownstreamSyncValidator.requireSuccess("Core", result);
     }
 
     private void syncRelationToCore(TimeseriesRelation relation) {
         SyncResult result = coreGrpcClient.syncRelationConfig(relation);
-        if (!result.isSuccess()) {
-            LOG.warn("relation {} sync to Core FAILED: {}",
-                    relation.getRelationId(), result.getMessage());
-        }
+        DownstreamSyncValidator.requireSuccess("Core", result);
     }
 
     /**
@@ -730,7 +956,42 @@ public class TimeseriesSemanticServiceImpl implements TimeseriesSemanticService 
                 ? new java.util.LinkedHashMap<>(source.getVariableMapping()) : null);
         snapshot.setTerms(source.getTerms() != null
                 ? new java.util.ArrayList<>(source.getTerms()) : null);
+        snapshot.setCreateTime(source.getCreateTime());
+        snapshot.setUpdateTime(source.getUpdateTime());
+        snapshot.setCreateUser(source.getCreateUser());
+        snapshot.setUpdateUser(source.getUpdateUser());
         return snapshot;
+    }
+
+    private void restoreConstraintCache(String projectId, String constraintId, TimeseriesConstraint previous) {
+        List<TimeseriesConstraint> restored = new ArrayList<>(memoryCache.listConstraints());
+        restored.removeIf(item -> Objects.equals(projectId, item.getProjectId())
+                && Objects.equals(constraintId, item.getConstraintId()));
+        if (previous != null) {
+            restored.add(previous);
+        }
+        memoryCache.replaceConstraints(restored);
+    }
+
+    private TimeseriesRelation snapshotRelation(TimeseriesRelation source) {
+        if (source == null) {
+            return null;
+        }
+        TimeseriesRelation snapshot = new TimeseriesRelation();
+        BeanUtils.copyProperties(source, snapshot);
+        snapshot.setSourceSequences(source.getSourceSequences() == null
+                ? null : new ArrayList<>(source.getSourceSequences()));
+        return snapshot;
+    }
+
+    private void restoreRelationCache(String projectId, String relationId, TimeseriesRelation previous) {
+        List<TimeseriesRelation> restored = new ArrayList<>(memoryCache.listRelations());
+        restored.removeIf(item -> Objects.equals(projectId, item.getProjectId())
+                && Objects.equals(relationId, item.getRelationId()));
+        if (previous != null) {
+            restored.add(previous);
+        }
+        memoryCache.replaceRelations(restored);
     }
 
     private CategoryVO toCategoryVO(TimeseriesCategory entity) {

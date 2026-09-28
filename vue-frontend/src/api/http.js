@@ -1,9 +1,12 @@
 import axios from 'axios'
+import { beginConfigurationRequest, endConfigurationRequest } from '../stores/configurationRequest'
 
 // 所有请求走相对路径，开发模式由 vite proxy 转发到 Java 后端（:8080）
 const http = axios.create({
   baseURL: '',
-  timeout: 60000,
+  // The service may use four 5s attempts separated by 10/20/40s backoff.
+  // Keep the browser timeout above that retry budget to avoid duplicate writes.
+  timeout: 100000,
   withCredentials: true,
   // axios 1.19 默认对同源请求自动附加 XSRF-TOKEN Cookie 的原始值并覆盖拦截器设置，
   // 而 Spring Security 7 只接受 /api/auth/csrf 返回的编码令牌，必须显式关闭。
@@ -19,6 +22,7 @@ export function setCsrfToken(token) {
 }
 
 http.interceptors.request.use((config) => {
+  beginConfigurationRequest(config)
   config.withCredentials = true
   if (csrfToken) {
     config.headers = {
@@ -31,8 +35,12 @@ http.interceptors.request.use((config) => {
 
 // 后端统一返回 ApiResult<T> = { success, message, data }
 http.interceptors.response.use(
-  (response) => response.data,
+  (response) => {
+    endConfigurationRequest(response.config)
+    return response.data
+  },
   (error) => {
+    endConfigurationRequest(error.config)
     if (error.response?.status === 401 && window.location.hash !== '#/login') {
       window.location.hash = '#/login'
     }

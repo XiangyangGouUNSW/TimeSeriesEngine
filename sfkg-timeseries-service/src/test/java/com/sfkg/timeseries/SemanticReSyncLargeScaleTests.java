@@ -17,6 +17,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
@@ -27,6 +28,7 @@ import com.sfkg.timeseries.dto.ConstraintSaveRequest;
 import com.sfkg.timeseries.dto.ConstraintStatusUpdateRequest;
 import com.sfkg.timeseries.dto.RelationSaveRequest;
 import com.sfkg.timeseries.dto.RelationStatusUpdateRequest;
+import com.sfkg.timeseries.dto.SyncResult;
 import com.sfkg.timeseries.entity.TimeseriesAnomalyTask;
 import com.sfkg.timeseries.entity.TimeseriesCategory;
 import com.sfkg.timeseries.entity.TimeseriesForecastTask;
@@ -63,6 +65,10 @@ class SemanticReSyncLargeScaleTests {
         anomalyClient = mock(AnomalyGrpcClient.class);
         forecastClient = mock(ForecastGrpcClient.class);
         coreClient = mock(TimeseriesCoreGrpcClient.class);
+        // 同步接口的返回值会被业务代码直接解引用（result.isSuccess()），
+        // mock 默认返回 null 会抛 NPE，因此显式给出"同步成功"存根。
+        when(coreClient.syncConstraintConfig(any())).thenReturn(SyncResult.success());
+        when(coreClient.syncRelationConfig(any())).thenReturn(SyncResult.success());
         TimeseriesCacheManager cacheManager = mock(TimeseriesCacheManager.class);
         TimeseriesConstraintExpansionResolver expansionResolver =
                 new TimeseriesConstraintExpansionResolver(cache);
@@ -91,7 +97,7 @@ class SemanticReSyncLargeScaleTests {
         cache.putForecastTask(forecastTask(P2, "f-p2", List.of(seqId(P2, 1, "OT")), List.of()));
 
         clearInvocations(anomalyClient, forecastClient, coreClient);
-        service.saveConstraint(constraintRequest(P1, "c-ot-max", "OT max", Map.of("x", "OT"), "x <= 100"));
+        service.createConstraint(constraintRequest(P1, "c-ot-max", "OT max", Map.of("x", "OT"), "x <= 100"));
 
         ArgumentCaptor<TimeseriesAnomalyTask> anomalyCaptor =
                 ArgumentCaptor.forClass(TimeseriesAnomalyTask.class);
@@ -114,7 +120,7 @@ class SemanticReSyncLargeScaleTests {
     @Test
     void disablingConstraintStillReSyncsAutoDiscoveredTasks() {
         buildWorld(P1, 3, List.of("OT", "HUFL"));
-        service.saveConstraint(constraintRequest(P1, "c-ot-max", "OT max", Map.of("x", "OT"), "x <= 100"));
+        service.createConstraint(constraintRequest(P1, "c-ot-max", "OT max", Map.of("x", "OT"), "x <= 100"));
 
         cache.putAnomalyTask(anomalyTask(P1, "a-d1", List.of(seqId(P1, 1, "OT")), List.of()));
         cache.putAnomalyTask(anomalyTask(P1, "a-d2", List.of(seqId(P1, 2, "OT")), List.of()));
@@ -139,7 +145,7 @@ class SemanticReSyncLargeScaleTests {
     @Test
     void variableMappingChangeReSyncsTasksOfOldAndNewMapping() {
         buildWorld(P1, 3, List.of("OT", "HUFL"));
-        service.saveConstraint(constraintRequest(P1, "c-move", "move",
+        service.createConstraint(constraintRequest(P1, "c-move", "move",
                 Map.of("x", seqId(P1, 1, "OT")), "x <= 50"));
 
         cache.putAnomalyTask(anomalyTask(P1, "a-old", List.of(seqId(P1, 1, "OT")), List.of()));
@@ -171,7 +177,7 @@ class SemanticReSyncLargeScaleTests {
 
         // 序列级关系：受影响序列 = {d1_HUFL, d1_OT}
         clearInvocations(anomalyClient, forecastClient);
-        service.saveRelation(relationRequest(P1, "r-seq",
+        service.createRelation(relationRequest(P1, "r-seq",
                 List.of(seqId(P1, 1, "HUFL")), seqId(P1, 1, "OT"), "CAUSE"));
 
         ArgumentCaptor<TimeseriesAnomalyTask> anomalyCaptor =
@@ -197,7 +203,7 @@ class SemanticReSyncLargeScaleTests {
 
         // 类别级关系：受影响序列 = 全部 HUFL + 全部 OT 序列（跨设备展开）
         clearInvocations(anomalyClient, forecastClient);
-        service.saveRelation(relationRequest(P1, "r-cat", List.of("HUFL"), "OT", "CAUSE"));
+        service.createRelation(relationRequest(P1, "r-cat", List.of("HUFL"), "OT", "CAUSE"));
         ArgumentCaptor<TimeseriesAnomalyTask> catCaptor = ArgumentCaptor.forClass(TimeseriesAnomalyTask.class);
         verify(anomalyClient, times(2)).syncAnomalyTask(catCaptor.capture());
         assertEquals(Set.of("a-ot", "a-hufl"),
@@ -210,9 +216,9 @@ class SemanticReSyncLargeScaleTests {
     @Test
     void contextResolutionExpandsCategoriesConstraintsAndRelations() {
         buildWorld(P1, 3, List.of("OT", "HUFL", "MULL"));
-        service.saveConstraint(constraintRequest(P1, "c-ot", "OT bound", Map.of("x", "OT"), "x <= 100"));
-        service.saveConstraint(constraintRequest(P1, "c-hufl", "HUFL bound", Map.of("y", "HUFL"), "y <= 200"));
-        service.saveRelation(relationRequest(P1, "r-hfl-ot", List.of("HUFL"), "OT", "CAUSE"));
+        service.createConstraint(constraintRequest(P1, "c-ot", "OT bound", Map.of("x", "OT"), "x <= 100"));
+        service.createConstraint(constraintRequest(P1, "c-hufl", "HUFL bound", Map.of("y", "HUFL"), "y <= 200"));
+        service.createRelation(relationRequest(P1, "r-hfl-ot", List.of("HUFL"), "OT", "CAUSE"));
 
         for (int d = 1; d <= 3; d++) {
             final int device = d;
@@ -272,7 +278,7 @@ class SemanticReSyncLargeScaleTests {
         }
 
         clearInvocations(anomalyClient, forecastClient);
-        service.saveConstraint(constraintRequest(P1, "c-bulk", "bulk", Map.of("x", "OT"), "x <= 100"));
+        service.createConstraint(constraintRequest(P1, "c-bulk", "bulk", Map.of("x", "OT"), "x <= 100"));
 
         ArgumentCaptor<TimeseriesAnomalyTask> captor = ArgumentCaptor.forClass(TimeseriesAnomalyTask.class);
         verify(anomalyClient, times(perProject)).syncAnomalyTask(captor.capture());

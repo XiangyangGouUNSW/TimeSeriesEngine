@@ -2,13 +2,18 @@ package com.sfkg.timeseries.service.impl;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
+import com.sfkg.timeseries.cache.TimeseriesCacheManager;
+import com.sfkg.timeseries.cache.CachedTable;
 import com.sfkg.timeseries.client.AnomalyGrpcClient;
+import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.dto.AnomalyResultQueryRequest;
 import com.sfkg.timeseries.entity.TimeseriesEvent;
 import com.sfkg.timeseries.mapper.TimeseriesEventMapper;
@@ -23,19 +28,22 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
     private final TimeseriesEventMapper eventMapper;
     private final TimeseriesMemoryCache memoryCache;
     private final AnomalyGrpcClient anomalyGrpcClient;
+    private final TimeseriesCacheManager cacheManager;
 
     public TimeseriesAnomalyResultServiceImpl(
             TimeseriesEventMapper eventMapper,
             TimeseriesMemoryCache memoryCache,
-            AnomalyGrpcClient anomalyGrpcClient) {
+            AnomalyGrpcClient anomalyGrpcClient,
+            TimeseriesCacheManager cacheManager) {
         this.eventMapper = eventMapper;
         this.memoryCache = memoryCache;
         this.anomalyGrpcClient = anomalyGrpcClient;
+        this.cacheManager = cacheManager;
     }
 
     @Override
     public AnomalyResultVO queryAnomalyResults(AnomalyResultQueryRequest request) {
-        // 直接查询分析端(P端)，不再回退事件缓存，保证结果字段完整
+        validateQuery(request);
         return anomalyGrpcClient.queryAnomalyResult(request);
     }
 
@@ -53,8 +61,11 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
                     ? List.of(result.getSequenceId())
                     : List.of());
         String seq = seqIds.isEmpty() ? "UNKNOWN" : String.join("_", seqIds);
-        String ts = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyMMddHHmmssSSS"));
-        String eventId = "EVT_" + source + "_" + seq + "_" + ts;
+        String resultKey = result != null && result.getResultId() != null && !result.getResultId().isBlank()
+                ? result.getResultId() : seq + "_" + (result != null && result.getEventTime() != null
+                        ? result.getEventTime().atZone(com.sfkg.timeseries.common.ServiceTime.ZONE_ID).toInstant().toEpochMilli()
+                        : "unknown");
+        String eventId = "EVT_" + source + "_" + resultKey;
         TimeseriesEvent event = new TimeseriesEvent();
         event.setProjectId(result != null ? result.getProjectId() : null);
         event.setEventId(eventId);
@@ -119,5 +130,30 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
             sb.append(", triggered constraints: ").append(String.join(", ", result.getConstraintIds()));
         }
         return sb.toString();
+    }
+
+    private void validateQuery(AnomalyResultQueryRequest request) {
+        if (request == null) {
+            throw new BusinessException("anomaly result query must not be null");
+        }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        if (request.getTaskId() == null || request.getTaskId().isBlank()
+                || request.getSequenceId() == null || request.getSequenceId().isBlank()) {
+            throw new BusinessException("anomaly result query requires taskId and sequenceId");
+        }
+        if (request.getStartTime() != null && request.getEndTime() != null
+                && request.getStartTime().isAfter(request.getEndTime())) {
+            throw new BusinessException("anomaly result query startTime must be before endTime");
+        }
+        if (request.getEventLevel() != null && !request.getEventLevel().isBlank()
+                && !Set.of("LOW", "MEDIUM", "HIGH", "CRITICAL").contains(request.getEventLevel().toUpperCase())) {
+            throw new BusinessException("unsupported eventLevel: " + request.getEventLevel());
+        }
+        cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
+        cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
+        if (memoryCache.getAnomalyTask(request.getProjectId(), request.getTaskId()).isEmpty()
+                || memoryCache.getInstanceBySequenceId(request.getProjectId(), request.getSequenceId()) == null) {
+            throw new BusinessException("anomaly result query taskId or sequenceId does not belong to project");
+        }
     }
 }

@@ -25,8 +25,10 @@ import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.AnomalyGrpcClient;
 import com.sfkg.timeseries.client.ForecastGrpcClient;
+import com.sfkg.timeseries.client.GrpcRetryExecutor;
 import com.sfkg.timeseries.client.GrpcChannelRegistry;
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
+import com.sfkg.timeseries.config.RetryPolicyProperties;
 import com.sfkg.timeseries.common.BusinessException;
 import com.sfkg.timeseries.config.GrpcClientProperties;
 import com.sfkg.timeseries.dto.ConstraintBatchSaveRequest;
@@ -96,11 +98,15 @@ class ConstraintOrGroupLargeScaleTests {
                 .addService(coreFake).build().start();
         channelRegistry = new TestChannelRegistry();
 
+        RetryPolicyProperties retryProperties = new RetryPolicyProperties();
+        GrpcRetryExecutor retryExecutor = new GrpcRetryExecutor(retryProperties);
         TimeseriesCoreGrpcClient coreClient = new TimeseriesCoreGrpcClient(
                 properties, new ObjectMapper(), cache, channelRegistry, expansionResolver,
-                relationExpansionResolver);
-        AnomalyGrpcClient anomalyClient = new AnomalyGrpcClient(properties, contextResolver, channelRegistry);
-        ForecastGrpcClient forecastClient = new ForecastGrpcClient(properties, contextResolver, channelRegistry);
+                relationExpansionResolver, retryExecutor, retryProperties);
+        AnomalyGrpcClient anomalyClient = new AnomalyGrpcClient(
+                properties, contextResolver, channelRegistry, retryExecutor, retryProperties);
+        ForecastGrpcClient forecastClient = new ForecastGrpcClient(
+                properties, contextResolver, channelRegistry, retryExecutor, retryProperties);
 
         service = new TimeseriesSemanticServiceImpl(
                 mock(TimeseriesCategoryMapper.class),
@@ -257,7 +263,7 @@ class ConstraintOrGroupLargeScaleTests {
         buildWorld(P1, 1, List.of("OT"));
 
         ConstraintSaveRequest single = memberRequest("plain-c", "x < 20", null, 20.0, "SAMPLE");
-        service.saveConstraint(single);
+        service.createConstraint(single);
 
         assertEquals(1, coreFake.constraintRequests.size());
         ConstraintRule rule = coreFake.constraintRequests.get(0).getItems(0).getRule();
@@ -287,7 +293,7 @@ class ConstraintOrGroupLargeScaleTests {
         assertThrows(BusinessException.class, () -> service.createConstraintBatch(dup));
 
         // 与存量约束 ID 冲突
-        service.saveConstraint(memberRequest("existing-c", "x < 20", null, 20.0, "SAMPLE"));
+        service.createConstraint(memberRequest("existing-c", "x < 20", null, 20.0, "SAMPLE"));
         int coreRequestsAfterSingle = coreFake.constraintRequests.size();
         ConstraintBatchSaveRequest conflict = new ConstraintBatchSaveRequest();
         conflict.setProjectId(P1);

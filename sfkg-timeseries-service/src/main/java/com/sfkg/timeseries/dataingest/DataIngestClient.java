@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.common.RetryableDownstreamException;
+import com.sfkg.timeseries.client.GrpcRetryExecutor;
 import com.sfkg.timeseries.config.DataIngestProperties;
 import java.io.IOException;
 import java.net.URI;
@@ -21,11 +23,14 @@ public class DataIngestClient {
     private final DataIngestProperties properties;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
+    private final GrpcRetryExecutor retryExecutor;
 
-    public DataIngestClient(DataIngestProperties properties, ObjectMapper objectMapper) {
+    public DataIngestClient(DataIngestProperties properties, ObjectMapper objectMapper,
+            GrpcRetryExecutor retryExecutor) {
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.httpClient = HttpClient.newHttpClient();
+        this.retryExecutor = retryExecutor;
     }
 
     public boolean isEnabled() {
@@ -88,14 +93,22 @@ public class DataIngestClient {
     }
 
     private HttpResponse<String> sendRaw(HttpRequest request) {
-        try {
-            return httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-        } catch (IOException exception) {
-            throw new BusinessException("DataIngest request failed: " + exception.getMessage());
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw new BusinessException("DataIngest request interrupted");
-        }
+        return retryExecutor.execute("DataIngest", request.method() + " " + request.uri().getPath(), () -> {
+            try {
+                HttpResponse<String> response = httpClient.send(
+                        request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                if (response.statusCode() >= 500) {
+                    throw new RetryableDownstreamException(
+                            "DataIngest transient response status=" + response.statusCode());
+                }
+                return response;
+            } catch (IOException exception) {
+                throw new RetryableDownstreamException("DataIngest request failed", exception);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new BusinessException("DataIngest request interrupted");
+            }
+        });
     }
 
     private URI insertUri() {

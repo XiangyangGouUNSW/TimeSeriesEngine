@@ -16,6 +16,7 @@ import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.AnomalyGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.common.DownstreamSyncValidator;
 import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.common.SemanticId;
 import com.sfkg.timeseries.dto.AnomalyTaskSaveRequest;
@@ -49,6 +50,15 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
 
     @Override
     public String createAnomalyTask(AnomalyTaskSaveRequest request) {
+        if (request == null) {
+            throw new BusinessException("anomaly task request must not be null");
+        }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
+        if (request.getTaskName() != null && memoryCache.listAnomalyTasks(request.getProjectId()).stream()
+                .anyMatch(item -> request.getTaskName().equalsIgnoreCase(item.getTaskName()))) {
+            throw new BusinessException("anomaly taskName already exists: " + request.getTaskName());
+        }
         String taskId = request != null ? request.getTaskId() : null;
         if (taskId != null) {
             cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
@@ -61,6 +71,7 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
 
     @Override
     public String saveAnomalyTask(AnomalyTaskSaveRequest request) {
+        requireExistingTask(request);
         return doSaveAnomalyTask(request);
     }
 
@@ -69,16 +80,23 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
             throw new BusinessException("anomaly task request must not be null");
         }
         request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        requireTaskName(request.getTaskName());
+        request.setStatus(normalizeTaskStatus(request.getStatus()));
         validateDetectObjects(request);
-        if (request.getMethods() != null) {
-            for (String method : request.getMethods()) {
-                validateDetectMethod(method);
-            }
+        if (request.getMethods() == null || request.getMethods().isEmpty()) {
+            throw new BusinessException("methods must not be empty");
+        }
+        requireUniqueIdentifiers(request.getMethods(), "methods");
+        for (String method : request.getMethods()) {
+            validateDetectMethod(method);
         }
         cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
         String taskId = request == null || request.getTaskId() == null
                 ? generateTaskId(request)
                 : request.getTaskId();
+        ensureUniqueTaskName(request.getProjectId(), request.getTaskName(), taskId);
+        TimeseriesAnomalyTask previous = snapshotTask(memoryCache
+                .getAnomalyTask(request.getProjectId(), taskId).orElse(null));
 
         String user = CurrentAuditUser.username();
         TimeseriesAnomalyTask entity = memoryCache.computeAnomalyTask(
@@ -103,8 +121,13 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
             return e;
         });
 
+        try {
+            syncAnomalyTaskToAnomalyService(entity.getProjectId(), taskId);
+        } catch (RuntimeException exception) {
+            restoreTaskCache(entity.getProjectId(), taskId, previous);
+            throw exception;
+        }
         anomalyTaskMapper.insert(entity);
-        syncAnomalyTaskToAnomalyService(taskId);
         return taskId;
     }
 
@@ -128,11 +151,17 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
 
     @Override
     public void updateAnomalyTaskStatus(TaskStatusUpdateRequest request) {
-        if (request == null || request.getTaskId() == null) {
-            return;
+        if (request == null || request.getTaskId() == null || request.getTaskId().isBlank()) {
+            throw new BusinessException("taskId must not be empty");
         }
         request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        request.setStatus(requireTaskStatus(request.getStatus()));
         cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
+        TimeseriesAnomalyTask previous = snapshotTask(memoryCache
+                .getAnomalyTask(request.getProjectId(), request.getTaskId()).orElse(null));
+        if (previous == null) {
+            throw new BusinessException("anomaly task not found: " + request.getTaskId());
+        }
         String user = CurrentAuditUser.username();
         TimeseriesAnomalyTask entity = memoryCache.computeAnomalyTask(
                 request.getProjectId(), request.getTaskId(), existing -> {
@@ -154,8 +183,14 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
             return e;
         });
 
+        try {
+            DownstreamSyncValidator.requireSuccess("Analysis",
+                    anomalyGrpcClient.updateAnomalyTaskStatus(entity.getProjectId(), request.getTaskId(), request.getStatus()));
+        } catch (RuntimeException exception) {
+            restoreTaskCache(entity.getProjectId(), request.getTaskId(), previous);
+            throw exception;
+        }
         anomalyTaskMapper.updateById(entity);
-        anomalyGrpcClient.updateAnomalyTaskStatus(entity.getProjectId(), request.getTaskId(), request.getStatus());
     }
 
     /**
@@ -182,6 +217,7 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
         if (request == null || request.getSequenceIds() == null || request.getSequenceIds().isEmpty()) {
             throw new BusinessException("sequenceIds must not be empty");
         }
+        requireUniqueIdentifiers(request.getSequenceIds(), "sequenceIds");
         cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
         for (String sequenceId : request.getSequenceIds()) {
             TimeseriesInstanceConfig instance = memoryCache.getInstanceBySequenceId(request.getProjectId(), sequenceId);
@@ -193,6 +229,7 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
             }
         }
         if (request.getConstraintIds() != null && !request.getConstraintIds().isEmpty()) {
+            requireUniqueIdentifiers(request.getConstraintIds(), "constraintIds");
             cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
             for (String constraintId : request.getConstraintIds()) {
                 TimeseriesConstraint constraint = memoryCache.getConstraint(request.getProjectId(), constraintId).orElse(null);
@@ -247,11 +284,99 @@ public class TimeseriesAnomalyTaskServiceImpl implements TimeseriesAnomalyTaskSe
                 && "CONFIRMED".equalsIgnoreCase(constraint.getConfirmStatus());
     }
 
+    private void requireTaskName(String taskName) {
+        if (taskName == null || taskName.isBlank()) {
+            throw new BusinessException("taskName must not be empty");
+        }
+    }
+
+    private String requireTaskStatus(String status) {
+        String normalized = normalizeTaskStatus(status);
+        if (normalized == null) {
+            throw new BusinessException("task status must not be empty");
+        }
+        return normalized;
+    }
+
+    private String normalizeTaskStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return null;
+        }
+        return switch (status.trim().toUpperCase()) {
+            case "ENABLE", "ENABLED" -> "ENABLED";
+            case "DISABLE", "DISABLED" -> "DISABLED";
+            case "ERROR" -> "ERROR";
+            default -> throw new BusinessException("unsupported task status: " + status
+                    + " (expected ENABLED/DISABLED/ERROR)");
+        };
+    }
+
+    private void requireUniqueIdentifiers(List<String> values, String fieldName) {
+        Set<String> identifiers = new java.util.HashSet<>();
+        for (String value : values) {
+            if (value == null || value.isBlank()) {
+                throw new BusinessException(fieldName + " must not contain empty values");
+            }
+            if (!identifiers.add(value)) {
+                throw new BusinessException(fieldName + " contains duplicate value: " + value);
+            }
+        }
+    }
+
+    private void ensureUniqueTaskName(String projectId, String taskName, String taskId) {
+        boolean duplicated = memoryCache.listAnomalyTasks(projectId).stream()
+                .anyMatch(item -> !Objects.equals(taskId, item.getTaskId())
+                        && taskName.equalsIgnoreCase(item.getTaskName()));
+        if (duplicated) {
+            throw new BusinessException("anomaly taskName already exists: " + taskName);
+        }
+    }
+
+    private void requireExistingTask(AnomalyTaskSaveRequest request) {
+        if (request == null || request.getTaskId() == null || request.getTaskId().isBlank()) {
+            throw new BusinessException("taskId must be provided when updating an anomaly task");
+        }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
+        if (memoryCache.getAnomalyTask(request.getProjectId(), request.getTaskId()).isEmpty()) {
+            throw new BusinessException("anomaly task not found: " + request.getTaskId());
+        }
+    }
+
+    private TimeseriesAnomalyTask snapshotTask(TimeseriesAnomalyTask source) {
+        if (source == null) {
+            return null;
+        }
+        TimeseriesAnomalyTask snapshot = new TimeseriesAnomalyTask();
+        BeanUtils.copyProperties(source, snapshot);
+        snapshot.setSequenceIds(source.getSequenceIds() == null ? null : List.copyOf(source.getSequenceIds()));
+        snapshot.setMethods(source.getMethods() == null ? null : List.copyOf(source.getMethods()));
+        snapshot.setConstraintIds(source.getConstraintIds() == null ? null : List.copyOf(source.getConstraintIds()));
+        return snapshot;
+    }
+
+    private void restoreTaskCache(String projectId, String taskId, TimeseriesAnomalyTask previous) {
+        List<TimeseriesAnomalyTask> restored = new java.util.ArrayList<>(memoryCache.listAnomalyTasks());
+        restored.removeIf(item -> Objects.equals(projectId, item.getProjectId())
+                && Objects.equals(taskId, item.getTaskId()));
+        if (previous != null) {
+            restored.add(previous);
+        }
+        memoryCache.replaceAnomalyTasks(restored);
+    }
+
     @Override
     public void syncAnomalyTaskToAnomalyService(String taskId) {
         if (taskId == null) return;
         cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
-        memoryCache.getAnomalyTask(taskId).ifPresent(anomalyGrpcClient::syncAnomalyTask);
+        memoryCache.getAnomalyTask(taskId).ifPresent(task ->
+                DownstreamSyncValidator.requireSuccess("Analysis", anomalyGrpcClient.syncAnomalyTask(task)));
+    }
+
+    private void syncAnomalyTaskToAnomalyService(String projectId, String taskId) {
+        cacheManager.ensureTableLoaded(CachedTable.ANOMALY_TASK);
+        memoryCache.getAnomalyTask(projectId, taskId).ifPresent(task ->
+                DownstreamSyncValidator.requireSuccess("Analysis", anomalyGrpcClient.syncAnomalyTask(task)));
     }
 
     private String generateTaskId(AnomalyTaskSaveRequest request) {

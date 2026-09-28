@@ -52,6 +52,8 @@ public class TimeseriesMemoryCache {
     private final Map<String, List<TimeseriesRelation>> relationsByTargetSequenceId = new ConcurrentHashMap<>();
     private final Map<String, List<TimeseriesRelation>> relationsBySourceSequenceId = new ConcurrentHashMap<>();
     private final Map<String, TimeseriesEvent> eventsByEventId = new ConcurrentHashMap<>();
+    private final Map<String, TimeseriesAnomalyResult> anomalyResultByResultId = new ConcurrentHashMap<>();
+    private final Map<String, TimeseriesForecastResult> forecastResultByResultId = new ConcurrentHashMap<>();
     private final Map<String, List<TimeseriesAnomalyResult>> anomalyResultsByTaskId = new ConcurrentHashMap<>();
     private final Map<String, List<TimeseriesForecastResult>> forecastResultsByTaskId = new ConcurrentHashMap<>();
 
@@ -88,8 +90,8 @@ public class TimeseriesMemoryCache {
             case EVENT -> { events.clear(); clearProjectTable(bucket -> bucket.events.clear()); eventsByEventId.clear(); }
             case ANOMALY_TASK -> { anomalyTasks.clear(); clearProjectTable(bucket -> bucket.anomalyTasks.clear()); }
             case FORECAST_TASK -> { forecastTasks.clear(); clearProjectTable(bucket -> bucket.forecastTasks.clear()); }
-            case ANOMALY_RESULT -> { anomalyResults.clear(); clearProjectTable(bucket -> bucket.anomalyResults.clear()); anomalyResultsByTaskId.clear(); }
-            case FORECAST_RESULT -> { forecastResults.clear(); clearProjectTable(bucket -> bucket.forecastResults.clear()); forecastResultsByTaskId.clear(); }
+            case ANOMALY_RESULT -> { anomalyResults.clear(); clearProjectTable(bucket -> bucket.anomalyResults.clear()); anomalyResultByResultId.clear(); anomalyResultsByTaskId.clear(); }
+            case FORECAST_RESULT -> { forecastResults.clear(); clearProjectTable(bucket -> bucket.forecastResults.clear()); forecastResultByResultId.clear(); forecastResultsByTaskId.clear(); }
             case SYNC_LOG -> { syncLogs.clear(); clearProjectTable(bucket -> bucket.syncLogs.clear()); }
         }
         markUnloaded(table);
@@ -663,7 +665,7 @@ public class TimeseriesMemoryCache {
             replaceAll(anomalyResults, entities);
             rebuildProjectTable(entities, bucket -> bucket.anomalyResults,
                     bucket -> bucket.anomalyResults.clear(), TimeseriesAnomalyResult::getProjectId);
-            rebuildAnomalyResultsByTaskId();
+            rebuildAnomalyResultIndexes();
             markLoaded(CachedTable.ANOMALY_RESULT);
         }
     }
@@ -676,7 +678,7 @@ public class TimeseriesMemoryCache {
                 upsertProjectBucket(entity, bucket -> bucket.anomalyResults,
                         item -> sameProject(entity.getProjectId(), item.getProjectId())
                                 && entity.getResultId().equals(item.getResultId()));
-                rebuildAnomalyResultsByTaskId();
+                rebuildAnomalyResultIndexes();
                 markLoaded(CachedTable.ANOMALY_RESULT);
             }
         }
@@ -690,12 +692,21 @@ public class TimeseriesMemoryCache {
         return projectBucketContents(projectId, bucket -> bucket.anomalyResults);
     }
 
+    public Optional<TimeseriesAnomalyResult> getAnomalyResult(String projectId, String resultId) {
+        if (resultId == null) {
+            return Optional.empty();
+        }
+        TimeseriesAnomalyResult result = anomalyResultByResultId.get(cacheKey(projectId, resultId));
+        return result != null && sameProject(projectId, result.getProjectId())
+                ? Optional.of(result) : Optional.empty();
+    }
+
     public void replaceForecastResults(Collection<TimeseriesForecastResult> entities) {
         synchronized (forecastResultLock) {
             replaceAll(forecastResults, entities);
             rebuildProjectTable(entities, bucket -> bucket.forecastResults,
                     bucket -> bucket.forecastResults.clear(), TimeseriesForecastResult::getProjectId);
-            rebuildForecastResultsByTaskId();
+            rebuildForecastResultIndexes();
             markLoaded(CachedTable.FORECAST_RESULT);
         }
     }
@@ -708,7 +719,7 @@ public class TimeseriesMemoryCache {
                 upsertProjectBucket(entity, bucket -> bucket.forecastResults,
                         item -> sameProject(entity.getProjectId(), item.getProjectId())
                                 && entity.getResultId().equals(item.getResultId()));
-                rebuildForecastResultsByTaskId();
+                rebuildForecastResultIndexes();
                 markLoaded(CachedTable.FORECAST_RESULT);
             }
         }
@@ -720,6 +731,15 @@ public class TimeseriesMemoryCache {
 
     public List<TimeseriesForecastResult> listForecastResults(String projectId) {
         return projectBucketContents(projectId, bucket -> bucket.forecastResults);
+    }
+
+    public Optional<TimeseriesForecastResult> getForecastResult(String projectId, String resultId) {
+        if (resultId == null) {
+            return Optional.empty();
+        }
+        TimeseriesForecastResult result = forecastResultByResultId.get(cacheKey(projectId, resultId));
+        return result != null && sameProject(projectId, result.getProjectId())
+                ? Optional.of(result) : Optional.empty();
     }
 
     public void replaceSyncLogs(Collection<TimeseriesSyncLog> entities) {
@@ -991,6 +1011,16 @@ public class TimeseriesMemoryCache {
         }
     }
 
+    private void rebuildAnomalyResultIndexes() {
+        anomalyResultByResultId.clear();
+        anomalyResults.forEach(result -> {
+            if (result.getResultId() != null) {
+                anomalyResultByResultId.put(cacheKey(result.getProjectId(), result.getResultId()), result);
+            }
+        });
+        rebuildAnomalyResultsByTaskId();
+    }
+
     private void rebuildAnomalyResultsByTaskId() {
         anomalyResultsByTaskId.clear();
         anomalyResults.forEach(r -> {
@@ -1006,6 +1036,16 @@ public class TimeseriesMemoryCache {
                 });
             }
         });
+    }
+
+    private void rebuildForecastResultIndexes() {
+        forecastResultByResultId.clear();
+        forecastResults.forEach(result -> {
+            if (result.getResultId() != null) {
+                forecastResultByResultId.put(cacheKey(result.getProjectId(), result.getResultId()), result);
+            }
+        });
+        rebuildForecastResultsByTaskId();
     }
 
     private void rebuildForecastResultsByTaskId() {

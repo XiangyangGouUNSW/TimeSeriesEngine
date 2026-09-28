@@ -730,6 +730,57 @@ tr.clickable {
   color: #333;
 }
 
+/* 配置写入期间覆盖整个页面，避免重复提交或切换项目。 */
+.configuration-lock {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.28);
+  cursor: wait;
+}
+
+.configuration-lock-panel {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: min(360px, 100%);
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 16px 38px rgba(15, 23, 42, 0.2);
+}
+
+.configuration-lock-panel strong {
+  display: block;
+  font-size: 15px;
+}
+
+.configuration-lock-panel p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.configuration-spinner {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  border: 3px solid #dbe6fa;
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: configuration-spin 0.8s linear infinite;
+}
+
+@keyframes configuration-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (max-width: 720px) {
   .project-current,
   .project-create {

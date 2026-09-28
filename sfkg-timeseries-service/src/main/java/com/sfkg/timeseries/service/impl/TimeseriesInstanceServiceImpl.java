@@ -14,6 +14,7 @@ import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.common.DownstreamSyncValidator;
 import com.sfkg.timeseries.auth.CurrentAuditUser;
 import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.common.SemanticId;
@@ -31,6 +32,8 @@ import com.sfkg.timeseries.vo.InstanceConfigVO;
 public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService {
 
     private static final Set<String> VALID_DATA_TYPES = Set.of("double", "int64", "bool", "string");
+    private static final Set<String> VALID_SERIES_KINDS = Set.of("CONTINUOUS", "DISCRETE", "CATEGORICAL");
+    private static final Set<String> VALID_ACCESS_STATUSES = Set.of("ENABLE", "DISABLE", "ENABLED", "DISABLED");
 
     private final TimeseriesInstanceConfigMapper instanceConfigMapper;
     private final TimeseriesMemoryCache memoryCache;
@@ -50,10 +53,15 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
 
     @Override
     public String saveInstanceConfig(InstanceConfigSaveRequest request) {
+        requireExistingInstance(request);
         return doSaveInstanceConfig(request);
     }
 
     public String createInstanceConfig(InstanceConfigSaveRequest request) {
+        if (request == null) {
+            throw new BusinessException("instance config request must not be null");
+        }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
         cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
         // check duplicate by instanceName if provided
         if (request != null && request.getInstanceName() != null && !request.getInstanceName().isBlank()) {
@@ -63,6 +71,10 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
             if (dup) {
                 throw new BusinessException("instance already exists: " + request.getInstanceName());
             }
+        }
+        if (request.getSequenceId() != null && !request.getSequenceId().isBlank()
+                && memoryCache.getInstanceBySequenceId(request.getProjectId(), request.getSequenceId()) != null) {
+            throw new BusinessException("sequenceId already exists: " + request.getSequenceId());
         }
         // sequenceId optional — auto-generate if not provided
         return doSaveInstanceConfig(request);
@@ -90,10 +102,22 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
                     + " (expected double/int64/bool/string)");
         }
         validateCategory(request.getProjectId(), request.getCategoryId());
+        TimeseriesCategory category = memoryCache.getCategory(request.getProjectId(), request.getCategoryId())
+                .orElseThrow(() -> new BusinessException("category not found: " + request.getCategoryId()));
+        if (!"CONFIRMED".equalsIgnoreCase(category.getConfirmStatus())) {
+            throw new BusinessException("instance category must be CONFIRMED: " + request.getCategoryId());
+        }
+        if (!request.getDataType().trim().equalsIgnoreCase(category.getDataType())) {
+            throw new BusinessException("instance dataType must match category dataType: " + request.getCategoryId());
+        }
+        validateOptionalEnum("seriesKind", request.getSeriesKind(), VALID_SERIES_KINDS);
+        validateOptionalEnum("accessStatus", request.getAccessStatus(), VALID_ACCESS_STATUSES);
         cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
         String sequenceId = request.getSequenceId() == null
                 ? generateSequenceId(request)
                 : request.getSequenceId();
+        TimeseriesInstanceConfig previous = snapshotInstance(memoryCache
+                .getInstanceConfig(request.getProjectId(), sequenceId).orElse(null));
 
         String user = CurrentAuditUser.username();
         TimeseriesInstanceConfig entity = memoryCache.computeInstanceConfig(
@@ -120,31 +144,36 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
             return e;
         });
 
-        instanceConfigMapper.insert(entity);
-        coreGrpcClient.syncInstanceConfig(entity);
+        try {
+            DownstreamSyncValidator.requireSuccess("Core", coreGrpcClient.syncInstanceConfig(entity));
 
-        // Re-sync relations that reference this instance's category (for category-level expansion)
-        if (entity.getCategoryId() != null) {
-            cacheManager.ensureTableLoaded(CachedTable.RELATION);
-            for (TimeseriesRelation rel : memoryCache.listRelations().stream()
-                    .filter(rel -> Objects.equals(entity.getProjectId(), rel.getProjectId())).toList()) {
-                boolean matches = entity.getCategoryId().equals(rel.getTargetSequenceId());
-                if (!matches && rel.getSourceSequences() != null) {
-                    matches = rel.getSourceSequences().contains(entity.getCategoryId());
+            // Re-sync relations that reference this instance's category (for category-level expansion)
+            if (entity.getCategoryId() != null) {
+                cacheManager.ensureTableLoaded(CachedTable.RELATION);
+                for (TimeseriesRelation rel : memoryCache.listRelations().stream()
+                        .filter(rel -> Objects.equals(entity.getProjectId(), rel.getProjectId())).toList()) {
+                    boolean matches = entity.getCategoryId().equals(rel.getTargetSequenceId());
+                    if (!matches && rel.getSourceSequences() != null) {
+                        matches = rel.getSourceSequences().contains(entity.getCategoryId());
+                    }
+                    if (matches) {
+                        DownstreamSyncValidator.requireSuccess("Core", coreGrpcClient.syncRelationConfig(rel));
+                    }
                 }
-                if (matches) {
-                    coreGrpcClient.syncRelationConfig(rel);
+                // Re-sync constraints whose variableMapping references this categoryId
+                cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
+                for (TimeseriesConstraint c : memoryCache.listConstraints().stream()
+                        .filter(c -> Objects.equals(entity.getProjectId(), c.getProjectId())).toList()) {
+                    if (c.getVariableMapping() != null && c.getVariableMapping().containsValue(entity.getCategoryId())) {
+                        DownstreamSyncValidator.requireSuccess("Core", coreGrpcClient.syncConstraintConfig(c));
+                    }
                 }
             }
-            // Re-sync constraints whose variableMapping references this categoryId
-            cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
-            for (TimeseriesConstraint c : memoryCache.listConstraints().stream()
-                    .filter(c -> Objects.equals(entity.getProjectId(), c.getProjectId())).toList()) {
-                if (c.getVariableMapping() != null && c.getVariableMapping().containsValue(entity.getCategoryId())) {
-                    coreGrpcClient.syncConstraintConfig(c);
-                }
-            }
+        } catch (RuntimeException exception) {
+            restoreInstanceCache(entity.getProjectId(), sequenceId, previous);
+            throw exception;
         }
+        instanceConfigMapper.insert(entity);
 
         return sequenceId;
     }
@@ -220,6 +249,36 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
         return deviceInstanceId == null ? null : "device-" + deviceInstanceId;
     }
 
+    private void requireExistingInstance(InstanceConfigSaveRequest request) {
+        if (request == null || request.getSequenceId() == null || request.getSequenceId().isBlank()) {
+            throw new BusinessException("sequenceId must be provided when updating an instance");
+        }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
+        if (memoryCache.getInstanceConfig(request.getProjectId(), request.getSequenceId()).isEmpty()) {
+            throw new BusinessException("instance not found: " + request.getSequenceId());
+        }
+    }
+
+    private TimeseriesInstanceConfig snapshotInstance(TimeseriesInstanceConfig source) {
+        if (source == null) {
+            return null;
+        }
+        TimeseriesInstanceConfig snapshot = new TimeseriesInstanceConfig();
+        BeanUtils.copyProperties(source, snapshot);
+        return snapshot;
+    }
+
+    private void restoreInstanceCache(String projectId, String sequenceId, TimeseriesInstanceConfig previous) {
+        List<TimeseriesInstanceConfig> restored = new java.util.ArrayList<>(memoryCache.listInstanceConfigs());
+        restored.removeIf(item -> Objects.equals(projectId, item.getProjectId())
+                && Objects.equals(sequenceId, item.getSequenceId()));
+        if (previous != null) {
+            restored.add(previous);
+        }
+        memoryCache.replaceInstanceConfigs(restored);
+    }
+
     private InstanceConfigVO toVO(TimeseriesInstanceConfig entity) {
         InstanceConfigVO vo = new InstanceConfigVO();
         BeanUtils.copyProperties(entity, vo);
@@ -243,5 +302,11 @@ public class TimeseriesInstanceServiceImpl implements TimeseriesInstanceService 
 
     private boolean equalsTextIfPresent(String expected, String actual) {
         return expected == null || (actual != null && expected.equalsIgnoreCase(actual));
+    }
+
+    private void validateOptionalEnum(String field, String value, Set<String> supported) {
+        if (value != null && !value.isBlank() && !supported.contains(value.trim().toUpperCase())) {
+            throw new BusinessException("unsupported " + field + ": " + value + ", expected " + supported);
+        }
     }
 }

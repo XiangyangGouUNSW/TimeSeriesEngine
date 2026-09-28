@@ -8,6 +8,9 @@ import org.springframework.stereotype.Service;
 import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.ForecastGrpcClient;
+import com.sfkg.timeseries.cache.CachedTable;
+import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.dto.ForecastResultQueryRequest;
 import com.sfkg.timeseries.entity.TimeseriesEvent;
 import com.sfkg.timeseries.mapper.TimeseriesEventMapper;
@@ -35,6 +38,7 @@ public class TimeseriesForecastResultServiceImpl implements TimeseriesForecastRe
 
     @Override
     public ForecastResultVO queryForecastResults(ForecastResultQueryRequest request) {
+        validateQuery(request);
         return forecastGrpcClient.queryForecastResult(request);
     }
 
@@ -113,5 +117,26 @@ public class TimeseriesForecastResultServiceImpl implements TimeseriesForecastRe
 
     private boolean beforeOrEqual(LocalDateTime endTime, LocalDateTime actual) {
         return endTime == null || (actual != null && !actual.isAfter(endTime));
+    }
+
+    private void validateQuery(ForecastResultQueryRequest request) {
+        if (request == null) {
+            throw new BusinessException("forecast result query must not be null");
+        }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        if (request.getTaskId() == null || request.getTaskId().isBlank()
+                || request.getSequenceId() == null || request.getSequenceId().isBlank()) {
+            throw new BusinessException("forecast result query requires taskId and sequenceId");
+        }
+        if (request.getStartTime() != null && request.getEndTime() != null
+                && request.getStartTime().isAfter(request.getEndTime())) {
+            throw new BusinessException("forecast result query startTime must be before endTime");
+        }
+        cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
+        cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
+        if (memoryCache.getForecastTask(request.getProjectId(), request.getTaskId()).isEmpty()
+                || memoryCache.getInstanceBySequenceId(request.getProjectId(), request.getSequenceId()) == null) {
+            throw new BusinessException("forecast result query taskId or sequenceId does not belong to project");
+        }
     }
 }

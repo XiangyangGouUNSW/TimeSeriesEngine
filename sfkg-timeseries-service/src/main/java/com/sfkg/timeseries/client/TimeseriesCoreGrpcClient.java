@@ -17,7 +17,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.common.IngestPointValueValidator;
 import com.sfkg.timeseries.common.ProjectIdValidator;
+import com.sfkg.timeseries.common.ServiceTime;
 import com.sfkg.timeseries.config.GrpcClientProperties;
+import com.sfkg.timeseries.config.RetryPolicyProperties;
 import com.sfkg.timeseries.dto.DerivedSeriesConfigSaveRequest;
 import com.sfkg.timeseries.dto.DerivedSeriesConfigSaveRequest.DerivedExpressionDTO;
 import com.sfkg.timeseries.dto.DerivedSeriesConfigSaveRequest.LinearTermDTO;
@@ -95,18 +97,24 @@ public class TimeseriesCoreGrpcClient {
     private final GrpcChannelRegistry channelRegistry;
     private final TimeseriesConstraintExpansionResolver constraintExpansionResolver;
     private final TimeseriesRelationExpansionResolver relationExpansionResolver;
+    private final GrpcRetryExecutor retryExecutor;
+    private final RetryPolicyProperties retryPolicyProperties;
 
     public TimeseriesCoreGrpcClient(GrpcClientProperties grpcClientProperties, ObjectMapper objectMapper,
                                     TimeseriesMemoryCache memoryCache,
                                     GrpcChannelRegistry channelRegistry,
                                     TimeseriesConstraintExpansionResolver constraintExpansionResolver,
-                                    TimeseriesRelationExpansionResolver relationExpansionResolver) {
+                                    TimeseriesRelationExpansionResolver relationExpansionResolver,
+                                    GrpcRetryExecutor retryExecutor,
+                                    RetryPolicyProperties retryPolicyProperties) {
         this.grpcClientProperties = grpcClientProperties;
         this.objectMapper = objectMapper;
         this.memoryCache = memoryCache;
         this.channelRegistry = channelRegistry;
         this.constraintExpansionResolver = constraintExpansionResolver;
         this.relationExpansionResolver = relationExpansionResolver;
+        this.retryExecutor = retryExecutor;
+        this.retryPolicyProperties = retryPolicyProperties;
     }
 
     // ── instance config ────────────────────────────────────────────────
@@ -296,6 +304,9 @@ public class TimeseriesCoreGrpcClient {
             RuntimeRelationConfig.Builder rb = RuntimeRelationConfig.newBuilder()
                     .setRelationId(pair.relationId())
                     .setTargetSequenceId(nullToEmpty(pair.targetSequenceId()))
+                    // 必须转小写：C 端 statistics_service.cpp 用
+                    // relation.relation_type != "correlation" 做精确匹配，大写会被判为
+                    // FAILED_PRECONDITION。P 端收到后自己 .upper() 归一化，两端都能识别。
                     .setRelationType(nullToEmpty(relation.getRelationType()).toLowerCase())
                     .setConfidence(relation.getConfidence() != null ? relation.getConfidence().doubleValue() : 0.0)
                     .setProjectId(nullToEmpty(relation.getProjectId()))
@@ -565,8 +576,10 @@ public class TimeseriesCoreGrpcClient {
     private SyncResult callCoreIngest(String address, IngestDataRequest req) {
         ManagedChannel channel = channelRegistry.getChannel(address);
         try {
+            // IngestBufferPool owns persisted retries. Keep this call to one
+            // attempt so its sender threads are never blocked by retry sleeps.
             IngestDataResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
-                    .withDeadlineAfter(5, TimeUnit.SECONDS)
+                    .withDeadlineAfter(retryPolicyProperties.getResponseTimeoutMillis(), TimeUnit.MILLISECONDS)
                     .ingestData(req);
             OperationResult op = resp.getOperation();
             boolean success = op.getCode() == OperationCode.OPERATION_CODE_OK
@@ -574,9 +587,9 @@ public class TimeseriesCoreGrpcClient {
             LOG.info("[{}] <- ingestData code={} success={} failed={} msg={}",
                     SERVICE_NAME, op.getCode(), op.getSuccessCount(), op.getFailedCount(), op.getMessage());
             return SyncResult.of(success, op.getMessage());
-        } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] <- ingestData FAILED: code={} desc={}", SERVICE_NAME, e.getStatus().getCode(), e.getStatus().getDescription());
-            return SyncResult.fail(e.getStatus().getDescription());
+        } catch (StatusRuntimeException exception) {
+            LOG.warn("[{}] ingestData transport failure: {}", SERVICE_NAME, exception.getStatus());
+            return SyncResult.fail("Core ingest unavailable: " + exception.getStatus().getCode());
         }
     }
 
@@ -594,10 +607,10 @@ public class TimeseriesCoreGrpcClient {
         QueryHistoryDataRequest.Builder reqBuilder = QueryHistoryDataRequest.newBuilder();
         reqBuilder.addAllSequenceIds(resolveQuerySequenceIds(request));
         if (request.getStartTime() != null) {
-            reqBuilder.setStartTime(request.getStartTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+            reqBuilder.setStartTime(request.getStartTime().atZone(ServiceTime.ZONE_ID).toInstant().toEpochMilli());
         }
         if (request.getEndTime() != null) {
-            reqBuilder.setEndTime(request.getEndTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+            reqBuilder.setEndTime(request.getEndTime().atZone(ServiceTime.ZONE_ID).toInstant().toEpochMilli());
         }
         if (request.getGranularity() != null) {
             reqBuilder.setGranularity(request.getGranularity());
@@ -608,9 +621,10 @@ public class TimeseriesCoreGrpcClient {
 
         ManagedChannel channel = channelRegistry.getChannel(address);
         try {
-            QueryHistoryDataResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
-                    .withDeadlineAfter(5, TimeUnit.SECONDS)
-                    .queryHistoryData(req);
+            QueryHistoryDataResponse resp = retryExecutor.execute("Core", "queryHistoryData", () ->
+                    TimeseriesCoreServiceGrpc.newBlockingStub(channel)
+                            .withDeadlineAfter(retryPolicyProperties.getResponseTimeoutMillis(), TimeUnit.MILLISECONDS)
+                            .queryHistoryData(req));
             OperationResult op = resp.getOperation();
             LOG.info("[{}] <- queryHistoryData code={} points={}",
                     SERVICE_NAME, op.getCode(), resp.getData().getPointsCount());
@@ -625,9 +639,8 @@ public class TimeseriesCoreGrpcClient {
                         .collect(java.util.stream.Collectors.toList()));
             }
             return vo;
-        } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] queryHistoryData failed: code={} desc={}", SERVICE_NAME, e.getStatus().getCode(), e.getStatus().getDescription());
-            return new HistoryDataVO();
+        } catch (RuntimeException e) {
+            throw e;
         }
     }
 
@@ -636,7 +649,7 @@ public class TimeseriesCoreGrpcClient {
         dp.setProjectId(p.getProjectId());
         dp.setSequenceId(p.getSequenceId());
         dp.setTimestamp(p.getTime() > 0
-                ? java.time.LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(p.getTime()), java.time.ZoneId.systemDefault())
+                ? java.time.LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(p.getTime()), ServiceTime.ZONE_ID)
                 : null);
         if (p.hasValue()) {
             TimeseriesValue v = p.getValue();
@@ -663,10 +676,10 @@ public class TimeseriesCoreGrpcClient {
         QueryHistoryOverviewRequest.Builder b = QueryHistoryOverviewRequest.newBuilder();
         b.addAllSequenceIds(resolveQuerySequenceIds(request));
         if (request != null && request.getStartTime() != null) {
-            b.setStartTime(request.getStartTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+            b.setStartTime(request.getStartTime().atZone(ServiceTime.ZONE_ID).toInstant().toEpochMilli());
         }
         if (request != null && request.getEndTime() != null) {
-            b.setEndTime(request.getEndTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+            b.setEndTime(request.getEndTime().atZone(ServiceTime.ZONE_ID).toInstant().toEpochMilli());
         }
         if (request != null) {
             b.setProjectId(nullToEmpty(request.getProjectId()));
@@ -674,9 +687,10 @@ public class TimeseriesCoreGrpcClient {
         LOG.info("[{}] -> queryHistoryOverview at {}", SERVICE_NAME, address);
         ManagedChannel channel = channelRegistry.getChannel(address);
         try {
-            QueryHistoryOverviewResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
-                    .withDeadlineAfter(5, TimeUnit.SECONDS)
-                    .queryHistoryOverview(b.build());
+            QueryHistoryOverviewResponse resp = retryExecutor.execute("Core", "queryHistoryOverview", () ->
+                    TimeseriesCoreServiceGrpc.newBlockingStub(channel)
+                            .withDeadlineAfter(retryPolicyProperties.getResponseTimeoutMillis(), TimeUnit.MILLISECONDS)
+                            .queryHistoryOverview(b.build()));
             HistoryOverview overview = resp.getOverview();
             Map<String, Object> result = new java.util.LinkedHashMap<>();
             result.put("totalPointCount", overview.getTotalPointCount());
@@ -694,9 +708,8 @@ public class TimeseriesCoreGrpcClient {
             }).collect(java.util.stream.Collectors.toList()));
             LOG.info("[{}] <- queryHistoryOverview total={} seqs={}", SERVICE_NAME, overview.getTotalPointCount(), overview.getSequenceCount());
             return result;
-        } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] queryHistoryOverview failed: code={} desc={}", SERVICE_NAME, e.getStatus().getCode(), e.getStatus().getDescription());
-            return Map.of("error", e.getStatus().getDescription());
+        } catch (RuntimeException e) {
+            throw e;
         }
     }
 
@@ -710,10 +723,10 @@ public class TimeseriesCoreGrpcClient {
         QueryWindowDataRequest.Builder b = QueryWindowDataRequest.newBuilder();
         b.addAllSequenceIds(resolveQuerySequenceIds(request));
         if (request != null && request.getStartTime() != null) {
-            b.setStartTime(request.getStartTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+            b.setStartTime(request.getStartTime().atZone(ServiceTime.ZONE_ID).toInstant().toEpochMilli());
         }
         if (request != null && request.getEndTime() != null) {
-            b.setEndTime(request.getEndTime().atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+            b.setEndTime(request.getEndTime().atZone(ServiceTime.ZONE_ID).toInstant().toEpochMilli());
         }
         if (request != null) {
             b.setProjectId(nullToEmpty(request.getProjectId()));
@@ -721,9 +734,10 @@ public class TimeseriesCoreGrpcClient {
         LOG.info("[{}] -> queryWindowData at {}", SERVICE_NAME, address);
         ManagedChannel channel = channelRegistry.getChannel(address);
         try {
-            QueryWindowDataResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
-                    .withDeadlineAfter(5, TimeUnit.SECONDS)
-                    .queryWindowData(b.build());
+            QueryWindowDataResponse resp = retryExecutor.execute("Core", "queryWindowData", () ->
+                    TimeseriesCoreServiceGrpc.newBlockingStub(channel)
+                            .withDeadlineAfter(retryPolicyProperties.getResponseTimeoutMillis(), TimeUnit.MILLISECONDS)
+                            .queryWindowData(b.build()));
             Map<String, Object> result = new java.util.LinkedHashMap<>();
             if (resp.hasData()) {
                 WindowData wd = resp.getData();
@@ -751,9 +765,8 @@ public class TimeseriesCoreGrpcClient {
             LOG.info("[{}] <- queryWindowData seqs={}", SERVICE_NAME,
                     resp.hasData() ? resp.getData().getSequencesCount() : 0);
             return result;
-        } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] queryWindowData failed: code={} desc={}", SERVICE_NAME, e.getStatus().getCode(), e.getStatus().getDescription());
-            return Map.of("error", e.getStatus().getDescription());
+        } catch (RuntimeException e) {
+            throw e;
         }
     }
 
@@ -783,10 +796,10 @@ public class TimeseriesCoreGrpcClient {
                 .addAllSequenceIds(ids)
                 .setProjectId(nullToEmpty(projectId));
         if (startTime != null) {
-            wq.setStartTime(startTime.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+            wq.setStartTime(startTime.atZone(ServiceTime.ZONE_ID).toInstant().toEpochMilli());
         }
         if (endTime != null) {
-            wq.setEndTime(endTime.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
+            wq.setEndTime(endTime.atZone(ServiceTime.ZONE_ID).toInstant().toEpochMilli());
         }
         AlignWindowDataRequest.Builder reqBuilder = AlignWindowDataRequest.newBuilder()
                 .setWindowQuery(wq.build())
@@ -801,7 +814,7 @@ public class TimeseriesCoreGrpcClient {
         ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             AlignWindowDataResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
-                    .withDeadlineAfter(5, TimeUnit.SECONDS)
+                    .withDeadlineAfter(retryPolicyProperties.getResponseTimeoutMillis(), TimeUnit.MILLISECONDS)
                     .alignWindowData(req);
             LOG.info("[{}] <- alignWindowData code={} msg={} samples={}",
                     SERVICE_NAME, resp.getOperation().getCode(), resp.getOperation().getMessage(),
@@ -847,7 +860,7 @@ public class TimeseriesCoreGrpcClient {
         ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             ComputeStatisticsResponse resp = TimeseriesCoreServiceGrpc.newBlockingStub(channel)
-                    .withDeadlineAfter(5, TimeUnit.SECONDS)
+                    .withDeadlineAfter(retryPolicyProperties.getResponseTimeoutMillis(), TimeUnit.MILLISECONDS)
                     .computeBasicStatistics(req);
             LOG.info("[{}] <- computeBasicStatistics code={} metrics={} hasCorrelation={}",
                     SERVICE_NAME, resp.getOperation().getCode(),
@@ -933,20 +946,17 @@ public class TimeseriesCoreGrpcClient {
 
     private SyncResult callCoreSync(String address, CoreSyncCall callable, String operation) {
         ManagedChannel channel = channelRegistry.getChannel(address);
-        try {
+        return retryExecutor.execute("Core", operation, () -> {
             SyncConfigResponse resp = callable.call(
                     TimeseriesCoreServiceGrpc.newBlockingStub(channel)
-                            .withDeadlineAfter(3, TimeUnit.SECONDS));
+                            .withDeadlineAfter(retryPolicyProperties.getResponseTimeoutMillis(), TimeUnit.MILLISECONDS));
             OperationResult op = resp.getOperation();
             boolean success = op.getCode() == OperationCode.OPERATION_CODE_OK
                     || op.getCode() == OperationCode.OPERATION_CODE_PARTIAL_SUCCESS;
             LOG.info("[{}] <- {} code={} success={} failed={} msg={}", SERVICE_NAME, operation,
                     op.getCode(), op.getSuccessCount(), op.getFailedCount(), op.getMessage());
             return SyncResult.of(success, op.getMessage());
-        } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] <- {} FAILED: code={} desc={}", SERVICE_NAME, operation, e.getStatus().getCode(), e.getStatus().getDescription());
-            return SyncResult.fail(e.getStatus().getDescription());
-        }
+        });
     }
 
     @FunctionalInterface

@@ -8,8 +8,11 @@ import java.util.List;
 
 import com.sfkg.timeseries.client.IngestBufferPool;
 import com.sfkg.timeseries.client.TimeseriesCoreGrpcClient;
+import com.sfkg.timeseries.cache.TimeseriesCacheManager;
+import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.common.BusinessException;
 import com.sfkg.timeseries.dto.TimeseriesDataSaveRequest;
+import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.monitor.IngestThroughputMonitor;
 import org.junit.jupiter.api.Test;
 
@@ -18,8 +21,10 @@ class TimeseriesDataServiceImplTests {
     private final TimeseriesCoreGrpcClient coreGrpcClient = mock(TimeseriesCoreGrpcClient.class);
     private final IngestBufferPool ingestBufferPool = mock(IngestBufferPool.class);
     private final IngestThroughputMonitor throughputMonitor = mock(IngestThroughputMonitor.class);
+    private final TimeseriesMemoryCache memoryCache = new TimeseriesMemoryCache();
+    private final TimeseriesCacheManager cacheManager = mock(TimeseriesCacheManager.class);
     private final TimeseriesDataServiceImpl service = new TimeseriesDataServiceImpl(
-            coreGrpcClient, ingestBufferPool, throughputMonitor);
+            coreGrpcClient, ingestBufferPool, throughputMonitor, memoryCache, cacheManager);
 
     @Test
     void rejectsWholeBatchBeforeBufferingWhenAnyPointHasNoValue() {
@@ -47,6 +52,16 @@ class TimeseriesDataServiceImplTests {
     }
 
     private TimeseriesDataSaveRequest requestWith(TimeseriesDataSaveRequest.IngestPointDTO... points) {
+        TimeseriesInstanceConfig instance = new TimeseriesInstanceConfig();
+        instance.setProjectId("project-a");
+        instance.setSequenceId("seq-a");
+        instance.setDataType("double");
+        memoryCache.putInstanceConfig(instance);
+        for (TimeseriesDataSaveRequest.IngestPointDTO point : points) {
+            point.setProjectId("project-a");
+            point.setSequenceId("seq-a");
+            point.setTime(1L);
+        }
         TimeseriesDataSaveRequest request = new TimeseriesDataSaveRequest();
         request.setProjectId("project-a");
         request.setPoints(List.of(points));

@@ -14,6 +14,7 @@ import com.sfkg.timeseries.cache.TimeseriesCacheManager;
 import com.sfkg.timeseries.cache.TimeseriesMemoryCache;
 import com.sfkg.timeseries.client.ForecastGrpcClient;
 import com.sfkg.timeseries.common.BusinessException;
+import com.sfkg.timeseries.common.DownstreamSyncValidator;
 import com.sfkg.timeseries.auth.CurrentAuditUser;
 import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.common.SemanticId;
@@ -48,6 +49,15 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
 
     @Override
     public String createForecastTask(ForecastTaskSaveRequest request) {
+        if (request == null) {
+            throw new BusinessException("forecast task request must not be null");
+        }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
+        if (request.getTaskName() != null && memoryCache.listForecastTasks(request.getProjectId()).stream()
+                .anyMatch(item -> request.getTaskName().equalsIgnoreCase(item.getTaskName()))) {
+            throw new BusinessException("forecast taskName already exists: " + request.getTaskName());
+        }
         String taskId = request != null ? request.getTaskId() : null;
         if (taskId != null) {
             cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
@@ -60,6 +70,7 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
 
     @Override
     public String saveForecastTask(ForecastTaskSaveRequest request) {
+        requireExistingTask(request);
         return doSaveForecastTask(request);
     }
 
@@ -68,12 +79,17 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
             throw new BusinessException("forecast task request must not be null");
         }
         request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        requireTaskName(request.getTaskName());
+        request.setStatus(normalizeTaskStatus(request.getStatus()));
         validateForecastObjects(request);
         validateForecastHorizon(request.getForecastHorizon());
         cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
         String taskId = request.getTaskId() == null
                 ? generateTaskId(request)
                 : request.getTaskId();
+        ensureUniqueTaskName(request.getProjectId(), request.getTaskName(), taskId);
+        TimeseriesForecastTask previous = snapshotTask(memoryCache
+                .getForecastTask(request.getProjectId(), taskId).orElse(null));
 
         String user = CurrentAuditUser.username();
         TimeseriesForecastTask entity = memoryCache.computeForecastTask(
@@ -98,8 +114,13 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
             return e;
         });
 
+        try {
+            syncForecastTaskToForecastService(entity.getProjectId(), taskId);
+        } catch (RuntimeException exception) {
+            restoreTaskCache(entity.getProjectId(), taskId, previous);
+            throw exception;
+        }
         forecastTaskMapper.insert(entity);
-        syncForecastTaskToForecastService(taskId);
         return taskId;
     }
 
@@ -123,11 +144,17 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
 
     @Override
     public void updateForecastTaskStatus(TaskStatusUpdateRequest request) {
-        if (request == null || request.getTaskId() == null) {
-            return;
+        if (request == null || request.getTaskId() == null || request.getTaskId().isBlank()) {
+            throw new BusinessException("taskId must not be empty");
         }
         request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        request.setStatus(requireTaskStatus(request.getStatus()));
         cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
+        TimeseriesForecastTask previous = snapshotTask(memoryCache
+                .getForecastTask(request.getProjectId(), request.getTaskId()).orElse(null));
+        if (previous == null) {
+            throw new BusinessException("forecast task not found: " + request.getTaskId());
+        }
         String user = CurrentAuditUser.username();
         TimeseriesForecastTask entity = memoryCache.computeForecastTask(
                 request.getProjectId(), request.getTaskId(), existing -> {
@@ -149,8 +176,14 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
             return e;
         });
 
+        try {
+            DownstreamSyncValidator.requireSuccess("Analysis",
+                    forecastGrpcClient.updateForecastTaskStatus(entity.getProjectId(), request.getTaskId(), request.getStatus()));
+        } catch (RuntimeException exception) {
+            restoreTaskCache(entity.getProjectId(), request.getTaskId(), previous);
+            throw exception;
+        }
         forecastTaskMapper.updateById(entity);
-        forecastGrpcClient.updateForecastTaskStatus(entity.getProjectId(), request.getTaskId(), request.getStatus());
     }
 
     private static final long MAX_FORECAST_HORIZON = 10_000;
@@ -160,6 +193,7 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
         if (request == null || request.getForecastObjects() == null || request.getForecastObjects().isEmpty()) {
             throw new BusinessException("forecastObjects must not be empty");
         }
+        requireUniqueIdentifiers(request.getForecastObjects(), "forecastObjects");
         cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
         Set<String> targetSet = request.getForecastObjects().stream()
                 .filter(Objects::nonNull)
@@ -174,6 +208,7 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
             }
         }
         if (request.getFeatureSequenceIds() != null) {
+            requireUniqueIdentifiers(request.getFeatureSequenceIds(), "featureSequenceIds");
             for (String featId : request.getFeatureSequenceIds()) {
                 if (featId != null && memoryCache.getInstanceBySequenceId(request.getProjectId(), featId) == null) {
                     throw new BusinessException("feature sequence not found: " + featId);
@@ -184,6 +219,7 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
             }
         }
         if (request.getConstraintIds() != null && !request.getConstraintIds().isEmpty()) {
+            requireUniqueIdentifiers(request.getConstraintIds(), "constraintIds");
             cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
             for (String constraintId : request.getConstraintIds()) {
                 TimeseriesConstraint constraint = memoryCache.getConstraint(request.getProjectId(), constraintId).orElse(null);
@@ -235,11 +271,100 @@ public class TimeseriesForecastTaskServiceImpl implements TimeseriesForecastTask
                 && "CONFIRMED".equalsIgnoreCase(constraint.getConfirmStatus());
     }
 
+    private void requireTaskName(String taskName) {
+        if (taskName == null || taskName.isBlank()) {
+            throw new BusinessException("taskName must not be empty");
+        }
+    }
+
+    private String requireTaskStatus(String status) {
+        String normalized = normalizeTaskStatus(status);
+        if (normalized == null) {
+            throw new BusinessException("task status must not be empty");
+        }
+        return normalized;
+    }
+
+    private String normalizeTaskStatus(String status) {
+        if (status == null || status.isBlank()) {
+            return null;
+        }
+        return switch (status.trim().toUpperCase()) {
+            case "ENABLE", "ENABLED" -> "ENABLED";
+            case "DISABLE", "DISABLED" -> "DISABLED";
+            case "ERROR" -> "ERROR";
+            default -> throw new BusinessException("unsupported task status: " + status
+                    + " (expected ENABLED/DISABLED/ERROR)");
+        };
+    }
+
+    private void requireUniqueIdentifiers(List<String> values, String fieldName) {
+        Set<String> identifiers = new java.util.HashSet<>();
+        for (String value : values) {
+            if (value == null || value.isBlank()) {
+                throw new BusinessException(fieldName + " must not contain empty values");
+            }
+            if (!identifiers.add(value)) {
+                throw new BusinessException(fieldName + " contains duplicate value: " + value);
+            }
+        }
+    }
+
+    private void ensureUniqueTaskName(String projectId, String taskName, String taskId) {
+        boolean duplicated = memoryCache.listForecastTasks(projectId).stream()
+                .anyMatch(item -> !Objects.equals(taskId, item.getTaskId())
+                        && taskName.equalsIgnoreCase(item.getTaskName()));
+        if (duplicated) {
+            throw new BusinessException("forecast taskName already exists: " + taskName);
+        }
+    }
+
+    private void requireExistingTask(ForecastTaskSaveRequest request) {
+        if (request == null || request.getTaskId() == null || request.getTaskId().isBlank()) {
+            throw new BusinessException("taskId must be provided when updating a forecast task");
+        }
+        request.setProjectId(ProjectIdValidator.require(request.getProjectId()));
+        cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
+        if (memoryCache.getForecastTask(request.getProjectId(), request.getTaskId()).isEmpty()) {
+            throw new BusinessException("forecast task not found: " + request.getTaskId());
+        }
+    }
+
+    private TimeseriesForecastTask snapshotTask(TimeseriesForecastTask source) {
+        if (source == null) {
+            return null;
+        }
+        TimeseriesForecastTask snapshot = new TimeseriesForecastTask();
+        BeanUtils.copyProperties(source, snapshot);
+        snapshot.setForecastObjects(source.getForecastObjects() == null ? null : List.copyOf(source.getForecastObjects()));
+        snapshot.setFeatureSequenceIds(source.getFeatureSequenceIds() == null
+                ? null : List.copyOf(source.getFeatureSequenceIds()));
+        snapshot.setConstraintIds(source.getConstraintIds() == null ? null : List.copyOf(source.getConstraintIds()));
+        return snapshot;
+    }
+
+    private void restoreTaskCache(String projectId, String taskId, TimeseriesForecastTask previous) {
+        List<TimeseriesForecastTask> restored = new java.util.ArrayList<>(memoryCache.listForecastTasks());
+        restored.removeIf(item -> Objects.equals(projectId, item.getProjectId())
+                && Objects.equals(taskId, item.getTaskId()));
+        if (previous != null) {
+            restored.add(previous);
+        }
+        memoryCache.replaceForecastTasks(restored);
+    }
+
     @Override
     public void syncForecastTaskToForecastService(String taskId) {
         if (taskId == null) return;
         cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
-        memoryCache.getForecastTask(taskId).ifPresent(forecastGrpcClient::syncForecastTask);
+        memoryCache.getForecastTask(taskId).ifPresent(task ->
+                DownstreamSyncValidator.requireSuccess("Analysis", forecastGrpcClient.syncForecastTask(task)));
+    }
+
+    private void syncForecastTaskToForecastService(String projectId, String taskId) {
+        cacheManager.ensureTableLoaded(CachedTable.FORECAST_TASK);
+        memoryCache.getForecastTask(projectId, taskId).ifPresent(task ->
+                DownstreamSyncValidator.requireSuccess("Analysis", forecastGrpcClient.syncForecastTask(task)));
     }
 
     private String generateTaskId(ForecastTaskSaveRequest request) {

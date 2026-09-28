@@ -1,6 +1,7 @@
 package com.sfkg.timeseries.client;
 
 import com.sfkg.timeseries.config.GrpcClientProperties;
+import com.sfkg.timeseries.config.RetryPolicyProperties;
 import com.sfkg.timeseries.dto.AnomalyResultQueryRequest;
 import com.sfkg.timeseries.dto.SyncResult;
 import com.sfkg.timeseries.entity.TimeseriesAnomalyTask;
@@ -23,7 +24,6 @@ import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
@@ -39,13 +39,19 @@ public class AnomalyGrpcClient {
     private final GrpcClientProperties grpcClientProperties;
     private final TimeseriesTaskContextResolver contextResolver;
     private final GrpcChannelRegistry channelRegistry;
+    private final GrpcRetryExecutor retryExecutor;
+    private final RetryPolicyProperties retryPolicyProperties;
 
     public AnomalyGrpcClient(GrpcClientProperties grpcClientProperties,
                              TimeseriesTaskContextResolver contextResolver,
-                             GrpcChannelRegistry channelRegistry) {
+                             GrpcChannelRegistry channelRegistry,
+                             GrpcRetryExecutor retryExecutor,
+                             RetryPolicyProperties retryPolicyProperties) {
         this.grpcClientProperties = grpcClientProperties;
         this.contextResolver = contextResolver;
         this.channelRegistry = channelRegistry;
+        this.retryExecutor = retryExecutor;
+        this.retryPolicyProperties = retryPolicyProperties;
     }
 
     public SyncResult syncAnomalyTask(TimeseriesAnomalyTask task) {
@@ -110,14 +116,14 @@ public class AnomalyGrpcClient {
         LOG.info("[{}] -> UpdateTaskStatus taskId={} status={} at {}", SERVICE_NAME, taskId, status, address);
         ManagedChannel channel = channelRegistry.getChannel(address);
         try {
-            TaskAck ack = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
-                    .withDeadlineAfter(5, TimeUnit.SECONDS)
-                    .updateTaskStatus(req);
+            TaskAck ack = retryExecutor.execute("Analysis", "updateAnomalyTaskStatus", () ->
+                    TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
+                            .withDeadlineAfter(retryPolicyProperties.getResponseTimeoutMillis(), TimeUnit.MILLISECONDS)
+                            .updateTaskStatus(req));
             LOG.info("[{}] <- UpdateTaskStatus accepted={} msg={}", SERVICE_NAME, ack.getAccepted(), ack.getMessage());
             return SyncResult.of(ack.getAccepted(), ack.getMessage());
-        } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] <- UpdateTaskStatus FAILED: {}", SERVICE_NAME, e.getStatus().getDescription());
-            return SyncResult.fail(e.getStatus().getDescription());
+        } catch (RuntimeException e) {
+            throw e;
         }
     }
 
@@ -145,9 +151,10 @@ public class AnomalyGrpcClient {
         LOG.info("[{}] -> QueryAnomalyResults taskId={} at {}", SERVICE_NAME, request.getTaskId(), address);
         ManagedChannel channel = channelRegistry.getChannel(address);
         try {
-            QueryAnomalyResultsResponse resp = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
-                    .withDeadlineAfter(5, TimeUnit.SECONDS)
-                    .queryAnomalyResults(req);
+            QueryAnomalyResultsResponse resp = retryExecutor.execute("Analysis", "queryAnomalyResults", () ->
+                    TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
+                            .withDeadlineAfter(retryPolicyProperties.getResponseTimeoutMillis(), TimeUnit.MILLISECONDS)
+                            .queryAnomalyResults(req));
             LOG.info("[{}] <- QueryAnomalyResults taskId={} results={}", SERVICE_NAME,
                     resp.getTaskId(), resp.getResultsCount());
             AnomalyResultVO vo = new AnomalyResultVO();
@@ -164,7 +171,7 @@ public class AnomalyGrpcClient {
                     vo.setEventType(finding.getAnomalyType());
                     if (finding.hasDetectedTimeMs()) {
                         vo.setEventTime(LocalDateTime.ofInstant(
-                                Instant.ofEpochMilli(finding.getDetectedTimeMs()), ZoneId.systemDefault()));
+                                Instant.ofEpochMilli(finding.getDetectedTimeMs()), com.sfkg.timeseries.common.ServiceTime.ZONE_ID));
                     }
                     if (finding.getRelatedSequenceIdsCount() > 0) {
                         vo.setSequenceIds(finding.getRelatedSequenceIdsList());
@@ -173,10 +180,8 @@ public class AnomalyGrpcClient {
                 }
             }
             return vo;
-        } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] queryAnomalyResults failed: {}", SERVICE_NAME, e.getStatus().getDescription());
-            return new AnomalyResultVO();
-
+        } catch (RuntimeException e) {
+            throw e;
         }
     }
 
@@ -185,15 +190,15 @@ public class AnomalyGrpcClient {
     private SyncResult callSyncTask(String address, AnalysisSyncAnomalyTaskRequest req) {
         ManagedChannel channel = channelRegistry.getChannel(address);
         try {
-            TaskAck ack = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
-                    .withDeadlineAfter(5, TimeUnit.SECONDS)
-                    .syncAnomalyTask(req);
+            TaskAck ack = retryExecutor.execute("Analysis", "syncAnomalyTask", () ->
+                    TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
+                            .withDeadlineAfter(retryPolicyProperties.getResponseTimeoutMillis(), TimeUnit.MILLISECONDS)
+                            .syncAnomalyTask(req));
             LOG.info("[{}] <- SyncAnomalyTask accepted={} status={} msg={}",
                     SERVICE_NAME, ack.getAccepted(), ack.getStatus(), ack.getMessage());
             return SyncResult.of(ack.getAccepted(), ack.getMessage());
-        } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] <- SyncAnomalyTask FAILED: {}", SERVICE_NAME, e.getStatus().getDescription());
-            return SyncResult.fail(e.getStatus().getDescription());
+        } catch (RuntimeException e) {
+            throw e;
         }
     }
 

@@ -1,6 +1,6 @@
 <script setup>
 import { onMounted, ref } from 'vue'
-import { toastError } from '../composables/toast'
+import { toastError, toastSuccess } from '../composables/toast'
 import { createProject, loadProjects, projectContext, selectProject } from '../stores/project'
 
 const newProjectId = ref('')
@@ -28,8 +28,10 @@ async function submitProject() {
   try {
     await createProject(projectId)
     newProjectId.value = ''
+    toastSuccess(`项目「${projectId}」创建成功`)
   } catch (e) {
     error.value = e.message || String(e)
+    toastError(error.value)
   }
 }
 </script>

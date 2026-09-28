@@ -5,6 +5,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.BeanUtils;
@@ -19,6 +20,9 @@ import com.sfkg.timeseries.common.ProjectIdValidator;
 import com.sfkg.timeseries.dto.EventQueryRequest;
 import com.sfkg.timeseries.dto.EventSaveRequest;
 import com.sfkg.timeseries.entity.TimeseriesEvent;
+import com.sfkg.timeseries.entity.TimeseriesConstraint;
+import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
+import com.sfkg.timeseries.entity.TimeseriesRelation;
 import com.sfkg.timeseries.mapper.TimeseriesEventMapper;
 import com.sfkg.timeseries.service.TimeseriesEventService;
 import com.sfkg.timeseries.vo.EventDetailVO;
@@ -26,6 +30,11 @@ import com.sfkg.timeseries.vo.EventListVO;
 
 @Service
 public class TimeseriesEventServiceImpl implements TimeseriesEventService {
+
+    private static final Set<String> EVENT_TYPES = Set.of("ANOMALY", "WARNING", "ALERT", "PREDICTION");
+    private static final Set<String> EVENT_LEVELS = Set.of("LOW", "MEDIUM", "HIGH", "CRITICAL");
+    private static final Set<String> CONFIRM_STATUSES = Set.of("PENDING", "CONFIRMED", "REJECTED");
+    private static final Set<String> HANDLE_STATUSES = Set.of("UNHANDLED", "PROCESSING", "HANDLED", "CLOSED");
 
     private final TimeseriesEventMapper eventMapper;
     private final TimeseriesMemoryCache memoryCache;
@@ -84,7 +93,19 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
         if (request.getEventLevel() == null || request.getEventLevel().isBlank()) {
             throw new BusinessException("eventLevel must not be empty");
         }
+        validateEnum("eventType", request.getEventType(), EVENT_TYPES);
+        validateEnum("eventLevel", request.getEventLevel(), EVENT_LEVELS);
+        validateOptionalEnum("confirmStatus", request.getConfirmStatus(), CONFIRM_STATUSES);
+        validateOptionalEnum("handleStatus", request.getHandleStatus(), HANDLE_STATUSES);
+        validateEventRelations(request);
         cacheManager.ensureTableLoaded(CachedTable.EVENT);
+        if (request.getEventId() == null || request.getEventId().isBlank()) {
+            boolean duplicateName = memoryCache.listEvents(request.getProjectId()).stream()
+                    .anyMatch(event -> request.getEventName().equalsIgnoreCase(event.getEventName()));
+            if (duplicateName) {
+                throw new BusinessException("eventName already exists in project: " + request.getEventName());
+            }
+        }
         String eventId = request.getEventId() == null
                 ? generateEventId(request.getEventType(), request.getEventName(), request.getEventTime())
                 : request.getEventId();
@@ -155,7 +176,30 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
 
     @Override
     public void validateEventRelations(EventSaveRequest request) {
-        // TODO: Restore event relation validation here.
+        if (request == null) {
+            throw new BusinessException("event request must not be null");
+        }
+        String projectId = ProjectIdValidator.require(request.getProjectId());
+        cacheManager.ensureTableLoaded(CachedTable.INSTANCE_CONFIG);
+        cacheManager.ensureTableLoaded(CachedTable.CONSTRAINT);
+        cacheManager.ensureTableLoaded(CachedTable.RELATION);
+        if (request.getRelatedSequences() != null) {
+            for (String sequenceId : request.getRelatedSequences()) {
+                TimeseriesInstanceConfig instance = memoryCache.getInstanceBySequenceId(projectId, sequenceId);
+                if (sequenceId == null || sequenceId.isBlank() || instance == null) {
+                    throw new BusinessException("event related sequence not found in project: " + sequenceId);
+                }
+            }
+        }
+        if (request.getRelatedRules() != null) {
+            for (String ruleId : request.getRelatedRules()) {
+                TimeseriesConstraint constraint = memoryCache.getConstraint(projectId, ruleId).orElse(null);
+                TimeseriesRelation relation = memoryCache.getRelation(projectId, ruleId).orElse(null);
+                if (ruleId == null || ruleId.isBlank() || (constraint == null && relation == null)) {
+                    throw new BusinessException("event related rule not found in project: " + ruleId);
+                }
+            }
+        }
     }
 
     @Override
@@ -252,5 +296,17 @@ public class TimeseriesEventServiceImpl implements TimeseriesEventService {
 
     private boolean beforeOrEqual(LocalDateTime endTime, LocalDateTime actual) {
         return endTime == null || (actual != null && !actual.isAfter(endTime));
+    }
+
+    private void validateEnum(String field, String value, Set<String> supported) {
+        if (value == null || !supported.contains(value.trim().toUpperCase())) {
+            throw new BusinessException("unsupported " + field + ": " + value + ", expected " + supported);
+        }
+    }
+
+    private void validateOptionalEnum(String field, String value, Set<String> supported) {
+        if (value != null && !value.isBlank()) {
+            validateEnum(field, value, supported);
+        }
     }
 }

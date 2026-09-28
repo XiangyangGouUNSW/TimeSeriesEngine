@@ -3,6 +3,7 @@ package com.sfkg.timeseries.client;
 import java.util.List;
 
 import com.sfkg.timeseries.config.GrpcClientProperties;
+import com.sfkg.timeseries.config.RetryPolicyProperties;
 import com.sfkg.timeseries.dto.ForecastResultQueryRequest;
 import com.sfkg.timeseries.dto.SyncResult;
 import com.sfkg.timeseries.entity.TimeseriesForecastTask;
@@ -37,13 +38,19 @@ public class ForecastGrpcClient {
     private final GrpcClientProperties grpcClientProperties;
     private final TimeseriesTaskContextResolver contextResolver;
     private final GrpcChannelRegistry channelRegistry;
+    private final GrpcRetryExecutor retryExecutor;
+    private final RetryPolicyProperties retryPolicyProperties;
 
     public ForecastGrpcClient(GrpcClientProperties grpcClientProperties,
                               TimeseriesTaskContextResolver contextResolver,
-                              GrpcChannelRegistry channelRegistry) {
+                              GrpcChannelRegistry channelRegistry,
+                              GrpcRetryExecutor retryExecutor,
+                              RetryPolicyProperties retryPolicyProperties) {
         this.grpcClientProperties = grpcClientProperties;
         this.contextResolver = contextResolver;
         this.channelRegistry = channelRegistry;
+        this.retryExecutor = retryExecutor;
+        this.retryPolicyProperties = retryPolicyProperties;
     }
 
     public SyncResult syncForecastTask(TimeseriesForecastTask task) {
@@ -88,14 +95,14 @@ public class ForecastGrpcClient {
         LOG.info("[{}] -> SyncForecastTask taskId={} at {}", SERVICE_NAME, task.getTaskId(), address);
         ManagedChannel channel = channelRegistry.getChannel(address);
         try {
-            TaskAck ack = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
-                    .withDeadlineAfter(5, TimeUnit.SECONDS)
-                    .syncForecastTask(req);
+            TaskAck ack = retryExecutor.execute("Analysis", "syncForecastTask", () ->
+                    TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
+                            .withDeadlineAfter(retryPolicyProperties.getResponseTimeoutMillis(), TimeUnit.MILLISECONDS)
+                            .syncForecastTask(req));
             LOG.info("[{}] <- SyncForecastTask accepted={} msg={}", SERVICE_NAME, ack.getAccepted(), ack.getMessage());
             return SyncResult.of(ack.getAccepted(), ack.getMessage());
-        } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] <- SyncForecastTask FAILED: {}", SERVICE_NAME, e.getStatus().getDescription());
-            return SyncResult.fail(e.getStatus().getDescription());
+        } catch (RuntimeException e) {
+            throw e;
         }
     }
 
@@ -125,13 +132,13 @@ public class ForecastGrpcClient {
         LOG.info("[{}] -> UpdateTaskStatus taskId={} status={} at {}", SERVICE_NAME, taskId, status, address);
         ManagedChannel channel = channelRegistry.getChannel(address);
         try {
-            TaskAck ack = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
-                    .withDeadlineAfter(5, TimeUnit.SECONDS)
-                    .updateTaskStatus(req);
+            TaskAck ack = retryExecutor.execute("Analysis", "updateForecastTaskStatus", () ->
+                    TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
+                            .withDeadlineAfter(retryPolicyProperties.getResponseTimeoutMillis(), TimeUnit.MILLISECONDS)
+                            .updateTaskStatus(req));
             return SyncResult.of(ack.getAccepted(), ack.getMessage());
-        } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] <- UpdateTaskStatus FAILED: {}", SERVICE_NAME, e.getStatus().getDescription());
-            return SyncResult.fail(e.getStatus().getDescription());
+        } catch (RuntimeException e) {
+            throw e;
         }
     }
 
@@ -156,9 +163,10 @@ public class ForecastGrpcClient {
         LOG.info("[{}] -> QueryForecastResults taskId={} at {}", SERVICE_NAME, request.getTaskId(), address);
         ManagedChannel channel = channelRegistry.getChannel(address);
         try {
-            QueryForecastResultsResponse resp = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
-                    .withDeadlineAfter(5, TimeUnit.SECONDS)
-                    .queryForecastResults(req);
+            QueryForecastResultsResponse resp = retryExecutor.execute("Analysis", "queryForecastResults", () ->
+                    TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
+                            .withDeadlineAfter(retryPolicyProperties.getResponseTimeoutMillis(), TimeUnit.MILLISECONDS)
+                            .queryForecastResults(req));
             ForecastResultVO vo = new ForecastResultVO();
             vo.setTaskId(resp.getTaskId());
             vo.setProjectId(request.getProjectId());
@@ -177,9 +185,8 @@ public class ForecastGrpcClient {
                 }
             }
             return vo;
-        } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] queryForecastResults failed: {}", SERVICE_NAME, e.getStatus().getDescription());
-            return new ForecastResultVO();
+        } catch (RuntimeException e) {
+            throw e;
         }
     }
 

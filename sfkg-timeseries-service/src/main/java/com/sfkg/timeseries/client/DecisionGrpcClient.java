@@ -1,6 +1,7 @@
 package com.sfkg.timeseries.client;
 
 import com.sfkg.timeseries.config.GrpcClientProperties;
+import com.sfkg.timeseries.config.RetryPolicyProperties;
 import com.sfkg.timeseries.dto.DecisionContext;
 import com.sfkg.timeseries.grpc.AnalysisDecisionRequest;
 import com.sfkg.timeseries.grpc.AnalysisDecisionResult;
@@ -25,11 +26,17 @@ public class DecisionGrpcClient {
 
     private final GrpcClientProperties grpcClientProperties;
     private final GrpcChannelRegistry channelRegistry;
+    private final GrpcRetryExecutor retryExecutor;
+    private final RetryPolicyProperties retryPolicyProperties;
 
     public DecisionGrpcClient(GrpcClientProperties grpcClientProperties,
-                              GrpcChannelRegistry channelRegistry) {
+                              GrpcChannelRegistry channelRegistry,
+                              GrpcRetryExecutor retryExecutor,
+                              RetryPolicyProperties retryPolicyProperties) {
         this.grpcClientProperties = grpcClientProperties;
         this.channelRegistry = channelRegistry;
+        this.retryExecutor = retryExecutor;
+        this.retryPolicyProperties = retryPolicyProperties;
     }
 
     public DiagnosisResultVO generateDiagnosisResult(DecisionContext context) {
@@ -46,9 +53,10 @@ public class DecisionGrpcClient {
 
         ManagedChannel channel = channelRegistry.getChannel(address);
         try {
-            AnalysisDecisionResult resp = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
-                    .withDeadlineAfter(5, TimeUnit.SECONDS)
-                    .generateDiagnosis(req);
+            AnalysisDecisionResult resp = retryExecutor.execute("Analysis", "generateDiagnosis", () ->
+                    TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
+                            .withDeadlineAfter(retryPolicyProperties.getResponseTimeoutMillis(), TimeUnit.MILLISECONDS)
+                            .generateDiagnosis(req));
             LOG.info("[{}] <- GenerateDiagnosis eventId={} status={}", SERVICE_NAME,
                     resp.getEventId(), resp.getStatus());
             DiagnosisResultVO vo = new DiagnosisResultVO();
@@ -56,9 +64,8 @@ public class DecisionGrpcClient {
             vo.setDiagnosisResult(resp.getContent());
             vo.setDiagnosisBasis(resp.getMessage());
             return vo;
-        } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] GenerateDiagnosis FAILED: {}", SERVICE_NAME, e.getStatus().getDescription());
-            return new DiagnosisResultVO();
+        } catch (RuntimeException e) {
+            throw e;
         }
     }
 
@@ -76,18 +83,18 @@ public class DecisionGrpcClient {
 
         ManagedChannel channel = channelRegistry.getChannel(address);
         try {
-            AnalysisDecisionResult resp = TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
-                    .withDeadlineAfter(5, TimeUnit.SECONDS)
-                    .generateSuggestion(req);
+            AnalysisDecisionResult resp = retryExecutor.execute("Analysis", "generateSuggestion", () ->
+                    TimeseriesAnalysisServiceGrpc.newBlockingStub(channel)
+                            .withDeadlineAfter(retryPolicyProperties.getResponseTimeoutMillis(), TimeUnit.MILLISECONDS)
+                            .generateSuggestion(req));
             LOG.info("[{}] <- GenerateSuggestion eventId={} status={}", SERVICE_NAME,
                     resp.getEventId(), resp.getStatus());
             DecisionSuggestionVO vo = new DecisionSuggestionVO();
             vo.setEventId(resp.getEventId());
             vo.setSuggestion(resp.getContent());
             return vo;
-        } catch (StatusRuntimeException e) {
-            LOG.warn("[{}] GenerateSuggestion FAILED: {}", SERVICE_NAME, e.getStatus().getDescription());
-            return new DecisionSuggestionVO();
+        } catch (RuntimeException e) {
+            throw e;
         }
     }
 

@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.sfkg.timeseries.config.DataIngestProperties;
+import com.sfkg.timeseries.config.RetryPolicyProperties;
+import com.sfkg.timeseries.client.GrpcRetryExecutor;
 import com.sfkg.timeseries.entity.TimeseriesCategory;
 import com.sfkg.timeseries.entity.TimeseriesInstanceConfig;
 import com.sfkg.timeseries.entity.TimeseriesProject;
@@ -58,7 +60,8 @@ class DataIngestRecordLoaderTests {
             DataIngestProperties properties = new DataIngestProperties();
             properties.setEndpoint("http://127.0.0.1:" + server.getAddress().getPort());
             ObjectMapper objectMapper = objectMapper();
-            DataIngestClient client = new DataIngestClient(properties, objectMapper);
+            DataIngestClient client = new DataIngestClient(
+                    properties, objectMapper, new GrpcRetryExecutor(new RetryPolicyProperties()));
             DataIngestRecordLoader loader = new DataIngestRecordLoader(client, objectMapper);
 
             List<TimeseriesCategory> categories = loader.load(
@@ -96,7 +99,8 @@ class DataIngestRecordLoaderTests {
             properties.setEndpoint("http://127.0.0.1:" + server.getAddress().getPort());
             properties.setDatabase("ett_system");
             ObjectMapper objectMapper = objectMapper();
-            DataIngestClient client = new DataIngestClient(properties, objectMapper);
+            DataIngestClient client = new DataIngestClient(
+                    properties, objectMapper, new GrpcRetryExecutor(new RetryPolicyProperties()));
             TimeseriesProjectFileMapper projectMapper = new TimeseriesProjectFileMapper(
                     java.nio.file.Files.createTempFile("timeseries-projects", ".json").toString());
             DataIngestPersistenceService persistenceService = new DataIngestPersistenceService(
@@ -138,7 +142,8 @@ class DataIngestRecordLoaderTests {
             properties.setEndpoint("http://127.0.0.1:" + server.getAddress().getPort());
             properties.setDatabase("ett_system");
             ObjectMapper objectMapper = objectMapper();
-            DataIngestClient client = new DataIngestClient(properties, objectMapper);
+            DataIngestClient client = new DataIngestClient(
+                    properties, objectMapper, new GrpcRetryExecutor(new RetryPolicyProperties()));
             TimeseriesProjectFileMapper projectMapper = new TimeseriesProjectFileMapper(
                     java.nio.file.Files.createTempFile("timeseries-projects", ".json").toString());
             TimeseriesMemoryCache cache = new TimeseriesMemoryCache();

@@ -48,6 +48,10 @@ timeseries:
     forecast-address: ${TIMESERIES_FORECAST_GRPC_ADDRESS:localhost:50053}
     decision-address: ${TIMESERIES_DECISION_GRPC_ADDRESS:localhost:50053}
 
+  retry:
+    response-timeout-millis: ${TIMESERIES_RETRY_RESPONSE_TIMEOUT_MILLIS:1000}
+    backoff-seconds: ${TIMESERIES_RETRY_BACKOFF_SECONDS:1,2,3}
+
   # ── Ingest buffer-pool (hash-partitioned async pipeline) ─────────
   ingest:
     sender-threads: ${INGEST_SENDER_THREADS:1}               # Sender 线程数 (seq_id hash % N)
