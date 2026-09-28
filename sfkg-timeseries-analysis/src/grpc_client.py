@@ -11,7 +11,9 @@
 
 from __future__ import annotations
 
+import logging
 import sys
+import time
 from pathlib import Path
 
 import grpc
@@ -25,9 +27,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "generated"))
 import timeseries_core_pb2 as pb
 import timeseries_core_pb2_grpc as pb_grpc
 
+logger = logging.getLogger(__name__)
+
 
 class CoreDataException(Exception):
     """C 端 gRPC 调用失败。上层 catch 后转成 UPSTREAM_UNAVAILABLE。"""
+
+
+class CoreDataUnavailable(CoreDataException):
+    """C 端 gRPC 网络层多次重试后仍无响应（对应 UPSTREAM_UNAVAILABLE）。
+
+    业务级失败（operation.code != OK）仍是 CoreDataException，不重试、不归此类。
+    """
 
 
 class GrpcCoreDataClient(CoreDataClient):
@@ -54,13 +65,27 @@ class GrpcCoreDataClient(CoreDataClient):
                 f"{response.operation.message}")
 
     def _call(self, method: Callable[..., Any], request: Any) -> Any:
-        """统一包一层：gRPC 网络错误转成 CoreDataException。"""
-        try:
-            resp = method(request, timeout=self._timeout)
-            self._check(resp)
-            return resp
-        except grpc.RpcError as e:
-            raise CoreDataException(f"gRPC 调用失败: {e}") from e
+        """统一包一层：gRPC 网络错误退避重试（首次 + 2 次，共 3 次）。
+
+        仍无响应才抛 CoreDataUnavailable（上层映射 UPSTREAM_UNAVAILABLE）；
+        业务级失败（operation.code != OK）不重试，直接抛 CoreDataException。
+        重试间隔 10s / 20s（指数退避）。
+        """
+        last_err: grpc.RpcError | None = None
+        for attempt in range(1, 4):  # 1, 2, 3
+            try:
+                resp = method(request, timeout=self._timeout)
+                self._check(resp)
+                return resp
+            except grpc.RpcError as e:
+                last_err = e
+                if attempt < 3:
+                    backoff = 10.0 if attempt == 1 else 20.0
+                    logger.warning(
+                        "[GrpcCoreDataClient] 调用失败（第 %d/3 次），%.0fs 后重试：%s",
+                        attempt, backoff, e)
+                    time.sleep(backoff)
+        raise CoreDataUnavailable(f"gRPC 调用失败（3 次后仍无响应）: {last_err}")
 
     # ---- 三个能力 ----
 

@@ -99,18 +99,25 @@ class AnalysisServicer(pb_grpc.TimeseriesAnalysisServiceServicer):
         模型缓存 key 带版本，版本变 → key 变 → 下个 tick 必然重训；
         invalidate_task 只做磁盘/内存清理（保留当前版本，回滚到上一个版本可复用）。
         project_id 由 meta/任务/语义上下文逐级解析并回写 task。
+
+        版本信号（老师方案）：优先用 S 端的 task_timestamp_ms 作为版本（时间戳最可靠，
+        重启后 S 重发同一时间戳 → 匹配到已落盘模型；时间戳变 → key 变 → 必然重训）；
+        S 未带时间戳（旧客户端）时回退用 config_version。二者都是 int64，统一进
+        key 的 @v{ver}，下游（registry/scheduler/engine）无需感知区别。
         """
         task = request.task
-        ver = int(request.config_version)
+        ts = int(getattr(request, "task_timestamp_ms", 0) or 0)
+        ver = ts if ts > 0 else int(request.config_version)
         pid = self._resolve_project(request.meta, task)
         old = self._registry.get(pid, task.task_id)
         self._registry.register(pid, task, kind, ver)
         if (old is not None and old.config_version != ver
                 and self._engine is not None):
             self._engine.invalidate_task(pid, task.task_id, keep_version=ver)
-        logger.info("Sync%s: project=%s task_id=%s config_version=%d 已注册"
+        logger.info("Sync%s: project=%s task_id=%s version=%d%s 已注册"
                     "（调度器周期执行）",
-                    name, pid, task.task_id, ver)
+                    name, pid, task.task_id, ver,
+                    f"（timestamp_ms={ts}）" if ts else "（无时间戳，回退 config_version）")
         return _ack(task.task_id, True, pb.ANALYSIS_STATUS_SUCCESS,
                     "任务已注册，由调度器周期执行")
 

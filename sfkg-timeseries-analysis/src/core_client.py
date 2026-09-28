@@ -129,7 +129,13 @@ class MockCoreDataClient(CoreDataClient):
                     continue
                 timestamps_ms.append(parse_utc_ms(row[0]))
                 for i, name in enumerate(col_names):
-                    col_values[name].append(float(row[i + 1]))
+                    cell = row[i + 1] if i + 1 < len(row) else ""
+                    try:
+                        col_values[name].append(float(cell))
+                    except (TypeError, ValueError):
+                        raise ValueError(
+                            f"CSV 数据非法：第 {reader.line_num} 行列 '{name}' 的值 "
+                            f"{cell!r} 不是数值") from None
         return timestamps_ms, col_values
 
     def _col(self, sequence_id: str) -> str:

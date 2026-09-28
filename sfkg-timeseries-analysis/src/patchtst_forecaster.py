@@ -173,32 +173,35 @@ class PatchTSTForecaster:
             if steps < self.prediction_length:
                 raw = raw[:steps, :]
             elif steps > self.prediction_length:
-                raw = self._roll_forward(X, raw, steps)
+                raw = self._roll_forward(X, raw, steps, dev)
 
         result = {}
         for i, sid in enumerate(self.sequence_ids):
             result[sid] = [float(v) for v in raw[:, i]]
         return result
 
-    def _roll_forward(self, X: np.ndarray, raw: np.ndarray, steps: int) -> np.ndarray:
-        """steps > prediction_length：把预测出的值接回窗口尾部，再预测一次，滚动补足。
+    def _roll_forward(self, X: np.ndarray, first: np.ndarray, steps: int,
+                      dev) -> np.ndarray:
+        """steps > prediction_length：把预测值接回窗口尾部反复滚动，凑够 steps 步。
 
-        raw: [prediction_length, C]（模型单次输出）。
-        只支持一次滚动补足：先取预测前 prediction_length 步，接回窗口尾部再预测一轮，
-        拼成 [steps, C]；仍不足的部分截断（调用方应保证 steps 与模型 prediction 接近）。
+        first: [prediction_length, C]（模型单次输出，前面 forecast 已算出）。
+        支持任意 steps（不再只滚一次）：每次把窗口滑掉 prediction_length 步、接上最近
+        一轮预测再预测一轮，直到累计 >= steps，最后截断到 steps。多轮自回归误差逐轮
+        累积，但保证输出长度 == steps（不再静默截断，S 输入任意预测步长都能拿满）。
         """
-        # 第一次模型输出（前面 forecast 已算出）
-        first = raw[: self.prediction_length, :]                     # [pred, C]
-        # 窗口接上第一轮预测，滑掉 pred 步
-        rolled = np.vstack([X[self.prediction_length:], first])     # [context, C]
-        x = torch.tensor(rolled[None]).to(self.device)
-        with torch.no_grad():
-            out = self._model(past_values=x)
-            second = out.prediction_outputs[0].cpu().numpy()
-        # 拼接：pred 步 + 剩余 (steps - pred) 步
-        out_len = steps - self.prediction_length
-        second = second[:out_len, :]
-        return np.vstack([first, second])                            # [steps, C]
+        chunks = [first]
+        total = self.prediction_length
+        window = X
+        while total < steps:
+            # 滑掉最老 prediction_length 步、接上最新一轮预测，保持 [context, C]
+            window = np.vstack([window[self.prediction_length:], chunks[-1]])
+            x = torch.tensor(window[None]).to(dev)
+            with torch.no_grad():
+                out = self._model(past_values=x)
+                nxt = out.prediction_outputs[0].cpu().numpy()
+            chunks.append(nxt)
+            total += self.prediction_length
+        return np.vstack(chunks)[:steps, :]                          # [steps, C]
 
     # ================= 持久化 =================
 

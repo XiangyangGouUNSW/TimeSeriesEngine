@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 from pathlib import Path
 
 import grpc
@@ -52,9 +53,15 @@ class AnalysisResultClient:
             severity=severity,
             source=source,
         )
-        try:
-            self._stub.ReceiveAnomalyResult(msg, timeout=self._timeout)
-            return True
-        except grpc.RpcError as e:
-            logger.info("[AnalysisResultClient] 调 S 失败（S 未起或连不上）: %s", e)
-            return False
+        # 退避重试（首次 + 2 次，共 3 次，间隔 10s/20s）：第 3 次仍无响应才返回 False，
+        # 由上层计数可观测，不再单次失败就静默丢失事件。
+        for attempt in range(1, 4):
+            try:
+                self._stub.ReceiveAnomalyResult(msg, timeout=self._timeout)
+                return True
+            except grpc.RpcError as e:
+                if attempt < 3:
+                    time.sleep(10.0 if attempt == 1 else 20.0)
+                else:
+                    logger.info("[AnalysisResultClient] 调 S 失败（3 次后仍无响应）: %s", e)
+        return False

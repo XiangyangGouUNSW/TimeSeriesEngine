@@ -166,12 +166,18 @@ message AnalysisSyncAnomalyTaskRequest {
   RequestMeta meta = 1;
   int64 config_version = 2;
   AnomalyTaskConfig task = 3;
+  // 任务时间戳（epoch 毫秒）：S 端每次下发任务时附带，作为模型版本的权威信号。
+  // P 端把「训练好的模型 + 该时间戳」一并落盘；重启后 S 重发任务，P 比对任务
+  // 时间戳与本地模型时间戳，不一致即重训（替代 config_version 作为可靠版本源）。
+  int64 task_timestamp_ms = 4;
 }
 
 message AnalysisSyncForecastTaskRequest {
   RequestMeta meta = 1;
   int64 config_version = 2;
   ForecastTaskConfig task = 3;
+  // 同 AnalysisSyncAnomalyTaskRequest.task_timestamp_ms。
+  int64 task_timestamp_ms = 4;
 }
 
 message TaskAck {

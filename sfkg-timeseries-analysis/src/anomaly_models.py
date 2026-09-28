@@ -448,7 +448,9 @@ class GcadAnomalyModel(AnomalyModel):
         if window.ndim == 1:
             window = window.reshape(-1, 1)
         n_time, n_seq = window.shape
-        if n_time < self.tau or n_seq != self._n_seq:
+        # 严格大于 tau：滑窗 range(tau, n_time) 至少产出 1 个窗口；n_time == tau 时
+        # np.stack([]) 会抛 ValueError（边界 off-by-one）。
+        if n_time <= self.tau or n_seq != self._n_seq:
             return findings
         X = (window - self._norm_mean) / self._norm_std
         windows = np.stack([X[t - self.tau:t] for t in range(self.tau, n_time)])
@@ -675,23 +677,25 @@ class MutualCouplingModel(AnomalyModel):
         seed: int = 0,
     ):
         self.pairs = [tuple(sorted((a, b))) for a, b in (coupled_pairs or [])]
-        self.tau = tau
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
-        self.epochs = epochs
-        self.batch_size = batch_size
-        self.learning_rate = learning_rate
-        self.p = p
-        self.n_norm_samples = n_norm_samples
-        self.h = h
-        self.h_quantile = h_quantile
-        self.beta = beta
-        self.score_quantile = score_quantile
-        self.eps = eps
-        self.max_train_windows = max_train_windows
-        self.train_budget_s = train_budget_s
-        self.val_frac = val_frac
-        self.seed = seed
+        # 防御：与 GcadAnomalyModel 一致，config 透传的数值统一按类型强转，杜绝
+        # PyYAML 把科学计数法（1e-6）解析成字符串后的 dtype 崩溃。
+        self.tau = int(tau)
+        self.hidden_dim = int(hidden_dim)
+        self.num_layers = int(num_layers)
+        self.epochs = int(epochs)
+        self.batch_size = int(batch_size)
+        self.learning_rate = float(learning_rate)
+        self.p = float(p)
+        self.n_norm_samples = int(n_norm_samples)
+        self.h = float(h)
+        self.h_quantile = float(h_quantile)
+        self.beta = float(beta)
+        self.score_quantile = float(score_quantile)
+        self.eps = float(eps)
+        self.max_train_windows = int(max_train_windows)
+        self.train_budget_s = float(train_budget_s)
+        self.val_frac = float(val_frac)
+        self.seed = int(seed)
         self._deep: dict[tuple[int, int], GcadAnomalyModel] = {}
         self.fitted: bool = False
 
@@ -737,7 +741,9 @@ class MutualCouplingModel(AnomalyModel):
                 continue
             sub = np.asarray(window[:, [a, b]], dtype=np.float32)
             X = (sub - deep._norm_mean) / deep._norm_std
-            if len(X) < deep.tau:
+            # 严格大于 tau（同 GcadAnomalyModel.detect：len == tau 时 _deviation_on 的
+            # np.stack 空列表会崩）。
+            if len(X) <= deep.tau:
                 continue
             # 门控 = 全图因果偏离分数 S（验证段阈值，稳健）；方向 = dev_ab vs dev_ba 相对归因
             # （单边 dev 对近零边病态——Ā≈0 时 |Ã-Ā|/(Ā+ε) 爆炸，不能做绝对阈值）。

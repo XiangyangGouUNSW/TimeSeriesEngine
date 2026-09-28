@@ -31,10 +31,11 @@ class TaskStatus(str, enum.Enum):
 
 
 class TaskRecord:
-    """一条任务：配置 + 当前状态 + 配置版本。
+    """一条任务：配置 + 当前状态 + 任务版本。
 
-    config_version 来自 Sync 请求外层（int64 config_version），
-    模型缓存 key 带版本（{task_id}@v{ver}），版本变 → key 变 → 必然重训。
+    config_version 保存的是「任务版本」：优先 S 端 task_timestamp_ms（老师方案——
+    时间戳最可靠，重启后重发同一时间戳即匹配已落盘模型），S 未带时间戳时回退
+    config_version。模型缓存 key 带版本（{task_id}@v{ver}），版本变 → key 变 → 必然重训。
     project_id 为该任务所属项目（已归一化），调度器/引擎据此取复合键。
     """
 

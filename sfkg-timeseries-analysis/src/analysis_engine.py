@@ -41,6 +41,7 @@ from catboost_forecaster import (
 )
 from core_client import CoreDataClient
 from data_types import HistoricalDataChunk, SequenceDataScale
+from grpc_client import CoreDataException, CoreDataUnavailable
 from historical_matcher import HistoricalEvent, HistoricalEventMatcher
 from patchtst_forecaster import PatchTSTForecaster
 from project import scoped_key
@@ -61,6 +62,9 @@ _CAUSAL_TYPES = frozenset({"CAUSE", "CAUSAL"})
 # 老自由字符串的互耦标记，兼容规范前下发的 relation_type
 _MUTUAL_KEYWORDS = ("MUTUAL", "COUPLING", "BIDIRECTIONAL", "COUPLED")
 
+# int64 上限（预测未来时间戳溢出检查用）
+_INT64_MAX = 2 ** 63 - 1
+
 
 def _is_missing(v: Any) -> bool:
     """判断值是否缺失（float NaN / None；string 不触发 np.isnan 报错）。"""
@@ -70,6 +74,30 @@ def _is_missing(v: Any) -> bool:
         return bool(np.isnan(v))
     except (TypeError, ValueError):
         return False
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    """config 数值安全转 int：容忍 int/float/数字字符串（含科学计数法 1e3）。
+
+    PyYAML 会把无小数点的科学计数法（如 1e3）解析成字符串，直接 int() 会崩；
+    这里 int(float(v)) 一并兜住。真非法值（"abc"）抛 ValueError，让上层报错。
+    """
+    if value is None or value == "":
+        return default
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        raise ValueError(f"配置数值非法（应为整数）：{value!r}") from None
+
+
+def _coerce_float(value: Any, default: float) -> float:
+    """config 数值安全转 float：容忍 int/float/数字字符串（含 1e-6）。"""
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"配置数值非法（应为数字）：{value!r}") from None
 
 
 class _SlideNotAdvanced(Exception):
@@ -113,7 +141,7 @@ class AnalysisEngine:
         self._forecast_due: dict[str, int] = {}
         self._forecast_due_lock = threading.Lock()
         fm = self.cfg.get("forecast_model", {})
-        self._forecast_interval_percent = float(fm.get("interval_percent", 0.7))
+        self._forecast_interval_percent = _coerce_float(fm.get("interval_percent"), 0.7)
         # 异常任务动态检测间隔（与预测同构，负责人 08-13 定）：{scoped_key: 下次到期 epoch ms}。
         # interval = window_size × recheck_fraction ÷ 频率（frequency = 1/step_ms）——
         # 一次检测吃一个窗口，所以按"检测窗口的百分比"定间隔：无异常 → 等一整个新窗口
@@ -125,12 +153,14 @@ class AnalysisEngine:
         self._anomaly_clean_streak: dict[str, int] = {}   # {scoped_key: 热状态中连续无异常轮数}
         self._anomaly_hot: dict[str, bool] = {}           # {scoped_key: 是否处于热节奏（盯事件）}
         am = self.cfg.get("anomaly", {})
-        self._window_size = int(self.cfg.get("inference", {}).get("window_size", 100))
-        self._anomaly_recheck_fraction_normal = float(am.get("recheck_fraction_normal", 1.0))
-        self._anomaly_recheck_fraction_hot = float(am.get("recheck_fraction_hot", 0.05))
-        self._anomaly_hot_confirm_clean_runs = int(am.get("hot_confirm_clean_runs", 2))
+        self._window_size = _coerce_int(self.cfg.get("inference", {}).get("window_size"), 100)
+        self._anomaly_recheck_fraction_normal = _coerce_float(am.get("recheck_fraction_normal"), 1.0)
+        self._anomaly_recheck_fraction_hot = _coerce_float(am.get("recheck_fraction_hot"), 0.05)
+        self._anomaly_hot_confirm_clean_runs = _coerce_int(am.get("hot_confirm_clean_runs"), 2)
         self._train_locks: dict = {}   # {key: Lock}，同 key 并发训练只训一次
         self._train_locks_lock = threading.RLock()  # 保护 _train_locks
+        self._train_lock_timeout = _coerce_float(
+            self.cfg.get("training", {}).get("lock_timeout_s"), 5.0)
         self._register_model_loader()
 
     # ================= 预测链路 =================
@@ -173,17 +203,34 @@ class AnalysisEngine:
                 all_ids, project_id=task.project_id)
             fetch_ms = (time.perf_counter() - _t) * 1e3
             times = window.timestamps_ms[-ctx:]
+            # 实时窗口不足（含空窗口）→ 数据未就绪；不得越界 times[-1]/喂模型
+            if len(times) < ctx:
+                return self._forecast_result(
+                    task, pb.ANALYSIS_STATUS_DATA_NOT_READY,
+                    f"实时窗口不足 context_length={ctx}（当前 {len(times)} 行）")
+            # 推算步长至少需 2 个时间戳（防御极端配置 context_length=1）
+            if len(times) < 2:
+                return self._forecast_result(
+                    task, pb.ANALYSIS_STATUS_DATA_NOT_READY,
+                    f"实时窗口时间戳不足 2 个（当前 {len(times)} 个），无法推算预测步长")
+            step_ms = times[-1] - times[-2]
+            if step_ms <= 0:                  # 时间戳非严格升序 → 无法推算未来
+                return self._forecast_result(
+                    task, pb.ANALYSIS_STATUS_INVALID_REQUEST,
+                    f"实时窗口时间戳非升序（相邻差 {step_ms}ms），无法预测")
             matrix = self._clean_matrix(np.array(window.values[-ctx:], dtype=np.float32))
-            horizon = task.forecast_horizon_steps or self.cfg["inference"]["horizon_steps"]
+            horizon = task.forecast_horizon_steps or _coerce_int(
+                self.cfg.get("inference", {}).get("horizon_steps"), 24)
             _t = time.perf_counter()
             pred_map = model.forecast(matrix, steps=horizon)
             pred_ms = (time.perf_counter() - _t) * 1e3
             preds = pred_map[target]
-            step_ms = 3600_000
-            if len(times) >= 2:
-                step_ms = times[-1] - times[-2]
             last_ts = times[-1]
             out_ts = [last_ts + step_ms * (i + 1) for i in range(horizon)]
+            # 未来时间戳溢出 int64 → 无法表达，直接判失败
+            if out_ts and out_ts[-1] >= _INT64_MAX:
+                return self._forecast_result(
+                    task, pb.ANALYSIS_STATUS_FAILED, "未来时间戳超出 int64 范围")
             # 预测成功 → 按「horizon × interval_percent ÷ 频率」排下一次预测的到期时间
             # （动态间隔，只对成功预测轮生效；数据不足/失败轮不设，保持默认周期）
             self._record_forecast_due(task.project_id, task.task_id, now, horizon, step_ms)
@@ -237,6 +284,9 @@ class AnalysisEngine:
         except UnsupportedTargetError as e:
             logger.info(f"[engine] 预测不支持：{e}")
             return self._forecast_result(task, pb.ANALYSIS_STATUS_NOT_IMPLEMENTED, str(e))
+        except CoreDataUnavailable as e:
+            logger.info(f"[engine] C 端不可用：{e}")
+            return self._forecast_result(task, pb.ANALYSIS_STATUS_UPSTREAM_UNAVAILABLE, str(e))
         except Exception as e:
             logger.info(f"[engine] 预测链路异常：{e}")
             return self._forecast_result(task, pb.ANALYSIS_STATUS_FAILED, f"预测失败：{e}")
@@ -373,15 +423,15 @@ class AnalysisEngine:
         if task.minimum_points and task.minimum_points > 0:
             return task.minimum_points
         f = self.cfg.get("forecast_model", {})
-        return (int(f.get("context_length", 96))
-                + int(f.get("prediction_length", 24)))
+        return (_coerce_int(f.get("context_length"), 96)
+                + _coerce_int(f.get("prediction_length"), 24))
 
     def _context_length(self, task: pb.ForecastTaskConfig) -> int:
         # ForecastTaskConfig 无 context_length（那是 AnomalyTaskConfig 的），用 getattr 兜底
         ctx = getattr(task, "context_length", None) or 0
         if ctx > 0:
             return ctx
-        return int(self.cfg.get("forecast_model", {}).get("context_length", 96))
+        return _coerce_int(self.cfg.get("forecast_model", {}).get("context_length"), 96)
 
     def _forecast_key(self, task, ver: int,
                       knowledge_version: str = "") -> str:
@@ -427,23 +477,33 @@ class AnalysisEngine:
             logger.info(f"[engine] ②命中预测模型缓存 task_id={key}，跳过训练")
             return model
 
-        # 未命中：拿 per-task 锁，再确认一次（防并发重复训练，训练在锁内串行）
-        with self._train_lock(key):
+        # 未命中：拿 per-task 锁，再确认一次（防并发重复训练，训练在锁内串行）。
+        # 锁带超时：持锁线程卡死时，等待方限时放弃本轮、下 tick 重试，不无限阻塞。
+        lock = self._train_lock(key)
+        if not lock.acquire(timeout=self._train_lock_timeout):
+            logger.warning("[engine] 训练锁超时（>%.1fs），放弃本轮 %s，下 tick 重试",
+                           self._train_lock_timeout, key)
+            raise RuntimeError(f"训练锁超时：{key}")
+        try:
             model = self.store.get(key)
             if model is not None:
                 logger.info(f"[engine] ②等待后命中缓存 task_id={key}，跳过训练")
                 return model
 
-            # 拉多元历史训练（前 train_ratio，再按 max_train_points 截最近 N 点）
-            start_ms = min(s.start_time_ms for s in scales.values()
-                           if s.start_time_ms is not None)
-            end_ms = max(s.end_time_ms for s in scales.values()
-                         if s.end_time_ms is not None)
-            cut_ms = start_ms + int((end_ms - start_ms)
-                                    * self.cfg["training"]["train_ratio"])
-            start_ms = self._cap_train_start(start_ms, cut_ms, scales)
+            # 拉多元历史训练：与异常检测同口径，直接取「最近 max_train_points 点」。
+            # 不再用 train_ratio 按时间切「前 80%」——数据时间分布可能极不均匀
+            # （历史分块 + 多年空档），按时间比例切会落到空档里拿到 0 行。
+            starts = [s.start_time_ms for s in scales.values()
+                      if s.start_time_ms is not None]
+            ends = [s.end_time_ms for s in scales.values()
+                    if s.end_time_ms is not None]
+            if not starts or not ends:
+                raise CoreDataException("查询不到数据范围，无法训练")
+            start_ms = min(starts)
+            end_ms = max(ends)
+            start_ms = self._cap_train_start(start_ms, end_ms, scales)
             chunk = self.core.get_history(all_ids, start_time_ms=start_ms,
-                                          end_time_ms=cut_ms,
+                                          end_time_ms=end_ms,
                                           project_id=task.project_id)
 
             # 数据推断路由（#6）：先看原始取值类型再转 float——chunk.values 保留
@@ -470,35 +530,37 @@ class AnalysisEngine:
                 fc = CatBoostForecaster(
                     sequence_ids=all_ids, target_sequence_id=target,
                     column_kinds=col_kinds,
-                    context_length=int(f.get("context_length", 96)),
-                    prediction_length=int(f.get("prediction_length", 24)),
-                    patch_size=int(f.get("patch_size", 16)),
-                    patch_stride=int(f.get("patch_stride", 8)),
-                    d_model=int(f.get("d_model", 64)),
-                    n_heads=int(f.get("n_heads", 4)),
-                    num_layers=int(f.get("num_layers", 2)),
-                    epochs=int(f.get("epochs", 20)),
-                    batch_size=int(f.get("batch_size", 64)),
-                    learning_rate=float(f.get("learning_rate", 1e-3)),
+                    context_length=_coerce_int(f.get("context_length"), 96),
+                    prediction_length=_coerce_int(f.get("prediction_length"), 24),
+                    patch_size=_coerce_int(f.get("patch_size"), 16),
+                    patch_stride=_coerce_int(f.get("patch_stride"), 8),
+                    d_model=_coerce_int(f.get("d_model"), 64),
+                    n_heads=_coerce_int(f.get("n_heads"), 4),
+                    num_layers=_coerce_int(f.get("num_layers"), 2),
+                    epochs=_coerce_int(f.get("epochs"), 20),
+                    batch_size=_coerce_int(f.get("batch_size"), 64),
+                    learning_rate=_coerce_float(f.get("learning_rate"), 1e-3),
                     catboost_params=dict(f.get("catboost", {})),
                 )
             else:
                 fc = PatchTSTForecaster(
                     sequence_ids=all_ids,
-                    context_length=int(f.get("context_length", 96)),
-                    prediction_length=int(f.get("prediction_length", 24)),
-                    patch_size=int(f.get("patch_size", 16)),
-                    patch_stride=int(f.get("patch_stride", 8)),
-                    d_model=int(f.get("d_model", 64)),
-                    n_heads=int(f.get("n_heads", 4)),
-                    num_layers=int(f.get("num_layers", 2)),
-                    epochs=int(f.get("epochs", 20)),
-                    batch_size=int(f.get("batch_size", 64)),
-                    learning_rate=float(f.get("learning_rate", 1e-3)),
+                    context_length=_coerce_int(f.get("context_length"), 96),
+                    prediction_length=_coerce_int(f.get("prediction_length"), 24),
+                    patch_size=_coerce_int(f.get("patch_size"), 16),
+                    patch_stride=_coerce_int(f.get("patch_stride"), 8),
+                    d_model=_coerce_int(f.get("d_model"), 64),
+                    n_heads=_coerce_int(f.get("n_heads"), 4),
+                    num_layers=_coerce_int(f.get("num_layers"), 2),
+                    epochs=_coerce_int(f.get("epochs"), 20),
+                    batch_size=_coerce_int(f.get("batch_size"), 64),
+                    learning_rate=_coerce_float(f.get("learning_rate"), 1e-3),
                 )
             fc.fit(history)
             self.store.save(key, fc)
             return fc
+        finally:
+            lock.release()
 
     def _train_lock(self, key: str) -> threading.Lock:
         """取 key 对应的训练锁（惰性创建）。"""
@@ -679,6 +741,12 @@ class AnalysisEngine:
                 generated_at_ms=now, status=pb.ANALYSIS_STATUS_SUCCESS,
                 message=f"窗口未推进到 slide_step_ms，本轮跳过（{e}）",
                 findings=[], model_version="")
+        except CoreDataUnavailable as e:
+            logger.info(f"[engine] C 端不可用：{e}")
+            return pb.AnomalyResult(
+                task_id=task.task_id, run_id=f"run-{now}",
+                generated_at_ms=now, status=pb.ANALYSIS_STATUS_UPSTREAM_UNAVAILABLE,
+                message=str(e), findings=[], model_version="")
         except Exception as e:
             logger.info(f"[engine] 异常链路异常：{e}")
             return pb.AnomalyResult(
@@ -717,8 +785,8 @@ class AnalysisEngine:
         if task.minimum_points and task.minimum_points > 0:
             return task.minimum_points
         by_method = self.cfg.get("anomaly", {}).get("minimum_points_by_method", {})
-        return int(by_method.get(method,
-                                 self.cfg.get("anomaly", {}).get("minimum_points", 100)))
+        return _coerce_int(by_method.get(
+            method, self.cfg.get("anomaly", {}).get("minimum_points", 100)), 100)
 
     def _anomaly_min_confirmed_events(self, task: pb.AnomalyTaskConfig) -> int:
         """HISTORICAL_MATCH（语义事件异常）启用门槛：已确认历史事件条数。
@@ -727,7 +795,7 @@ class AnalysisEngine:
         启用。默认 1 = 至少 1 条确认事件；生产按事件库积累情况调 config。
         任务没有"事件数"字段（minimum_points 是点数门槛），只走 config。
         """
-        return int(self.cfg.get("anomaly", {}).get("minimum_confirmed_events", 1))
+        return _coerce_int(self.cfg.get("anomaly", {}).get("minimum_confirmed_events"), 1)
 
     def _event_write_cap(self) -> int:
         """写事件峰值保护：每任务每轮最多写多少条事件。
@@ -735,7 +803,7 @@ class AnalysisEngine:
         逐点写不聚合（老师确认 08-10，一个异常点一个事件）→ 超上限只能截断不能合并；
         上限值按联调真实负载再调（现在是占位默认 50）。
         """
-        return int(self.cfg.get("anomaly", {}).get("max_events_per_run", 50))
+        return _coerce_int(self.cfg.get("anomaly", {}).get("max_events_per_run"), 50)
 
     def _log_event_stats(self) -> None:
         """打印累计写事件计数（只在有失败/截断时调，避免每 tick 刷屏）。"""
@@ -852,7 +920,7 @@ class AnalysisEngine:
                                                               seq_ids)) if to_train else None
         window = self.core.get_aligned_real_time_window(seq_ids,
                                                         project_id=task.project_id)
-        ws = int(self.cfg["inference"]["window_size"])
+        ws = self._window_size
         matrix = self._clean_matrix(np.array(window.values[-ws:], dtype=np.float32))
         times = window.timestamps_ms[-ws:]
         # 数据步长（每步毫秒数，frequency = 1/step_ms）：给 next_due 动态间隔用。
@@ -1054,11 +1122,33 @@ class AnalysisEngine:
                 if s.end_time_ms is not None]
         if not starts or not ends:
             chunk = self.core.get_history(seq_ids, project_id=project_id)
-            return np.array(chunk.values, dtype=float)
+            return self._chunk_to_float_matrix(chunk)
         start_ms = self._cap_train_start(min(starts), max(ends), scales)
         chunk = self.core.get_history(seq_ids, start_time_ms=start_ms,
                                       end_time_ms=max(ends), project_id=project_id)
-        return np.array(chunk.values, dtype=float)
+        return self._chunk_to_float_matrix(chunk)
+
+    @staticmethod
+    def _chunk_to_float_matrix(chunk: HistoricalDataChunk) -> np.ndarray:
+        """历史 chunk.values → float 矩阵，字符串/非法值按缺失(NaN)处理。
+
+        异常路径无类型路由（预测路径走 _infer_column_kinds 报 NOT_IMPLEMENTED），
+        这里直接兜底：任何不能转 float 的值（string 标签等）→ NaN，杜绝
+        np.array(values, dtype=float) 因字符串崩溃。
+        """
+        rows = []
+        for row in chunk.values:
+            out = []
+            for v in row:
+                if isinstance(v, str) or _is_missing(v):
+                    out.append(float("nan"))
+                else:
+                    try:
+                        out.append(float(v))
+                    except (TypeError, ValueError):
+                        out.append(float("nan"))
+            rows.append(out)
+        return np.array(rows, dtype=float)
 
     def _cap_train_start(self, start_ms: int, end_ms: int,
                          scales: dict) -> int:
@@ -1067,7 +1157,7 @@ class AnalysisEngine:
         用最细采样间隔换算时间窗（窗口偏小 → 点数偏少，宁可少取也别超上限）；
         无上限（max_train_points=0）或无采样间隔可推断 → 原样返回 start_ms。
         """
-        max_pts = int(self.cfg.get("training", {}).get("max_train_points", 0) or 0)
+        max_pts = _coerce_int(self.cfg.get("training", {}).get("max_train_points") or 0, 0)
         if max_pts <= 0:
             return start_ms
         intervals = [

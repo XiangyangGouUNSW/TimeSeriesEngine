@@ -18,8 +18,13 @@ logger = logging.getLogger(__name__)
 
 
 def _version_of(key: str) -> int | None:
-    """从 key 尾部取配置版本；无 @v 后缀（legacy 未带版本）返回 None。"""
-    m = re.search(r"@v(\d+)$", key)
+    """从 key 尾部取版本号（@v{ver}，后面可能跟 :k{knowledge_version} 后缀）。
+
+    版本号是 int64（config_version 或 task_timestamp_ms）；无 @v 后缀
+    （legacy 未带版本）返回 None。`:k` 后缀是知识版本片段（字符集 [A-Za-z0-9_.-]，
+    不含 @/:），锚定到行尾时需把它一并吃掉，否则带知识版本的 key 解析失败。
+    """
+    m = re.search(r"@v(\d+)(?::k[A-Za-z0-9_.\-]*)?$", key)
     return int(m.group(1)) if m else None
 
 
@@ -81,7 +86,17 @@ class ModelStore:
         p = self._path(key)
         loader = getattr(self, "_loader", None)
         if p.exists() and loader is not None:
-            model = loader(key, p)          # 磁盘加载放锁外（避免持锁做 IO）
+            try:
+                model = loader(key, p)      # 磁盘加载放锁外（避免持锁做 IO）
+            except Exception:
+                # 缓存损坏 / 格式不符（torch.load 失败、缺 key、model_type 未知）→
+                # 删掉坏文件、返回 None，上层据此重训重建；不因一个坏 .pt 让整轮崩溃。
+                logger.exception("[ModelStore] 加载 %s 失败，删除损坏缓存并重建", key)
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+                return None
             with self._lock:
                 self._models[key] = model
             return model
@@ -103,42 +118,54 @@ class ModelStore:
 
     def invalidate_task(self, project_id: str, task_id: str,
                         keep_version: int | None = None) -> None:
-        """按 (project, task) 清理版本化模型，保留最近 2 个版本（keep_version 和 keep_version-1）。
+        """按 (project, task) 清理版本化模型，保留 keep_version 及它之前的最近 1 个版本。
 
-        语义：keep_version=None 全删（任务删除）；keep_version=N 保留 {N, N-1}
-        （发布回滚到上一个配置可秒级复用旧模型，磁盘有界）。
+        语义：keep_version=None 全删（任务删除）；keep_version=N 保留「≤N 的版本里最大的
+        2 个」（N 是新版本 → 实际就是 {当前 N, 上一个版本}，回滚复用且磁盘有界）。
+        版本号用数值大小比（时间戳越大越新、config_version 越大越新，二者同构），
+        不再用旧的 {N, N-1} 整数相邻假设（时间戳下 N-1 是 1ms 前、无意义）。
         legacy 无版本 key 一律视为待清理（default 项目兼容旧前缀，见 _belongs_to_scoped）。
         """
-        keep = {keep_version, keep_version - 1} if keep_version is not None else set()
-        stale = []
+        # 收集该 (project, task) 的所有版本化 key（内存 + 磁盘），统一算保留集。
         with self._lock:
-            for key in list(self._models):
-                if not _belongs_to_scoped(key, project_id, task_id):
-                    continue
-                v = _version_of(key)
-                if keep_version is not None and v is not None and v in keep:
-                    continue
-                stale.append(key)
-            for key in stale:
-                self._models.pop(key, None)
-        # 磁盘文件：内存之外还可能有历史遗留（重启前的旧版本）
+            mem_keys = [k for k in list(self._models)
+                        if _belongs_to_scoped(k, project_id, task_id)]
+        disk_stems: list[str] = []
         if self._model_dir.exists():
-            for p in self._model_dir.iterdir():
-                if p.suffix != ".pt":
-                    continue
-                if not _belongs_to_scoped(p.stem, project_id, task_id):
-                    continue
-                v = _version_of(p.stem)
-                if keep_version is not None and v is not None and v in keep:
-                    continue
-                try:
-                    p.unlink()
-                except OSError:
-                    pass
-        if stale:
+            disk_stems = [p.stem for p in self._model_dir.iterdir()
+                          if p.suffix == ".pt"
+                          and _belongs_to_scoped(p.stem, project_id, task_id)]
+        all_keys = set(mem_keys) | set(disk_stems)
+
+        keep: set[int] = set()
+        if keep_version is not None:
+            versions = sorted({v for k in all_keys
+                               if (v := _version_of(k)) is not None
+                               and v <= keep_version},
+                              reverse=True)
+            keep = set(versions[:2])
+
+        stale_mem = [k for k in mem_keys if _version_of(k) not in keep]
+        if stale_mem:
+            with self._lock:
+                for k in stale_mem:
+                    self._models.pop(k, None)
+
+        deleted_disk = 0
+        for stem in disk_stems:
+            if _version_of(stem) in keep:
+                continue
+            try:
+                (self._model_dir / f"{stem}.pt").unlink()
+                deleted_disk += 1
+            except OSError:
+                pass
+
+        total_deleted = len(stale_mem) + deleted_disk
+        if total_deleted:
             logger.info("[ModelStore] invalidate_task %s::%s 清理 %d 个旧版本（保留 %s）",
-                        project_id, task_id, len(stale),
-                        sorted(keep) if keep else "全部")
+                        project_id, task_id, total_deleted,
+                        sorted(keep, reverse=True) if keep else "全部")
 
     # ---- 具体模型类型的加载方式（由上层注入）----
 
