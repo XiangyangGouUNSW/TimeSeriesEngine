@@ -166,12 +166,14 @@ message AnalysisSyncAnomalyTaskRequest {
   RequestMeta meta = 1;
   int64 config_version = 2;
   AnomalyTaskConfig task = 3;
+  int64 task_timestamp_ms = 4;
 }
 
 message AnalysisSyncForecastTaskRequest {
   RequestMeta meta = 1;
   int64 config_version = 2;
   ForecastTaskConfig task = 3;
+  int64 task_timestamp_ms = 4;
 }
 
 message TaskAck {

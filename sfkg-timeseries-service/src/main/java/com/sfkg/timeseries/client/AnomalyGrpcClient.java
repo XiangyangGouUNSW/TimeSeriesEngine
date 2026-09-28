@@ -1,11 +1,19 @@
 package com.sfkg.timeseries.client;
 
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
 import com.sfkg.timeseries.config.GrpcClientProperties;
 import com.sfkg.timeseries.config.RetryPolicyProperties;
 import com.sfkg.timeseries.dto.AnomalyResultQueryRequest;
 import com.sfkg.timeseries.dto.SyncResult;
 import com.sfkg.timeseries.entity.TimeseriesAnomalyTask;
-import com.sfkg.timeseries.grpc.AnalysisStatus;
 import com.sfkg.timeseries.grpc.AnalysisSyncAnomalyTaskRequest;
 import com.sfkg.timeseries.grpc.AnalysisTaskStatus;
 import com.sfkg.timeseries.grpc.AnalysisUpdateTaskStatusRequest;
@@ -14,21 +22,12 @@ import com.sfkg.timeseries.grpc.QueryAnomalyResultsRequest;
 import com.sfkg.timeseries.grpc.QueryAnomalyResultsResponse;
 import com.sfkg.timeseries.grpc.RequestMeta;
 import com.sfkg.timeseries.grpc.ResultQuery;
-import com.sfkg.timeseries.grpc.SemanticContext;
 import com.sfkg.timeseries.grpc.TaskAck;
 import com.sfkg.timeseries.grpc.TimeseriesAnalysisServiceGrpc;
 import com.sfkg.timeseries.service.TimeseriesTaskContextResolver;
 import com.sfkg.timeseries.vo.AnomalyResultVO;
+
 import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
-import io.grpc.StatusRuntimeException;
-import java.time.Instant;
-import java.time.LocalDateTime;
-import java.util.UUID;
-import java.util.concurrent.TimeUnit;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 
 @Component
 public class AnomalyGrpcClient {
@@ -85,13 +84,18 @@ public class AnomalyGrpcClient {
         }
         configBuilder.setSemanticContext(contextResolver.resolveAnomalyContext(task));
 
+        // Task version = last config update time; P reuses its persisted model while it is unchanged.
+        long taskVersion = com.sfkg.timeseries.common.ServiceTime.toEpochMillis(
+                task.getUpdateTime() != null ? task.getUpdateTime() : task.getCreateTime());
         AnalysisSyncAnomalyTaskRequest req = AnalysisSyncAnomalyTaskRequest.newBuilder()
                 .setMeta(newMeta(task.getProjectId()))
-                .setConfigVersion(System.currentTimeMillis())
+                .setConfigVersion(taskVersion)
+                .setTaskTimestampMs(taskVersion)
                 .setTask(configBuilder.build())
                 .build();
 
-        LOG.info("[{}] -> SyncAnomalyTask taskId={} at {}", SERVICE_NAME, task.getTaskId(), address);
+        LOG.info("[{}] -> SyncAnomalyTask taskId={} version={} at {}",
+                SERVICE_NAME, task.getTaskId(), taskVersion, address);
         return callSyncTask(address, req);
     }
 

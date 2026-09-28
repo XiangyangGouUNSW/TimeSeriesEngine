@@ -1,6 +1,12 @@
 package com.sfkg.timeseries.client;
 
 import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
 
 import com.sfkg.timeseries.config.GrpcClientProperties;
 import com.sfkg.timeseries.config.RetryPolicyProperties;
@@ -15,19 +21,12 @@ import com.sfkg.timeseries.grpc.QueryForecastResultsRequest;
 import com.sfkg.timeseries.grpc.QueryForecastResultsResponse;
 import com.sfkg.timeseries.grpc.RequestMeta;
 import com.sfkg.timeseries.grpc.ResultQuery;
-import com.sfkg.timeseries.grpc.SemanticContext;
 import com.sfkg.timeseries.grpc.TaskAck;
 import com.sfkg.timeseries.grpc.TimeseriesAnalysisServiceGrpc;
 import com.sfkg.timeseries.service.TimeseriesTaskContextResolver;
 import com.sfkg.timeseries.vo.ForecastResultVO;
+
 import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
-import io.grpc.StatusRuntimeException;
-import java.util.UUID;
-import java.util.concurrent.TimeUnit;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 
 @Component
 public class ForecastGrpcClient {
@@ -86,13 +85,17 @@ public class ForecastGrpcClient {
         }
         configBuilder.setSemanticContext(contextResolver.resolveForecastContext(task));
 
+        long taskVersion = com.sfkg.timeseries.common.ServiceTime.toEpochMillis(
+                task.getUpdateTime() != null ? task.getUpdateTime() : task.getCreateTime());
         AnalysisSyncForecastTaskRequest req = AnalysisSyncForecastTaskRequest.newBuilder()
                 .setMeta(newMeta(task.getProjectId()))
-                .setConfigVersion(System.currentTimeMillis())
+                .setConfigVersion(taskVersion)
+                .setTaskTimestampMs(taskVersion)
                 .setTask(configBuilder.build())
                 .build();
 
-        LOG.info("[{}] -> SyncForecastTask taskId={} at {}", SERVICE_NAME, task.getTaskId(), address);
+        LOG.info("[{}] -> SyncForecastTask taskId={} version={} at {}",
+                SERVICE_NAME, task.getTaskId(), taskVersion, address);
         ManagedChannel channel = channelRegistry.getChannel(address);
         try {
             TaskAck ack = retryExecutor.execute("Analysis", "syncForecastTask", () ->
