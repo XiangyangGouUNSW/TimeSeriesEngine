@@ -20,7 +20,6 @@ class TimeseriesProjectServiceTests {
     @Test
     void createProjectStoresCatalogAndDatabaseMapping(@TempDir Path tempDir) {
         DataIngestProperties properties = new DataIngestProperties();
-        properties.setDatabase("ett-system");
         TimeseriesProjectFileMapper mapper = new TimeseriesProjectFileMapper(
                 tempDir.resolve("projects.json").toString());
         TimeseriesProjectService service = new TimeseriesProjectServiceImpl(
@@ -32,7 +31,7 @@ class TimeseriesProjectServiceTests {
         TimeseriesProject project = service.createProject(request);
 
         assertEquals("project-a", project.getProjectId());
-        assertEquals("ett-system_project-a", project.getDatabaseName());
+        assertEquals("project-a", project.getDatabaseName());
         assertEquals("ACTIVE", project.getStatus());
         assertEquals("project-a", mapper.selectByProjectId("project-a").getProjectId());
     }

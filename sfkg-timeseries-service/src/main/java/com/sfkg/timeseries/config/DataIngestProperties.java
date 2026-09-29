@@ -11,8 +11,6 @@ public class DataIngestProperties {
     private boolean readFromGstore = false;
     private boolean fallbackToLocal = true;
     private String endpoint = "http://127.0.0.1:8006";
-    private String database = "ett_system";
-    private String namespace = "http://gbuilder.org/knowledge/";
     private long timeoutMillis = 500;
 
     public boolean isEnabled() {
@@ -47,25 +45,9 @@ public class DataIngestProperties {
         this.endpoint = endpoint;
     }
 
-    public String getDatabase() {
-        return database;
-    }
-
-    public void setDatabase(String database) {
-        this.database = database;
-    }
-
-    public String getNamespace() {
-        return namespace;
-    }
-
-    public void setNamespace(String namespace) {
-        this.namespace = namespace;
-    }
-
     /**
-     * Resolve the gStore database dedicated to a project. The project id is
-     * used only for routing; it is not part of the entity payload.
+     * Resolve the gStore database dedicated to a project. The database name is
+     * the project id itself; there is no shared prefix.
      */
     public String databaseForProject(String projectId) {
         if (projectId == null || projectId.isBlank()) {
@@ -75,7 +57,7 @@ public class DataIngestProperties {
         if (!normalized.matches("[A-Za-z0-9][A-Za-z0-9_-]{0,127}")) {
             throw new IllegalArgumentException("projectId contains unsupported characters: " + projectId);
         }
-        return database + "_" + normalized;
+        return normalized;
     }
 
     public long getTimeoutMillis() {

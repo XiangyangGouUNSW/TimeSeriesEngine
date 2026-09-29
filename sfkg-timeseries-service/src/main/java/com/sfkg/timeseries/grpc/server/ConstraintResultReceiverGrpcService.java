@@ -70,7 +70,9 @@ public class ConstraintResultReceiverGrpcService
             if (!originalIds.isEmpty()) {
                 String cids = String.join("_", originalIds);
                 cacheManager.ensureTableLoaded(CachedTable.EVENT);
-                String eventId = "EVT_CONSTRAINT_" + entity.getResultId();
+                String ts = java.time.LocalDateTime.now()
+                        .format(java.time.format.DateTimeFormatter.ofPattern("yyMMddHHmmssSSS"));
+                String eventId = "EVT_CONSTRAINT_" + cids + "_" + ts;
                 memoryCache.computeEvent(entity.getProjectId(), eventId, existing -> {
                     if (existing != null) {
                         LOG.info("constraint event already exists, skip: eventId={}", eventId);

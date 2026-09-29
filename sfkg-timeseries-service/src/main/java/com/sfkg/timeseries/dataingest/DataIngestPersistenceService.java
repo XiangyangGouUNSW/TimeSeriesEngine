@@ -111,7 +111,6 @@ public class DataIngestPersistenceService {
 
     private DataIngestInsertPayload newInsertPayload() {
         DataIngestInsertPayload payload = new DataIngestInsertPayload();
-        payload.setDbName(properties.getDatabase());
         payload.setPreserveRelations(true);
         return payload;
     }

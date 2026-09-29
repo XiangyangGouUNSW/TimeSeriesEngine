@@ -133,7 +133,9 @@ public class AnomalyResultReceiverGrpcService
             if (!duplicate) {
                 cacheManager.ensureTableLoaded(CachedTable.EVENT);
                 String taskId = entity.getTaskId();
-                String eventId = "EVT_FORECAST_" + taskId + "_" + entity.getRunId();
+                String ts = java.time.LocalDateTime.now()
+                        .format(java.time.format.DateTimeFormatter.ofPattern("yyMMddHHmmssSSS"));
+                String eventId = "EVT_FORECAST_" + taskId + "_" + ts;
                 memoryCache.computeEvent(entity.getProjectId(), eventId, existing -> {
                     if (existing != null) {
                         return existing;

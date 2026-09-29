@@ -31,12 +31,12 @@ class DataIngestRecordLoaderTests {
                 tempDir.resolve("timeseries-projects.json").toString());
         TimeseriesProject project = new TimeseriesProject();
         project.setProjectId("project-a");
-        project.setDatabaseName("ett_system_project-a");
+        project.setDatabaseName("project-a");
         project.setStatus("ACTIVE");
 
         mapper.upsert(project);
 
-        assertEquals("ett_system_project-a", mapper.selectByProjectId("project-a").getDatabaseName());
+        assertEquals("project-a", mapper.selectByProjectId("project-a").getDatabaseName());
         assertEquals(1, mapper.selectActiveProjects().size());
     }
 
@@ -97,7 +97,6 @@ class DataIngestRecordLoaderTests {
             DataIngestProperties properties = new DataIngestProperties();
             properties.setEnabled(true);
             properties.setEndpoint("http://127.0.0.1:" + server.getAddress().getPort());
-            properties.setDatabase("ett_system");
             ObjectMapper objectMapper = objectMapper();
             DataIngestClient client = new DataIngestClient(
                     properties, objectMapper, new GrpcRetryExecutor(new RetryPolicyProperties()));
@@ -114,7 +113,7 @@ class DataIngestRecordLoaderTests {
             persistenceService.submitRecord("timeseries_category", "cat001", category);
 
             TimeseriesProject project = projectMapper.selectByProjectId("project-a");
-            assertEquals("ett_system_project-a", project.getDatabaseName());
+            assertEquals("project-a", project.getDatabaseName());
             assertEquals("ACTIVE", project.getStatus());
         } finally {
             server.stop(0);
@@ -140,7 +139,6 @@ class DataIngestRecordLoaderTests {
             DataIngestProperties properties = new DataIngestProperties();
             properties.setEnabled(true);
             properties.setEndpoint("http://127.0.0.1:" + server.getAddress().getPort());
-            properties.setDatabase("ett_system");
             ObjectMapper objectMapper = objectMapper();
             DataIngestClient client = new DataIngestClient(
                     properties, objectMapper, new GrpcRetryExecutor(new RetryPolicyProperties()));

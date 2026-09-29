@@ -32,12 +32,10 @@ timeseries:
     read-from-gstore: ${TIMESERIES_READ_FROM_GSTORE:true}
     fallback-to-local: ${TIMESERIES_GSTORE_FALLBACK_TO_LOCAL:true}
     endpoint: ${TIMESERIES_DATA_INGEST_ENDPOINT:http://127.0.0.1:8006}
-    database: ${TIMESERIES_DATA_INGEST_DATABASE:ett-system}
     timeout-millis: ${TIMESERIES_DATA_INGEST_TIMEOUT_MILLIS:1500}
   project-catalog-file: ${TIMESERIES_PROJECT_CATALOG_FILE:data/timeseries-projects.json}
   auth:
     user-file: ${TIMESERIES_AUTH_USER_FILE:data/timeseries-users.json}
-    # 引导账号和密码只从部署环境或外部配置读取，不在仓库中提供默认凭据。
     bootstrap-username: ${TIMESERIES_AUTH_BOOTSTRAP_USERNAME:}
     bootstrap-password: ${TIMESERIES_AUTH_BOOTSTRAP_PASSWORD:}
   grpc:

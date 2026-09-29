@@ -61,11 +61,9 @@ public class TimeseriesAnomalyResultServiceImpl implements TimeseriesAnomalyResu
                     ? List.of(result.getSequenceId())
                     : List.of());
         String seq = seqIds.isEmpty() ? "UNKNOWN" : String.join("_", seqIds);
-        String resultKey = result != null && result.getResultId() != null && !result.getResultId().isBlank()
-                ? result.getResultId() : seq + "_" + (result != null && result.getEventTime() != null
-                        ? result.getEventTime().atZone(com.sfkg.timeseries.common.ServiceTime.ZONE_ID).toInstant().toEpochMilli()
-                        : "unknown");
-        String eventId = "EVT_" + source + "_" + resultKey;
+        String ts = java.time.LocalDateTime.now()
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyMMddHHmmssSSS"));
+        String eventId = "EVT_" + source + "_" + seq + "_" + ts;
         TimeseriesEvent event = new TimeseriesEvent();
         event.setProjectId(result != null ? result.getProjectId() : null);
         event.setEventId(eventId);
