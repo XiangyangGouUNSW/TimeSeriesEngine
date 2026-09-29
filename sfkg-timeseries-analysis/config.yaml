@@ -12,12 +12,12 @@ core:
                             #   python main.py --provider grpc --core-port 50551
   address: "localhost"      # C 端 gRPC 地址
   port: 50051               # C 端 gRPC 端口（真 C 端默认监听 50051；伪 C 端专用 50551）
-  timeout_seconds: 30.0     # 调 C 端超时
+  timeout_seconds: 1.0      # 调 C 端单次 deadline（重试间隔 1s/2s/3s，共 4 次，总预算 ≈ 10s）
 
 s:
   address: "localhost"      # S 端服务地址（S 和 P 同机，用 localhost）
   port: 9106                # S 端服务端口（analysis-receiver-port，S 敲定）
-  timeout_seconds: 10.0     # 调 S 端超时
+  timeout_seconds: 1.0      # 调 S 端单次 deadline（重试间隔 1s/2s/3s，共 4 次，总预算 ≈ 10s）
 
 data:
   # mock 数据源：用 ETT 数据集模拟 C 端 TDengine 里的数据

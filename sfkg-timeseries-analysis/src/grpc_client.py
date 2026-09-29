@@ -43,7 +43,7 @@ class CoreDataUnavailable(CoreDataException):
 
 class GrpcCoreDataClient(CoreDataClient):
     def __init__(self, address: str = "localhost", port: int = 50051,
-                 timeout_seconds: float = 30.0):
+                 timeout_seconds: float = 1.0):
         # 调大接收上限：历史数据一次可能很大（真 C 端全量历史实测 >130MB）。
         # 512MB 是「顶住当前 + 留余量」的临时值；根治要限幅取数（见 engine 训练取数）。
         channel = grpc.insecure_channel(
@@ -65,27 +65,29 @@ class GrpcCoreDataClient(CoreDataClient):
                 f"{response.operation.message}")
 
     def _call(self, method: Callable[..., Any], request: Any) -> Any:
-        """统一包一层：gRPC 网络错误退避重试（首次 + 2 次，共 3 次）。
+        """统一包一层：gRPC 网络错误退避重试（首次 + 3 次重试，共 4 次）。
 
-        仍无响应才抛 CoreDataUnavailable（上层映射 UPSTREAM_UNAVAILABLE）；
-        业务级失败（operation.code != OK）不重试，直接抛 CoreDataException。
-        重试间隔 10s / 20s（指数退避）。
+        单次 deadline = self._timeout（默认 1s）；重试间隔 1s / 2s / 3s；
+        总重试预算 ≈ 10s（4 × 1s deadline + 1s + 2s + 3s）。第 4 次仍无响应才抛
+        CoreDataUnavailable（上层映射 UPSTREAM_UNAVAILABLE）；业务级失败
+        （operation.code != OK）不重试，直接抛 CoreDataException。
         """
+        backoffs = (1.0, 2.0, 3.0)     # 重试间隔（第 1/2/3 次失败后各等 1s/2s/3s）
         last_err: grpc.RpcError | None = None
-        for attempt in range(1, 4):  # 1, 2, 3
+        for attempt in range(1, 5):     # 1, 2, 3, 4（首次 + 3 次重试）
             try:
                 resp = method(request, timeout=self._timeout)
                 self._check(resp)
                 return resp
             except grpc.RpcError as e:
                 last_err = e
-                if attempt < 3:
-                    backoff = 10.0 if attempt == 1 else 20.0
+                if attempt < 4:
+                    wait = backoffs[attempt - 1]
                     logger.warning(
-                        "[GrpcCoreDataClient] 调用失败（第 %d/3 次），%.0fs 后重试：%s",
-                        attempt, backoff, e)
-                    time.sleep(backoff)
-        raise CoreDataUnavailable(f"gRPC 调用失败（3 次后仍无响应）: {last_err}")
+                        "[GrpcCoreDataClient] 调用失败（第 %d/4 次），%.0fs 后重试：%s",
+                        attempt, wait, e)
+                    time.sleep(wait)
+        raise CoreDataUnavailable(f"gRPC 调用失败（4 次后仍无响应）: {last_err}")
 
     # ---- 三个能力 ----
 

@@ -66,13 +66,13 @@ def serve() -> None:
     core_port = args.core_port or core_cfg.get("port", 50051)
     core_client = GrpcCoreDataClient(
         address=core_address, port=core_port,
-        timeout_seconds=core_cfg.get("timeout_seconds", 30.0))
+        timeout_seconds=core_cfg.get("timeout_seconds", 1.0))
 
     # S 端客户端（写事件）
     s_client = AnalysisResultClient(
         address=s_cfg.get("address", "localhost"),
         port=s_cfg.get("port", 50054),
-        timeout_seconds=s_cfg.get("timeout_seconds", 10.0))
+        timeout_seconds=s_cfg.get("timeout_seconds", 1.0))
 
     # 三大框架组件：注册表 + 结果仓库 + 周期调度器（Scheduler 由服务拉起）
     engine = AnalysisEngine(core_client, s_client, cfg)

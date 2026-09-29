@@ -25,7 +25,7 @@ class AnalysisResultClient:
     """调 S 端 AnalysisResultReceiverService.ReceiveAnomalyResult 的客户端。"""
 
     def __init__(self, address: str = "localhost", port: int = 50054,
-                 timeout_seconds: float = 10.0):
+                 timeout_seconds: float = 1.0):
         self._stub = pb_grpc.AnalysisResultReceiverServiceStub(
             grpc.insecure_channel(f"{address}:{port}"))
         self._timeout = timeout_seconds
@@ -53,15 +53,20 @@ class AnalysisResultClient:
             severity=severity,
             source=source,
         )
-        # 退避重试（首次 + 2 次，共 3 次，间隔 10s/20s）：第 3 次仍无响应才返回 False，
-        # 由上层计数可观测，不再单次失败就静默丢失事件。
-        for attempt in range(1, 4):
+        # 退避重试（首次 + 3 次重试，共 4 次）：单次 deadline = self._timeout（默认 1s），
+        # 重试间隔 1s/2s/3s，总重试预算 ≈ 10s（4×1s + 1s+2s+3s）。第 4 次仍无响应才返回
+        # False，由上层计数可观测，不再单次失败就静默丢失事件。
+        backoffs = (1.0, 2.0, 3.0)
+        for attempt in range(1, 5):
             try:
                 self._stub.ReceiveAnomalyResult(msg, timeout=self._timeout)
                 return True
             except grpc.RpcError as e:
-                if attempt < 3:
-                    time.sleep(10.0 if attempt == 1 else 20.0)
+                if attempt < 4:
+                    wait = backoffs[attempt - 1]
+                    logger.warning("[AnalysisResultClient] 调 S 失败（第 %d/4 次），%.0fs 后重试：%s",
+                                   attempt, wait, e)
+                    time.sleep(wait)
                 else:
-                    logger.info("[AnalysisResultClient] 调 S 失败（3 次后仍无响应）: %s", e)
+                    logger.info("[AnalysisResultClient] 调 S 失败（4 次后仍无响应）: %s", e)
         return False
