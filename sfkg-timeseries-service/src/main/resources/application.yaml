@@ -38,6 +38,10 @@ timeseries:
     user-file: ${TIMESERIES_AUTH_USER_FILE:data/timeseries-users.json}
     bootstrap-username: ${TIMESERIES_AUTH_BOOTSTRAP_USERNAME:}
     bootstrap-password: ${TIMESERIES_AUTH_BOOTSTRAP_PASSWORD:}
+    use-auth-api: ${TIMESERIES_AUTH_USE_API:false}
+    auth-api-url: ${TIMESERIES_AUTH_API_URL:http://222.29.156.141:8080}
+    auth-api-timeout-millis: ${TIMESERIES_AUTH_API_TIMEOUT_MILLIS:5000}
+    role-permission-file: ${TIMESERIES_AUTH_ROLE_PERMISSION_FILE:classpath:role-permission-mappings.json}
   grpc:
     server-port: ${TIMESERIES_GRPC_SERVER_PORT:9105}
     analysis-receiver-port: ${TIMESERIES_GRPC_ANALYSIS_RECEIVER_PORT:9106}

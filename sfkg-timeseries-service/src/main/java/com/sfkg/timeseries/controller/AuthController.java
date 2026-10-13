@@ -1,13 +1,17 @@
 package com.sfkg.timeseries.controller;
 
 import com.sfkg.timeseries.auth.AuthenticatedUser;
+import com.sfkg.timeseries.auth.ExternalAuthenticationDetails;
 import com.sfkg.timeseries.auth.LoginRequest;
 import com.sfkg.timeseries.auth.LoginResponse;
 import com.sfkg.timeseries.common.ApiResult;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.AbstractAuthenticationToken;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.AuthenticationServiceException;
+import org.springframework.security.authentication.CredentialsExpiredException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
@@ -28,6 +32,9 @@ import jakarta.servlet.http.HttpServletResponse;
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
+
+    private static final String EXTERNAL_USER_TOKEN_SESSION_ATTRIBUTE =
+            "SFKG_EXTERNAL_USER_TOKEN";
 
     private final AuthenticationManager authenticationManager;
     private final SecurityContextRepository securityContextRepository;
@@ -57,8 +64,14 @@ public class AuthController {
             Authentication authentication = authenticationManager.authenticate(
                     new UsernamePasswordAuthenticationToken(
                             request.getUsername(), request.getPassword()));
-            httpRequest.getSession(true);
+            var session = httpRequest.getSession(true);
             httpRequest.changeSessionId();
+            if (authentication.getDetails() instanceof ExternalAuthenticationDetails details) {
+                session.setAttribute(EXTERNAL_USER_TOKEN_SESSION_ATTRIBUTE, details.token());
+                if (authentication instanceof AbstractAuthenticationToken authenticationToken) {
+                    authenticationToken.setDetails(null);
+                }
+            }
 
             SecurityContext context = SecurityContextHolder.createEmptyContext();
             context.setAuthentication(authentication);
@@ -69,6 +82,12 @@ public class AuthController {
             LoginResponse data = new LoginResponse(
                     user.getUserId(), user.getUsername(), user.getPermissions());
             return ResponseEntity.ok(ApiResult.success("login success", data));
+        } catch (CredentialsExpiredException exception) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.fail("authentication token invalid, please login again"));
+        } catch (AuthenticationServiceException exception) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(ApiResult.fail("authentication service unavailable"));
         } catch (AuthenticationException exception) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(ApiResult.fail("username or password is incorrect"));

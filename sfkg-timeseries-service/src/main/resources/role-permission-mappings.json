@@ -1,0 +1,16 @@
+{
+  "Admin": [
+    "HISTORY_DATA",
+    "CONFIG_INFO",
+    "TASK_INFO"
+  ],
+  "User": [
+    "CONFIG_INFO",
+    "TASK_INFO"
+  ],
+  "KnowledgeReviewer": [
+    "HISTORY_DATA",
+    "CONFIG_INFO",
+    "TASK_INFO"
+  ]
+}

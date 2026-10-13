@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.sfkg.timeseries.auth.AuthenticatedUser;
+import com.sfkg.timeseries.auth.ExternalAuthenticationDetails;
 import com.sfkg.timeseries.auth.LoginRequest;
 import com.sfkg.timeseries.auth.PermissionCode;
 import java.util.Set;
@@ -30,8 +31,11 @@ class AuthControllerTests {
                 "u001",
                 "operator",
                 Set.of(PermissionCode.HISTORY_DATA.name(), PermissionCode.CONFIG_INFO.name()));
+        UsernamePasswordAuthenticationToken authentication =
+                new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
+        authentication.setDetails(new ExternalAuthenticationDetails("gbusr_test_token"));
         when(authenticationManager.authenticate(any(UsernamePasswordAuthenticationToken.class)))
-                .thenReturn(new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities()));
+                .thenReturn(authentication);
 
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(new AuthController(
                 authenticationManager,
@@ -49,5 +53,7 @@ class AuthControllerTests {
         assertNotNull(result.getRequest().getSession(false));
         assertNotNull(result.getRequest().getSession(false).getAttribute(
                 HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY));
+        assertNotNull(result.getRequest().getSession(false).getAttribute(
+                "SFKG_EXTERNAL_USER_TOKEN"));
     }
 }
