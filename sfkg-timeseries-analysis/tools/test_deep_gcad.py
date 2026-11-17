@@ -42,11 +42,13 @@ def _ok(name: str) -> None:
     print(f"  ✓ {name}")
 
 
-# 轻量配置：单元测试够训可用即可，控时长（工厂默认看 config.yaml anomaly.gcad）
-CFG = dict(tau=8, hidden_dim=64, num_layers=2, epochs=10, batch_size=64,
-           learning_rate=1e-3, p=0.5, n_norm_samples=64, h=0.0, h_quantile=0.3,
-           beta=1.0, score_quantile=0.95, eps=1e-6, max_train_windows=2000,
-           train_budget_s=60, val_frac=0.2, seed=0)
+# 轻量配置：单元测试够训可用即可，控时长（工厂默认看 config.yaml anomaly.gcad
+# = 论文 SMAP 配置；本测试用缩小配置 + 自适应稀疏阈值，验机制契约不验达标数字）
+CFG = dict(tau=8, n_block=2, ff_dim=32, dropout=0.0, pred_len=1, epochs=30,
+           batch_size=32, learning_rate=1e-3, patience=2, p=0.5,
+           n_norm_samples=64, h=0.0, h_quantile=0.3, beta=1.0,
+           score_quantile=0.95, eps=1e-4, sma_window=3, max_train_windows=0,
+           train_budget_s=0, val_frac=0.2, seed=0)
 
 
 def _pattern_causal(n: int = 2400, seed: int = 0) -> np.ndarray:

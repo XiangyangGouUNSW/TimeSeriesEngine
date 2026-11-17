@@ -56,6 +56,13 @@ def _cfg():
             "num_layers": 2, "epochs": 2, "batch_size": 64, "learning_rate": 1e-3,
         },
         "inference": {"window_size": 100, "horizon_steps": 24},
+        # 本测试验调度语义（周期执行/落盘/缓存/停用），不验 GCAD 质量：
+        # 用小超参 + 训练窗口上限，保证首训在 15s 等待内完成（论文默认配置
+        # n_block=6/ff_dim=1024/max_train_windows=10000 在完整 ETTh1 上远超此限）。
+        "anomaly": {"gcad": {
+            "tau": 24, "n_block": 1, "ff_dim": 32,
+            "epochs": 5, "max_train_windows": 2000,
+        }},
     }
 
 

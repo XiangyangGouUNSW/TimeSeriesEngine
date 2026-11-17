@@ -238,8 +238,10 @@ def test_sufficient_data_trains_and_ready() -> None:
 
 def test_per_method_thresholds_stagger() -> None:
     print("\n[按方法门槛 → 数据够的先训，不够的推迟]")
+    # MUTUAL 内部 GCAD（论文配置 tau=70）自身要求 ~438 点（n_train-tau ≥ 4·tau 守卫），
+    # 门槛必须 ≥ 内部下限，否则"门槛够但模型静默不训"。500 覆盖下限。
     cfg = {"anomaly": {"minimum_points_by_method": {
-        "DISCRETE_OUTLIER": 50, "MUTUAL_COUPLING": 200}}}
+        "DISCRETE_OUTLIER": 50, "MUTUAL_COUPLING": 500}}}
     eng = _engine({"a": 80, "b": 80}, cfg)
     # MUTUAL_COUPLING 需要成对双向因果边才有可训的互耦对（无 relations → 无对 → fitted=False
     # → 引擎不落盘，此测试的"数据增长后自动训练"就无从谈起），故补两条反向因果边。
@@ -258,7 +260,7 @@ def test_per_method_thresholds_stagger() -> None:
     assert res.status == pb.ANALYSIS_STATUS_SUCCESS, \
         "DISCRETE(50) 数据够 → 应跑，返回 SUCCESS（不是 DATA_NOT_READY）"
     assert "MUTUAL_COUPLING" in res.message and "推迟" in res.message, \
-        f"MUTUAL(200) 不够 → 消息应说明推迟，实际 {res.message!r}"
+        f"MUTUAL(500) 不够 → 消息应说明推迟，实际 {res.message!r}"
     key_d = eng._anomaly_key(task, "DISCRETE_OUTLIER", 1)
     key_m = eng._anomaly_key(task, "MUTUAL_COUPLING", 1)
     assert eng.store.is_ready(key_d), "够数据的方法应训练落盘"
@@ -267,9 +269,9 @@ def test_per_method_thresholds_stagger() -> None:
         "还有未就绪方法 → 仍进训练队列（下 tick 继续）"
     _ok("门槛分方法：够的先训 + 不够的推迟（落盘状态和消息都对）")
 
-    # 数据增长到 250 → MUTUAL 自动开始训练（不同 tick 陆续就绪，训练摊开）
-    eng.core.counts["a"] = 250
-    eng.core.counts["b"] = 250
+    # 数据增长到 500 → MUTUAL 自动开始训练（不同 tick 陆续就绪，训练摊开）
+    eng.core.counts["a"] = 500
+    eng.core.counts["b"] = 500
     res2 = eng.run_anomaly(task, config_version=1)
     assert res2.status == pb.ANALYSIS_STATUS_SUCCESS
     assert "推迟" not in res2.message, "数据够了 → 不再推迟"

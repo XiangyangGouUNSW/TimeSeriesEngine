@@ -45,7 +45,7 @@ class PatchTSTForecaster:
 
     sequence_ids: list[str]
     context_length: int = 96
-    prediction_length: int = 24
+    prediction_length: int = 72
     patch_size: int = 16
     patch_stride: int = 8
     d_model: int = 64

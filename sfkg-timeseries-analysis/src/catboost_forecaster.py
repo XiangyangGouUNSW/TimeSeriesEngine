@@ -91,7 +91,7 @@ class CatBoostForecaster:
     target_sequence_id: str
     column_kinds: dict[str, str] | None = None
     context_length: int = 96
-    prediction_length: int = 24
+    prediction_length: int = 72
     patch_size: int = 16
     patch_stride: int = 8
     d_model: int = 64
@@ -290,7 +290,7 @@ class ConstantForecaster:
 
     def forecast(self, window_matrix: np.ndarray,
                  steps: int | None = None) -> dict[str, list[float]]:
-        n = steps if steps is not None else 24
+        n = steps if steps is not None else self.prediction_length
         m = np.asarray(window_matrix, dtype=np.float32)
         last = self._last_value if self._last_value is not None else 0.0
         if (self.target_sequence_id is not None

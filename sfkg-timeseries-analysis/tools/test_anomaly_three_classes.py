@@ -127,7 +127,7 @@ def main() -> None:
         ("CAUSAL_PATTERN(模式偏移)", te_cp,
          lambda: build_anomaly_model("CAUSAL_PATTERN", target_index=iy,
                                      source_indices=[j for j in range(iy)],
-                                     gcad={"hidden_dim": 32, "num_layers": 1,
+                                     gcad={"n_block": 1, "ff_dim": 32,
                                            "tau": 24})),
         ("DISCRETE_OUTLIER(离群点)", te_do,
          lambda: build_anomaly_model("DISCRETE_OUTLIER", eps=0.5,

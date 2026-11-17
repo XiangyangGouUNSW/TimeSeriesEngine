@@ -42,6 +42,7 @@ from catboost_forecaster import (
 from core_client import CoreDataClient
 from data_types import HistoricalDataChunk, SequenceDataScale
 from grpc_client import CoreDataException, CoreDataUnavailable
+from dlinear_forecaster import DLinearForecaster
 from historical_matcher import HistoricalEvent, HistoricalEventMatcher
 from patchtst_forecaster import PatchTSTForecaster
 from project import scoped_key
@@ -220,7 +221,7 @@ class AnalysisEngine:
                     f"实时窗口时间戳非升序（相邻差 {step_ms}ms），无法预测")
             matrix = self._clean_matrix(np.array(window.values[-ctx:], dtype=np.float32))
             horizon = task.forecast_horizon_steps or _coerce_int(
-                self.cfg.get("inference", {}).get("horizon_steps"), 24)
+                self.cfg.get("inference", {}).get("horizon_steps"), 72)
             _t = time.perf_counter()
             pred_map = model.forecast(matrix, steps=horizon)
             pred_ms = (time.perf_counter() - _t) * 1e3
@@ -390,6 +391,10 @@ class AnalysisEngine:
         def loader(key: str, path):
             ckpt = torch.load(path, map_location="cpu")
             mtype = ckpt.get("model_type")
+            if mtype == "dlinear":
+                fc = DLinearForecaster(sequence_ids=[])
+                fc.load(path)
+                return fc
             if mtype == "catboost":
                 fc = CatBoostForecaster(sequence_ids=ckpt["sequence_ids"],
                                         target_sequence_id=ckpt["target_sequence_id"])
@@ -424,7 +429,7 @@ class AnalysisEngine:
             return task.minimum_points
         f = self.cfg.get("forecast_model", {})
         return (_coerce_int(f.get("context_length"), 96)
-                + _coerce_int(f.get("prediction_length"), 24))
+                + _coerce_int(f.get("prediction_length"), 72))
 
     def _context_length(self, task: pb.ForecastTaskConfig) -> int:
         # ForecastTaskConfig 无 context_length（那是 AnomalyTaskConfig 的），用 getattr 兜底
@@ -463,7 +468,8 @@ class AnalysisEngine:
             self, task: pb.ForecastTaskConfig, all_ids: list[str],
             scales: list[SequenceDataScale],
             config_version: int = 0
-    ) -> PatchTSTForecaster | CatBoostForecaster | ConstantForecaster:
+    ) -> (PatchTSTForecaster | DLinearForecaster | CatBoostForecaster
+          | ConstantForecaster):
         """缓存命中返回模型；未命中训练 PatchTST 并存入 store。
 
         版本进 key：{task_id}@v{config_version}。版本变 → key 变 → 必然重训，
@@ -531,7 +537,7 @@ class AnalysisEngine:
                     sequence_ids=all_ids, target_sequence_id=target,
                     column_kinds=col_kinds,
                     context_length=_coerce_int(f.get("context_length"), 96),
-                    prediction_length=_coerce_int(f.get("prediction_length"), 24),
+                    prediction_length=_coerce_int(f.get("prediction_length"), 72),
                     patch_size=_coerce_int(f.get("patch_size"), 16),
                     patch_stride=_coerce_int(f.get("patch_stride"), 8),
                     d_model=_coerce_int(f.get("d_model"), 64),
@@ -542,11 +548,24 @@ class AnalysisEngine:
                     learning_rate=_coerce_float(f.get("learning_rate"), 1e-3),
                     catboost_params=dict(f.get("catboost", {})),
                 )
+            elif f.get("type", "patchtst") == "dlinear":
+                # 合同验收方法（DLinear @ PSM 72 步 m1440 达标）：逐通道线性族，
+                # 同种子完全可复现（seed 固定模型初始化与训练洗牌）。
+                fc = DLinearForecaster(
+                    sequence_ids=all_ids,
+                    context_length=_coerce_int(f.get("context_length"), 96),
+                    prediction_length=_coerce_int(f.get("prediction_length"), 72),
+                    kernel_size=_coerce_int(f.get("kernel_size"), 25),
+                    epochs=_coerce_int(f.get("epochs"), 20),
+                    batch_size=_coerce_int(f.get("batch_size"), 64),
+                    learning_rate=_coerce_float(f.get("learning_rate"), 1e-3),
+                    seed=_coerce_int(f.get("seed"), 0),
+                )
             else:
                 fc = PatchTSTForecaster(
                     sequence_ids=all_ids,
                     context_length=_coerce_int(f.get("context_length"), 96),
-                    prediction_length=_coerce_int(f.get("prediction_length"), 24),
+                    prediction_length=_coerce_int(f.get("prediction_length"), 72),
                     patch_size=_coerce_int(f.get("patch_size"), 16),
                     patch_stride=_coerce_int(f.get("patch_stride"), 8),
                     d_model=_coerce_int(f.get("d_model"), 64),

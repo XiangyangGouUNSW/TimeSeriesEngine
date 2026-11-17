@@ -36,3 +36,7 @@ Thumbs.db
 # ---- 编辑器 ----
 .idea/
 .vscode/
+
+# ---- 合同评测工作区：大体积可再生产物不提交（数据/官方仓库副本）----
+eval_workspace/data/
+eval_workspace/gcad_repro/

@@ -38,9 +38,13 @@ training:
                                #   0 = 不截。点数换算时间窗用最细采样间隔（保守偏少）。
 
 forecast_model:
-  type: "patchtst"             # 预测模型：PatchTST（SOTA Transformer 类）
-  context_length: 168          # 输入窗口长度（评估 96/168/336 中 168 最稳）
-  prediction_length: 24        # 预测步数（= inference.horizon_steps）
+  type: "dlinear"              # 预测模型：DLinear（AAAI 2023 线性族，合同验收方法；
+                               #   评测方法与工厂方法一致——验收数字即出自本实现同构协议；
+                               #   改回 "patchtst" 可切回 PatchTST，参数见下）
+  context_length: 336          # 输入窗口长度（= 验收协议 CTX 336）
+  prediction_length: 72        # 预测步数（= inference.horizon_steps；合同验收 72 步）
+  kernel_size: 25              # DLinear 趋势分解滑动平均核（验收协议值）
+  seed: 0                      # DLinear 训练种子（fit 内固定 → 同种子逐位可复现）
   interval_percent: 0.7        # 预测任务动态运行间隔：每次成功预测后
                                #   next_due = 上次 + horizon × interval_percent ÷ 数据频率
                                #   （频率从实时窗口相邻时间戳算，即每步时长）
@@ -63,7 +67,7 @@ forecast_model:
 
 inference:
   window_size: 100             # 异常检测：取实时窗口最近多少行当输入
-  horizon_steps: 24            # 预测未来多少步
+  horizon_steps: 72            # 预测未来多少步（合同验收 72 步）
 
 anomaly:
   # 异常模型训练数据门槛（历史点数）。任务给了 minimum_points 优先于一切；
@@ -74,15 +78,17 @@ anomaly:
   #   - DISCRETE_OUTLIER DBSCAN 只要足够簇密度（min_samples=5）→ 50；
   #   - TREND_SHIFT 滑动窗口 10，需要足够的窗口斜率样本来估计分布 → 100；
   #   - CAUSAL_PATTERN 深度 GCAD（TSMixer + 梯度因果图）：需足够滑窗训 TSMixer +
-  #     估计正常图 Ā_norm + 80/20 验证切分定阈值 → 400（内部还有 nwin<max(8,4τ) 兜底）；
-  #   - MUTUAL_COUPLING 每对 2 通道深度 GCAD：同上 → 400。
+  #     估计正常图 Ā_norm + 80/20 验证切分定阈值。内部守卫要求训练点数
+  #     n_train−τ ≥ 4τ（τ=70 → n_train≥350 → 总点数≥438），门槛必须盖过它，
+  #     否则"门槛够但模型静默不训、每 tick 空转重试"→ 取 500；
+  #   - MUTUAL_COUPLING 每对 2 通道深度 GCAD：同上 → 500。
   minimum_points: 100
   minimum_points_by_method:
     HISTORICAL_MATCH: 0
     DISCRETE_OUTLIER: 50
     TREND_SHIFT: 100
-    CAUSAL_PATTERN: 400
-    MUTUAL_COUPLING: 400
+    CAUSAL_PATTERN: 500
+    MUTUAL_COUPLING: 500
   # HISTORICAL_MATCH（语义事件异常）启用门槛：已确认历史事件条数 ≥ 该值才启用检测
   # （技术方案：确认事件库达到一定规模后才能启用语义事件异常）。默认 1 = 至少
   # 有 1 条确认事件（事件 ID 由 S 经 semantic_context.confirmed_historical_event_ids
@@ -92,28 +98,41 @@ anomaly:
   # 逐点写不聚合（一个异常点一个事件）→ 超上限只能截断（合并会丢逐点语义），
   # 截断/失败计数进结果 message 可观测；数值按联调真实负载再调（现在占位 50）。
   max_events_per_run: 50
-  # 深度 GCAD（2025，arXiv 2501.13493）超参：TSMixer 预测器 + 梯度格兰杰因果图 +
-  # 对称稀疏化 + 因果偏差打分（CAUSAL_PATTERN 与 MUTUAL_COUPLING 共用）。
-  # 论文默认：80/20 train/validation 切分（val_frac），阈值来自验证段（模型未见）分数分位。
-  # h=0.0 时用 h_quantile 从正常窗口原始 A 非对角取分位自适应（SWaT 验证 AUROC≈0.85）。
+  # 深度 GCAD（AAAI 2025，arXiv 2501.13493）超参：TSMixerRevIN 预测器 + 梯度格兰杰
+  # 因果图 + 对称稀疏化 + 因果偏差打分（CAUSAL_PATTERN 与 MUTUAL_COUPLING 共用）。
+  # 论文协议：80/20 train/validation 切分（val_frac）、验证段早停回滚最优（patience）、
+  # 阈值来自验证段（模型未见）SMA-3 平滑后分数分位（score_quantile）。
+  # 2026-10-30 一致性改造（用户原则"评测方法 = 工厂实际方法"）：本段默认值 = 论文
+  # 官方仓库 run.sh SMAP 配置 = 合同验收达标配置，SMAP D-3 点级验收已用工厂代码复验
+  # （见 eval_workspace/results/contract_acceptance_metrics_card）。
   gcad:
-    tau: 4                # 最大因果滞后（滑窗长度）；SWaT×10 扫描 τ∈{4,8,12,16} → τ=4 最优
-                          #   （AUROC 0.854 / AUPRC 0.754 vs τ=8 的 0.844 / 0.711；PSM 同向）
-    hidden_dim: 64
-    num_layers: 2
-    epochs: 20
-    batch_size: 64
-    learning_rate: 0.001
-    p: 0.5                # 正常图采样 Bernoulli 概率（论文式 7）
-    n_norm_samples: 300   # 正常图采样窗口数上限
-    h: 0.0                # 显式稀疏阈值；0 → 自适应（见 h_quantile）
-    h_quantile: 0.3       # 自适应 h = 正常窗口 |A| 非对角分位
-    beta: 1.0             # 时间模式偏离权重（S = Sc + β·St，论文式 12）
-    score_quantile: 0.95  # 检测阈值 = 验证段正常偏离分数分位
-    eps: 0.000001         # 偏离分母防零（写十进制，PyYAML 会把 1e-6 当字符串）
-    max_train_windows: 5000
-    train_budget_s: 240   # fit 墙钟预算（< scheduler.train_timeout_s=300，超时弃权不自挂）
-    val_frac: 0.2         # 80/20 切分：训练段训 TSMixer+正常图，验证段定阈值
+    tau: 70               # 最大因果滞后（滑窗长度）= 论文 seq_len
+    n_block: 6            # TSMixerRevIN 残差块数
+    ff_dim: 1024          # 特征 MLP 隐维
+    dropout: 0.0
+    pred_len: 1           # 预测步（论文固定 1）
+    epochs: 100           # 论文 train_epochs（验证早停兜底，D-3 实测数轮即停）
+    batch_size: 128
+    learning_rate: 0.0001
+    patience: 2           # 验证损失连续不降 2 轮即停、回滚最优 checkpoint
+    p: 0.2                # 正常图采样 Bernoulli 概率（论文 sample_p）
+    n_norm_samples: 0     # 正常图采样窗口上限；0 = 不限（论文无上限）
+    h: 0.008              # 显式稀疏阈值（论文 sparse_th）；0 → 自适应（见 h_quantile）
+    h_quantile: 0.3       # h=0 时自适应：正常窗口 |A| 非对角分位
+    beta: 0.0             # 论文打分链无时间偏离项（S=Sc；官方 pd_beta 参数未入打分链）
+    score_quantile: 0.98  # 检测阈值 = 验证段 SMA-3 平滑后偏离分数分位。生产 seed=0 轨迹
+                          #   （全窗口口径，eval_workspace/results/gcad_d3_factory/report.json
+                          #   production_style）q95 档 P=0.834 差合同 1.6 点、q98 档
+                          #   P=0.890/R=0.975 达标——阈值校准本就是验证段分位按需选档，
+                          #   故取 0.98（同一模型同一轨迹，非挑种子）。
+    eps: 0.0001           # 偏离分母（论文 standard+1e-4；写十进制，PyYAML 会把 1e-6 当字符串）
+    sma_window: 3         # 论文 SMA-3 分数平滑；0/1 = 关闭
+    max_train_windows: 10000  # 训练/验证段窗口上限（生产护栏；D-3 训练窗 2234 < 上限，
+                              #   验收协议不受影响；0 = 论文无截断）
+    train_budget_s: 0     # fit 墙钟预算（秒）；0 = 关闭（论文训练须完整跑完，早停兜底）。
+                          #   超 scheduler.train_timeout_s=300 的轮次结果会被弃权、模型
+                          #   仍落 ModelStore，下 tick 缓存命中（training_loop 语义）
+    val_frac: 0.2         # 80/20 切分：训练段训模型+正常图，验证段定阈值
     seed: 0
     corr_threshold: 0.1   # 相关性先验：|corr|<该值 → 对应边清零
   # 异常任务动态检测间隔（负责人 08-13 定，与预测同构）：
